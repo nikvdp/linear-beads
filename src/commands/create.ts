@@ -4,7 +4,7 @@
 
 import { Command } from "commander";
 import { queueOutboxItem } from "../utils/database.js";
-import { createIssue, getTeamId } from "../utils/linear.js";
+import { createIssue, getTeamId, getViewer, getUserByEmail } from "../utils/linear.js";
 import { formatIssueJson, formatIssueHuman, output } from "../utils/output.js";
 import { spawnWorkerIfNeeded } from "../utils/spawn-worker.js";
 import type { IssueType, Priority } from "../types.js";
@@ -17,6 +17,8 @@ export const createCommand = new Command("create")
   .option("-p, --priority <priority>", "Priority (0-4, 0 is highest)", "2")
   .option("--parent <id>", "Parent issue ID")
   .option("--deps <deps>", "Dependencies (comma-separated, e.g., 'discovered-from:TEAM-123')")
+  .option("--assign <email>", "Assign to user (email or 'me')")
+  .option("--unassign", "Leave unassigned (skip auto-assign)")
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Sync immediately (block on network)")
   .option("--team <team>", "Team key (overrides config)")
@@ -39,6 +41,31 @@ export const createCommand = new Command("create")
       if (options.sync) {
         // Sync mode: create directly in Linear
         const teamId = await getTeamId(options.team);
+
+        // Resolve assignee
+        let assigneeId: string | undefined;
+        if (options.unassign) {
+          // Explicitly unassigned
+          assigneeId = undefined;
+        } else if (options.assign) {
+          // Explicit assignment
+          if (options.assign === "me") {
+            const viewer = await getViewer();
+            assigneeId = viewer.id;
+          } else {
+            const user = await getUserByEmail(options.assign);
+            if (!user) {
+              console.error(`User not found: ${options.assign}`);
+              process.exit(1);
+            }
+            assigneeId = user.id;
+          }
+        } else {
+          // Default: auto-assign to current user
+          const viewer = await getViewer();
+          assigneeId = viewer.id;
+        }
+
         const issue = await createIssue({
           title,
           description: options.description,
@@ -46,6 +73,7 @@ export const createCommand = new Command("create")
           issueType,
           teamId,
           parentId: options.parent,
+          assigneeId,
         });
 
         if (options.json) {
@@ -55,12 +83,16 @@ export const createCommand = new Command("create")
         }
       } else {
         // Queue mode: add to outbox and spawn background worker
+        // For queue mode, we pass the assign/unassign flags
+        // The worker will resolve them when processing
         queueOutboxItem("create", {
           title,
           description: options.description,
           priority,
           issueType,
           parentId: options.parent,
+          assign: options.assign,
+          unassign: options.unassign || false,
         });
 
         // Spawn background worker if not already running
