@@ -172,3 +172,40 @@ export async function checkDuplicates(
 
   return duplicates;
 }
+
+/**
+ * Create imported issues in Linear with comment
+ * Returns map of beads ID -> Linear ID
+ */
+export async function createImportedIssues(
+  issues: BeadsIssue[],
+  teamId: string
+): Promise<Map<string, string>> {
+  const { createIssue, addComment } = await import("./linear.js");
+  const mapping = new Map<string, string>();
+
+  for (const issue of issues) {
+    try {
+      // Create issue in Linear
+      const created = await createIssue({
+        title: issue.title,
+        description: issue.description,
+        priority: issue.priority,
+        issueType: issue.issue_type,
+        teamId,
+      });
+
+      // Add comment with beads ID reference
+      await addComment(created.id, `Imported from beads issue: ${issue.id}`);
+
+      // Store mapping
+      mapping.set(issue.id, created.id);
+
+      console.log(`✓ ${issue.id} → ${created.id}: "${issue.title}"`);
+    } catch (error) {
+      console.error(`✗ Failed to import ${issue.id}:`, error instanceof Error ? error.message : error);
+    }
+  }
+
+  return mapping;
+}

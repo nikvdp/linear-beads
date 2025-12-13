@@ -567,6 +567,34 @@ export async function createRelation(
 }
 
 /**
+ * Add comment to an issue
+ */
+export async function addComment(issueId: string, body: string): Promise<void> {
+  const client = getGraphQLClient();
+
+  const mutation = `
+    mutation CreateComment($input: CommentCreateInput!) {
+      commentCreate(input: $input) {
+        success
+      }
+    }
+  `;
+
+  const result = await client.request<{
+    commentCreate: { success: boolean };
+  }>(mutation, {
+    input: {
+      issueId,
+      body,
+    },
+  });
+
+  if (!result.commentCreate.success) {
+    throw new Error("Failed to create comment");
+  }
+}
+
+/**
  * Verify API connection
  */
 export async function verifyConnection(): Promise<{ userId: string; userName: string; teams: Array<{ id: string; key: string; name: string }> }> {
