@@ -12,13 +12,9 @@ import { describe, test, expect, beforeAll, afterAll, setDefaultTimeout } from "
 
 // Increase timeout for API calls
 setDefaultTimeout(30000);
-import { $ } from "bun";
 
 const TEAM_KEY = process.env.LB_TEAM_KEY || "LIN";
 const TEST_PREFIX = `[test-${Date.now()}]`;
-
-// Track created issues for cleanup
-const createdIssues: string[] = [];
 
 // Helper to run lb commands
 async function lb(...args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -52,17 +48,31 @@ describe("lb CLI Integration Tests", () => {
     if (!process.env.LINEAR_API_KEY) {
       throw new Error("LINEAR_API_KEY environment variable is required");
     }
+    
+    // Clear any pending outbox items from previous runs
+    await lb("sync");
   });
 
   afterAll(async () => {
-    // Cleanup: close all test issues
-    for (const issueId of createdIssues) {
-      try {
-        await lb("close", issueId, "--reason", "Integration test cleanup", "--sync");
-      } catch {
-        // Ignore cleanup errors
+    // Sync first to push any pending items
+    await lb("sync");
+    
+    // Get all issues with our test prefix
+    const allIssues = await lbJson<Array<{ id: string; title: string; status: string }>>("list");
+    
+    // Close all test issues that aren't already closed
+    for (const issue of allIssues) {
+      if (issue.title.includes(TEST_PREFIX) && issue.status !== "closed") {
+        try {
+          await lb("close", issue.id, "--reason", "Integration test cleanup", "--sync");
+        } catch {
+          // Ignore cleanup errors
+        }
       }
     }
+    
+    // Final sync to ensure cleanup is complete
+    await lb("sync");
   });
 
   describe("whoami", () => {
@@ -107,8 +117,6 @@ describe("lb CLI Integration Tests", () => {
       expect(result[0].status).toBe("open");
       expect(result[0].priority).toBe(2);
       expect(result[0].issue_type).toBe("task");
-
-      createdIssues.push(result[0].id);
     });
 
     test("should queue issue without --sync", async () => {
@@ -120,6 +128,9 @@ describe("lb CLI Integration Tests", () => {
 
       expect(result[0].id).toBe("pending");
       expect(result[0].title).toBe(title);
+      
+      // Push it immediately so we can track it
+      await lb("sync");
     });
 
     test("should support bug type", async () => {
@@ -130,7 +141,6 @@ describe("lb CLI Integration Tests", () => {
       }>>("create", title, "-t", "bug", "--sync");
 
       expect(result[0].issue_type).toBe("bug");
-      createdIssues.push(result[0].id);
     });
 
     test("should support feature type", async () => {
@@ -141,7 +151,6 @@ describe("lb CLI Integration Tests", () => {
       }>>("create", title, "-t", "feature", "--sync");
 
       expect(result[0].issue_type).toBe("feature");
-      createdIssues.push(result[0].id);
     });
 
     test("should support priority 0 (critical)", async () => {
@@ -152,7 +161,6 @@ describe("lb CLI Integration Tests", () => {
       }>>("create", title, "-p", "0", "--sync");
 
       expect(result[0].priority).toBe(0);
-      createdIssues.push(result[0].id);
     });
 
     test("should support priority 4 (backlog)", async () => {
@@ -163,7 +171,6 @@ describe("lb CLI Integration Tests", () => {
       }>>("create", title, "-p", "4", "--sync");
 
       expect(result[0].priority).toBe(4);
-      createdIssues.push(result[0].id);
     });
   });
 
@@ -187,10 +194,9 @@ describe("lb CLI Integration Tests", () => {
   describe("list", () => {
     test("should return array of issues", async () => {
       // Ensure we have at least one issue
-      const createResult = await lbJson<Array<{ id: string }>>(
+      await lbJson<Array<{ id: string }>>(
         "create", `${TEST_PREFIX} List test`, "--sync"
       );
-      createdIssues.push(createResult[0].id);
 
       // Sync to refresh cache
       await lb("sync");
@@ -251,7 +257,6 @@ describe("lb CLI Integration Tests", () => {
         "create", `${TEST_PREFIX} Update test`, "--sync"
       );
       const issueId = createResult[0].id;
-      createdIssues.push(issueId);
 
       // Update to in_progress
       const updateResult = await lbJson<Array<{
@@ -269,7 +274,6 @@ describe("lb CLI Integration Tests", () => {
         "create", `${TEST_PREFIX} Priority update test`, "-p", "3", "--sync"
       );
       const issueId = createResult[0].id;
-      createdIssues.push(issueId);
 
       // Update priority
       const updateResult = await lbJson<Array<{
@@ -299,8 +303,6 @@ describe("lb CLI Integration Tests", () => {
       expect(closeResult[0].id).toBe(issueId);
       expect(closeResult[0].status).toBe("closed");
       expect(closeResult[0].closed_at).toBeDefined();
-
-      // Don't add to cleanup since it's already closed
     });
   });
 
@@ -311,7 +313,6 @@ describe("lb CLI Integration Tests", () => {
         "create", `${TEST_PREFIX} Show test`, "-d", "Test description", "--sync"
       );
       const issueId = createResult[0].id;
-      createdIssues.push(issueId);
 
       // Sync to ensure it's in cache
       await lb("sync");
@@ -355,7 +356,6 @@ describe("lb CLI Integration Tests", () => {
       const createResult = await lbJson<Array<{ id: string }>>(
         "create", `${TEST_PREFIX} Array test`, "--sync"
       );
-      createdIssues.push(createResult[0].id);
       
       await lb("sync");
       
