@@ -593,6 +593,10 @@ export async function createRelation(
 ): Promise<void> {
   const client = getGraphQLClient();
 
+  // Resolve identifiers to UUIDs
+  const issueUuid = (await resolveIssueId(issueId)) || issueId;
+  const relatedUuid = (await resolveIssueId(relatedIssueId)) || relatedIssueId;
+
   const mutation = `
     mutation CreateRelation($input: IssueRelationCreateInput!) {
       issueRelationCreate(input: $input) {
@@ -605,8 +609,8 @@ export async function createRelation(
     issueRelationCreate: { success: boolean };
   }>(mutation, {
     input: {
-      issueId,
-      relatedIssueId,
+      issueId: issueUuid,
+      relatedIssueId: relatedUuid,
       type,
     },
   });
