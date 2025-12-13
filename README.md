@@ -78,34 +78,26 @@ Project config **overrides** global config but not env vars.
 ```bash
 # First time: Configure your Linear API key
 lb auth
-# (or set LINEAR_API_KEY env var)
 
-# Verify connection
+# Initialize lb in your repository
+cd your-project
+lb init
+
+# Verify and start working
 lb whoami
-
-# List issues
-lb list --json
-
-# Show ready (unblocked) issues
 lb ready --json
+lb create "My first issue" -t task --json
 
-# Create an issue (auto-syncs in background)
-lb create "Fix login bug" -t bug -p 1 --json
-
-# Update status (auto-syncs in background)
+# Update and close issues (auto-syncs in background)
 lb update TEAM-123 --status in_progress --json
-
-# Close an issue (auto-syncs in background)
-lb close TEAM-123 --reason "Fixed in commit abc123" --json
-
-# Manual sync (optional - usually not needed)
-lb sync
+lb close TEAM-123 --reason "Done!" --json
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
+| `lb init` | Initialize lb in current repository |
 | `lb auth` | Configure Linear API key globally |
 | `lb auth --show` | Show current config source and masked key |
 | `lb auth --clear` | Remove global config |
