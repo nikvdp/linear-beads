@@ -9,6 +9,7 @@
 - **Offline-first** - Local SQLite cache + outbox queue
 - **Repo scoping** - Issues filtered by `repo:name` label
 - **Background sync** - Automatic async push to Linear (fire-and-forget)
+- **Git-friendly JSONL** - Auto-export to `.lb/issues.jsonl` for version control
 
 ## Requirements
 
@@ -168,10 +169,12 @@ lb-cli/
 │       ├── sync.ts                 # Sync logic
 │       ├── pid-manager.ts          # Background worker PID management
 │       ├── background-sync-worker.ts  # Background sync worker
-│       └── spawn-worker.ts         # Worker spawning helper
+│       ├── spawn-worker.ts         # Worker spawning helper
+│       └── jsonl.ts                # JSONL export
 └── .lb/
     ├── cache.db                    # Local SQLite (git-ignored)
-    └── sync.pid                    # Worker PID (created/removed dynamically)
+    ├── sync.pid                    # Worker PID (git-ignored)
+    └── issues.jsonl                # JSONL snapshot (git-tracked)
 ```
 
 ## How it Works
@@ -179,7 +182,16 @@ lb-cli/
 1. **Cache**: Issues are cached locally in SQLite (`.lb/cache.db`)
 2. **Outbox**: Write commands queue mutations locally
 3. **Background Sync**: Worker process automatically pushes to Linear
-4. **Scoping**: All issues are filtered by `repo:<name>` label
+4. **JSONL Export**: After sync, exports to `.lb/issues.jsonl` (git-friendly)
+5. **Scoping**: All issues are filtered by `repo:<name>` label
+
+### JSONL Export
+
+- Linear is the **source of truth**
+- `.lb/issues.jsonl` is a **read-only snapshot** (auto-generated)
+- Updated after every sync (manual or background)
+- Git-trackable: See issue changes in diffs
+- bd-compatible format: One JSON object per line
 
 ### Background Sync Details
 
