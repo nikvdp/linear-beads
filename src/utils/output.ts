@@ -36,6 +36,8 @@ export function formatIssuesListJson(
     created_at: issue.created_at,
     updated_at: issue.updated_at,
     closed_at: issue.closed_at,
+    // bd-style: only include assignee if non-null
+    ...(issue.assignee ? { assignee: issue.assignee } : {}),
     dependency_count: getDependencyCount(issue.id),
     dependent_count: getDependentCount(issue.id),
   }));
@@ -57,6 +59,8 @@ export function formatReadyJson(
     issue_type: issue.issue_type,
     created_at: issue.created_at,
     updated_at: issue.updated_at,
+    // bd-style: only include assignee if non-null
+    ...(issue.assignee ? { assignee: issue.assignee } : {}),
     dependencies: getDependencies(issue.id),
   }));
   return JSON.stringify(formatted, null, 2);
@@ -76,6 +80,8 @@ export function formatShowJson(issue: Issue, dependencies?: Dependency[]): strin
     created_at: issue.created_at,
     updated_at: issue.updated_at,
     closed_at: issue.closed_at,
+    // bd-style: only include assignee if non-null
+    ...(issue.assignee ? { assignee: issue.assignee } : {}),
     ...(dependencies && dependencies.length > 0 ? { dependencies } : {}),
   };
   return JSON.stringify([formatted], null, 2);
@@ -101,6 +107,9 @@ export function formatIssueHuman(issue: Issue): string {
   lines.push(`  Status: ${issue.status}`);
   lines.push(`  Priority: ${PRIORITY_LABELS[issue.priority] || issue.priority}`);
   lines.push(`  Type: ${issue.issue_type}`);
+  if (issue.assignee) {
+    lines.push(`  Assignee: ${issue.assignee}`);
+  }
   if (issue.description) {
     lines.push(`  Description: ${issue.description.slice(0, 100)}${issue.description.length > 100 ? "..." : ""}`);
   }

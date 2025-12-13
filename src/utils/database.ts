@@ -48,6 +48,7 @@ function initSchema(db: Database): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       closed_at TEXT,
+      assignee TEXT,
       linear_state_id TEXT,
       cached_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -132,8 +133,8 @@ export function cacheIssue(issue: Issue & { linear_state_id?: string }): void {
   const db = getDatabase();
   db.run(`
     INSERT OR REPLACE INTO issues 
-    (id, identifier, title, description, status, priority, issue_type, created_at, updated_at, closed_at, linear_state_id, cached_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    (id, identifier, title, description, status, priority, issue_type, created_at, updated_at, closed_at, assignee, linear_state_id, cached_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `,
     [
       issue.id,
@@ -146,6 +147,7 @@ export function cacheIssue(issue: Issue & { linear_state_id?: string }): void {
       issue.created_at,
       issue.updated_at,
       issue.closed_at || null,
+      issue.assignee || null,
       issue.linear_state_id || null,
     ]
   );
@@ -158,8 +160,8 @@ export function cacheIssues(issues: Array<Issue & { linear_state_id?: string }>)
   const db = getDatabase();
   const insert = db.prepare(`
     INSERT OR REPLACE INTO issues 
-    (id, identifier, title, description, status, priority, issue_type, created_at, updated_at, closed_at, linear_state_id, cached_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    (id, identifier, title, description, status, priority, issue_type, created_at, updated_at, closed_at, assignee, linear_state_id, cached_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `);
 
   const transaction = db.transaction(() => {
@@ -175,6 +177,7 @@ export function cacheIssues(issues: Array<Issue & { linear_state_id?: string }>)
         issue.created_at,
         issue.updated_at,
         issue.closed_at || null,
+        issue.assignee || null,
         issue.linear_state_id || null
       );
     }
@@ -202,6 +205,7 @@ export function getCachedIssue(id: string): Issue | null {
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
     closed_at: row.closed_at as string | undefined,
+    assignee: row.assignee as string | undefined,
   };
 }
 
@@ -222,6 +226,7 @@ export function getCachedIssues(): Issue[] {
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
     closed_at: row.closed_at as string | undefined,
+    assignee: row.assignee as string | undefined,
   }));
 }
 

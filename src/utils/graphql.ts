@@ -53,6 +53,11 @@ export const ISSUE_FRAGMENT = `
       name
     }
   }
+  assignee {
+    id
+    email
+    name
+  }
   parent {
     id
     identifier

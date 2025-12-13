@@ -40,6 +40,8 @@ export interface Issue {
   created_at: string;
   updated_at: string;
   closed_at?: string;
+  // Assignee email (omit if unassigned for bd-style terse output)
+  assignee?: string;
   // Optional fields for list output
   dependency_count?: number;
   dependent_count?: number;
@@ -71,6 +73,11 @@ export interface LinearIssue {
       name: string;
     }>;
   };
+  assignee?: {
+    id: string;
+    email: string;
+    name: string;
+  } | null;
   parent?: {
     id: string;
     identifier: string;
