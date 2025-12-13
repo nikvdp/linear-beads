@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "bun run src/cli.ts",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:integration": "bun test test/integration.test.ts",
     "build": "bun build src/cli.ts --outdir dist --target node",
     "build:bin": "bun build src/cli.ts --compile --outfile dist/lb",
     "build:linux-x64": "bun build src/cli.ts --compile --target=bun-linux-x64 --outfile dist/lb-linux-x64",
@@ -20,12 +22,10 @@
   },
   "dependencies": {
     "commander": "^12.1.0",
-    "better-sqlite3": "^11.6.0",
     "graphql-request": "^7.1.2",
     "graphql": "^16.9.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12",
     "@types/bun": "^1.1.14",
     "typescript": "^5.7.2"
   }

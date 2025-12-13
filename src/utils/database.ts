@@ -1,19 +1,20 @@
 /**
  * SQLite database for local cache and outbox queue
+ * Uses bun:sqlite for Bun compatibility
  */
 
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { getDbPath } from "./config.js";
 import type { Issue, Dependency, OutboxItem } from "../types.js";
 
-let db: Database.Database | null = null;
+let db: Database | null = null;
 
 /**
  * Get database singleton, initializing schema if needed
  */
-export function getDatabase(): Database.Database {
+export function getDatabase(): Database {
   if (!db) {
     const dbPath = getDbPath();
     const dbDir = dirname(dbPath);
@@ -24,7 +25,7 @@ export function getDatabase(): Database.Database {
     }
 
     db = new Database(dbPath);
-    db.pragma("journal_mode = WAL");
+    db.exec("PRAGMA journal_mode = WAL");
     initSchema(db);
   }
   return db;
@@ -33,7 +34,7 @@ export function getDatabase(): Database.Database {
 /**
  * Initialize database schema
  */
-function initSchema(db: Database.Database): void {
+function initSchema(db: Database): void {
   db.exec(`
     -- Issues cache
     CREATE TABLE IF NOT EXISTS issues (
@@ -102,8 +103,8 @@ function initSchema(db: Database.Database): void {
 export function isCacheStale(ttlSeconds: number = 120): boolean {
   const db = getDatabase();
   const row = db
-    .prepare("SELECT value FROM metadata WHERE key = 'last_sync'")
-    .get() as { value: string } | undefined;
+    .query("SELECT value FROM metadata WHERE key = 'last_sync'")
+    .get() as { value: string } | null;
   
   if (!row) return true;
 
@@ -119,9 +120,9 @@ export function isCacheStale(ttlSeconds: number = 120): boolean {
  */
 export function updateLastSync(): void {
   const db = getDatabase();
-  db.prepare(
+  db.run(
     "INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_sync', datetime('now'))"
-  ).run();
+  );
 }
 
 /**
@@ -129,22 +130,24 @@ export function updateLastSync(): void {
  */
 export function cacheIssue(issue: Issue & { linear_state_id?: string }): void {
   const db = getDatabase();
-  db.prepare(`
+  db.run(`
     INSERT OR REPLACE INTO issues 
     (id, identifier, title, description, status, priority, issue_type, created_at, updated_at, closed_at, linear_state_id, cached_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `).run(
-    issue.id,
-    issue.id, // identifier same as id for now
-    issue.title,
-    issue.description || null,
-    issue.status,
-    issue.priority,
-    issue.issue_type,
-    issue.created_at,
-    issue.updated_at,
-    issue.closed_at || null,
-    issue.linear_state_id || null
+  `,
+    [
+      issue.id,
+      issue.id, // identifier same as id for now
+      issue.title,
+      issue.description || null,
+      issue.status,
+      issue.priority,
+      issue.issue_type,
+      issue.created_at,
+      issue.updated_at,
+      issue.closed_at || null,
+      issue.linear_state_id || null,
+    ]
   );
 }
 
@@ -159,7 +162,7 @@ export function cacheIssues(issues: Array<Issue & { linear_state_id?: string }>)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `);
 
-  const transaction = db.transaction((issues: Array<Issue & { linear_state_id?: string }>) => {
+  const transaction = db.transaction(() => {
     for (const issue of issues) {
       insert.run(
         issue.id,
@@ -177,7 +180,7 @@ export function cacheIssues(issues: Array<Issue & { linear_state_id?: string }>)
     }
   });
 
-  transaction(issues);
+  transaction();
 }
 
 /**
@@ -185,7 +188,7 @@ export function cacheIssues(issues: Array<Issue & { linear_state_id?: string }>)
  */
 export function getCachedIssue(id: string): Issue | null {
   const db = getDatabase();
-  const row = db.prepare("SELECT * FROM issues WHERE id = ? OR identifier = ?").get(id, id) as Record<string, unknown> | undefined;
+  const row = db.query("SELECT * FROM issues WHERE id = ? OR identifier = ?").get(id, id) as Record<string, unknown> | null;
   
   if (!row) return null;
 
@@ -207,7 +210,7 @@ export function getCachedIssue(id: string): Issue | null {
  */
 export function getCachedIssues(): Issue[] {
   const db = getDatabase();
-  const rows = db.prepare("SELECT * FROM issues ORDER BY updated_at DESC").all() as Array<Record<string, unknown>>;
+  const rows = db.query("SELECT * FROM issues ORDER BY updated_at DESC").all() as Array<Record<string, unknown>>;
   
   return rows.map((row) => ({
     id: row.id as string,
@@ -227,11 +230,11 @@ export function getCachedIssues(): Issue[] {
  */
 export function cacheDependency(dep: Dependency): void {
   const db = getDatabase();
-  db.prepare(`
+  db.run(`
     INSERT OR REPLACE INTO dependencies 
     (issue_id, depends_on_id, type, created_at, created_by)
     VALUES (?, ?, ?, ?, ?)
-  `).run(dep.issue_id, dep.depends_on_id, dep.type, dep.created_at, dep.created_by);
+  `, [dep.issue_id, dep.depends_on_id, dep.type, dep.created_at, dep.created_by]);
 }
 
 /**
@@ -239,7 +242,7 @@ export function cacheDependency(dep: Dependency): void {
  */
 export function getDependencies(issueId: string): Dependency[] {
   const db = getDatabase();
-  const rows = db.prepare("SELECT * FROM dependencies WHERE issue_id = ?").all(issueId) as Array<Record<string, unknown>>;
+  const rows = db.query("SELECT * FROM dependencies WHERE issue_id = ?").all(issueId) as Array<Record<string, unknown>>;
   
   return rows.map((row) => ({
     issue_id: row.issue_id as string,
@@ -255,7 +258,7 @@ export function getDependencies(issueId: string): Dependency[] {
  */
 export function getDependents(issueId: string): Dependency[] {
   const db = getDatabase();
-  const rows = db.prepare("SELECT * FROM dependencies WHERE depends_on_id = ?").all(issueId) as Array<Record<string, unknown>>;
+  const rows = db.query("SELECT * FROM dependencies WHERE depends_on_id = ?").all(issueId) as Array<Record<string, unknown>>;
   
   return rows.map((row) => ({
     issue_id: row.issue_id as string,
@@ -272,7 +275,7 @@ export function getDependents(issueId: string): Dependency[] {
 export function getBlockedIssueIds(): Set<string> {
   const db = getDatabase();
   // An issue is blocked if it has a "blocks" dependency on an open issue
-  const rows = db.prepare(`
+  const rows = db.query(`
     SELECT DISTINCT d.issue_id
     FROM dependencies d
     JOIN issues i ON d.depends_on_id = i.id
@@ -290,12 +293,14 @@ export function queueOutboxItem(
   payload: Record<string, unknown>
 ): number {
   const db = getDatabase();
-  const result = db.prepare(`
+  db.run(`
     INSERT INTO outbox (operation, payload)
     VALUES (?, ?)
-  `).run(operation, JSON.stringify(payload));
+  `, [operation, JSON.stringify(payload)]);
 
-  return result.lastInsertRowid as number;
+  // Get last insert rowid
+  const result = db.query("SELECT last_insert_rowid() as id").get() as { id: number };
+  return result.id;
 }
 
 /**
@@ -303,7 +308,7 @@ export function queueOutboxItem(
  */
 export function getPendingOutboxItems(): OutboxItem[] {
   const db = getDatabase();
-  const rows = db.prepare("SELECT * FROM outbox ORDER BY id ASC").all() as Array<Record<string, unknown>>;
+  const rows = db.query("SELECT * FROM outbox ORDER BY id ASC").all() as Array<Record<string, unknown>>;
 
   return rows.map((row) => ({
     id: row.id as number,
@@ -320,7 +325,7 @@ export function getPendingOutboxItems(): OutboxItem[] {
  */
 export function removeOutboxItem(id: number): void {
   const db = getDatabase();
-  db.prepare("DELETE FROM outbox WHERE id = ?").run(id);
+  db.run("DELETE FROM outbox WHERE id = ?", [id]);
 }
 
 /**
@@ -328,11 +333,11 @@ export function removeOutboxItem(id: number): void {
  */
 export function updateOutboxItemError(id: number, error: string): void {
   const db = getDatabase();
-  db.prepare(`
+  db.run(`
     UPDATE outbox 
     SET retry_count = retry_count + 1, last_error = ?
     WHERE id = ?
-  `).run(error, id);
+  `, [error, id]);
 }
 
 /**
@@ -353,10 +358,10 @@ export function clearCache(): void {
  */
 export function cacheLabel(id: string, name: string, teamId?: string): void {
   const db = getDatabase();
-  db.prepare(`
+  db.run(`
     INSERT OR REPLACE INTO labels (id, name, team_id)
     VALUES (?, ?, ?)
-  `).run(id, name, teamId || null);
+  `, [id, name, teamId || null]);
 }
 
 /**
@@ -364,7 +369,7 @@ export function cacheLabel(id: string, name: string, teamId?: string): void {
  */
 export function getLabelIdByName(name: string): string | null {
   const db = getDatabase();
-  const row = db.prepare("SELECT id FROM labels WHERE name = ?").get(name) as { id: string } | undefined;
+  const row = db.query("SELECT id FROM labels WHERE name = ?").get(name) as { id: string } | null;
   return row?.id || null;
 }
 

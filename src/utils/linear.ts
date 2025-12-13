@@ -260,17 +260,19 @@ export async function getWorkflowStateId(
 
 /**
  * Fetch issues from Linear with repo scoping
+ * Uses a simplified query to avoid Linear API complexity limits
  */
 export async function fetchIssues(teamId: string): Promise<Issue[]> {
   const client = getGraphQLClient();
   const repoLabel = getRepoLabel();
 
+  // Use simpler query without nested children/relations to avoid complexity limits
   const query = `
     query GetIssues($teamId: String!, $labelName: String!) {
       team(id: $teamId) {
         issues(filter: { labels: { name: { eq: $labelName } } }, first: 100) {
           nodes {
-            ${ISSUE_WITH_RELATIONS_FRAGMENT}
+            ${ISSUE_FRAGMENT}
           }
         }
       }
@@ -283,11 +285,11 @@ export async function fetchIssues(teamId: string): Promise<Issue[]> {
 
   const issues = result.team.issues.nodes.map(linearToBdIssue);
   
-  // Cache issues and their relations
+  // Cache issues
   cacheIssues(issues);
   
+  // Cache parent-child relations from the basic query
   for (const linear of result.team.issues.nodes) {
-    // Cache parent-child relations
     if (linear.parent) {
       cacheDependency({
         issue_id: linear.identifier,
@@ -296,20 +298,6 @@ export async function fetchIssues(teamId: string): Promise<Issue[]> {
         created_at: linear.createdAt,
         created_by: "sync",
       });
-    }
-
-    // Cache explicit relations
-    if (linear.relations) {
-      for (const rel of linear.relations.nodes) {
-        const depType = rel.type === "blocks" ? "blocks" : "related";
-        cacheDependency({
-          issue_id: linear.identifier,
-          depends_on_id: rel.relatedIssue.identifier,
-          type: depType,
-          created_at: linear.createdAt,
-          created_by: "sync",
-        });
-      }
     }
   }
 
