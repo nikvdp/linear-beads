@@ -19,10 +19,19 @@ export const showCommand = new Command("show")
       // Ensure cache is fresh
       await ensureFresh(options.team, options.sync);
 
-      // Try cache first
-      let issue = getCachedIssue(id);
+      let issue;
 
-      // If not in cache, fetch directly
+      // With --sync, always fetch fresh from Linear to get relations
+      if (options.sync) {
+        issue = await fetchIssue(id);
+      }
+
+      // Try cache if not synced or fetch failed
+      if (!issue) {
+        issue = getCachedIssue(id);
+      }
+
+      // If still not found, try fetching directly
       if (!issue) {
         issue = await fetchIssue(id);
       }
