@@ -59,10 +59,13 @@ export const initCommand = new Command("init")
       output("✓ Exported to .lb/issues.jsonl");
 
       // Success!
-      output("\nlb initialized! Next steps:");
-      output("  lb ready       # Show ready work");
-      output("  lb create      # Create an issue");
-      output("  lb onboard     # See agent instructions");
+      output("\nlb initialized!");
+      output("\nAdd this to your AGENTS.md or CLAUDE.md:");
+      output("");
+      output("  This project uses lb for issue tracking.");
+      output("  Run `lb onboard` and follow the instructions.");
+      output("");
+      output("Then your agent will set up the rest.");
     } catch (error) {
       console.error("Error:", error instanceof Error ? error.message : error);
       process.exit(1);
