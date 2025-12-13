@@ -8,6 +8,7 @@ import {
   cacheIssue,
   cacheIssues,
   cacheDependency,
+  clearIssueDependencies,
   cacheLabel,
   getLabelIdByName,
   updateLastSync,
@@ -422,6 +423,9 @@ export async function fetchIssue(issueId: string): Promise<Issue | null> {
 
     const issue = linearToBdIssue(result.issue);
     cacheIssue(issue);
+
+    // Clear old deps before caching fresh ones (prevents stale data)
+    clearIssueDependencies(result.issue.identifier);
 
     // Cache parent-child relation
     if (result.issue.parent) {

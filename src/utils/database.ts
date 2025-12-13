@@ -250,6 +250,14 @@ export function cacheDependency(dep: Dependency): void {
 }
 
 /**
+ * Clear all dependencies for an issue (before re-syncing)
+ */
+export function clearIssueDependencies(issueId: string): void {
+  const db = getDatabase();
+  db.run("DELETE FROM dependencies WHERE issue_id = ?", [issueId]);
+}
+
+/**
  * Get dependencies for an issue
  */
 export function getDependencies(issueId: string): Dependency[] {
