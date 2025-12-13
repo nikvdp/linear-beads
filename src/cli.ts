@@ -4,6 +4,7 @@
  */
 
 import { Command } from "commander";
+import { initCommand } from "./commands/init.js";
 import { listCommand } from "./commands/list.js";
 import { readyCommand } from "./commands/ready.js";
 import { showCommand } from "./commands/show.js";
@@ -24,6 +25,7 @@ program
   .version("0.1.0");
 
 // Add subcommands
+program.addCommand(initCommand);
 program.addCommand(authCommand);
 program.addCommand(listCommand);
 program.addCommand(readyCommand);
