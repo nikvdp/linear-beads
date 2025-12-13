@@ -6,11 +6,13 @@ import { Command } from "commander";
 import { ensureFresh } from "../utils/sync.js";
 import { getCachedIssues, getDependencies, getDependents } from "../utils/database.js";
 import { formatIssuesListJson, formatIssuesListHuman, output } from "../utils/output.js";
+import { getViewer } from "../utils/linear.js";
 import type { Issue } from "../types.js";
 
 export const listCommand = new Command("list")
   .description("List issues")
   .option("-j, --json", "Output as JSON")
+  .option("-a, --all", "Show all issues (not just mine)")
   .option("-s, --status <status>", "Filter by status (open, in_progress, closed)")
   .option("-p, --priority <priority>", "Filter by priority (0-4)")
   .option("-t, --type <type>", "Filter by type (bug, feature, task, epic, chore)")
@@ -23,6 +25,12 @@ export const listCommand = new Command("list")
 
       // Get issues from cache
       let issues = getCachedIssues();
+
+      // Filter by assignee unless --all
+      if (!options.all) {
+        const viewer = await getViewer();
+        issues = issues.filter((i) => !i.assignee || i.assignee === viewer.email);
+      }
 
       // Apply filters
       if (options.status) {
