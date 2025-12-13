@@ -5,6 +5,8 @@
 
 import { Command } from "commander";
 import { initCommand } from "./commands/init.js";
+import { authCommand } from "./commands/auth.js";
+import { importCommand } from "./commands/import.js";
 import { listCommand } from "./commands/list.js";
 import { readyCommand } from "./commands/ready.js";
 import { showCommand } from "./commands/show.js";
@@ -13,7 +15,6 @@ import { updateCommand } from "./commands/update.js";
 import { closeCommand } from "./commands/close.js";
 import { syncCommand } from "./commands/sync.js";
 import { onboardCommand } from "./commands/onboard.js";
-import { authCommand } from "./commands/auth.js";
 import { verifyConnection } from "./utils/linear.js";
 import { closeDatabase } from "./utils/database.js";
 
@@ -27,6 +28,7 @@ program
 // Add subcommands
 program.addCommand(initCommand);
 program.addCommand(authCommand);
+program.addCommand(importCommand);
 program.addCommand(listCommand);
 program.addCommand(readyCommand);
 program.addCommand(showCommand);

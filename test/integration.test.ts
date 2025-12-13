@@ -391,4 +391,133 @@ describe("lb CLI Integration Tests", () => {
       expect(found?.id).toMatch(/^LIN-\d+$/); // Real Linear ID
     });
   });
+
+  describe("beads import", () => {
+    const beadsFile = import.meta.dir + "/../.beads-test/issues.jsonl";
+    const importMapFile = import.meta.dir + "/../.lb/import-map.jsonl";
+    
+    beforeAll(async () => {
+      // Create mock beads data
+      const { mkdirSync, writeFileSync } = await import("fs");
+      const { dirname } = await import("path");
+      
+      mkdirSync(dirname(beadsFile), { recursive: true });
+      
+      const mockIssues = [
+        {
+          id: "bd-test-1",
+          title: `${TEST_PREFIX} Beads import test 1`,
+          description: "First test issue",
+          status: "open",
+          priority: 1,
+          issue_type: "bug",
+          created_at: new Date().toISOString(),
+        },
+        {
+          id: "bd-test-2",
+          title: `${TEST_PREFIX} Beads import test 2`,
+          description: "Second test issue",
+          status: "open",
+          priority: 2,
+          issue_type: "feature",
+          created_at: new Date().toISOString(),
+          dependencies: [
+            { type: "blocks", issue_id: "bd-test-1" }
+          ]
+        },
+        {
+          id: "bd-test-3",
+          title: `${TEST_PREFIX} Beads import test 3 (closed)`,
+          status: "closed",
+          priority: 3,
+          issue_type: "task",
+          created_at: new Date().toISOString(),
+          closed_at: new Date().toISOString(),
+        },
+      ];
+      
+      writeFileSync(beadsFile, mockIssues.map(i => JSON.stringify(i)).join("\n"));
+    });
+
+    afterAll(async () => {
+      // Cleanup
+      const { unlinkSync, rmSync, existsSync } = await import("fs");
+      const { dirname } = await import("path");
+      
+      if (existsSync(beadsFile)) {
+        unlinkSync(beadsFile);
+        rmSync(dirname(beadsFile), { recursive: true, force: true });
+      }
+      
+      if (existsSync(importMapFile)) {
+        unlinkSync(importMapFile);
+      }
+    });
+
+    test("should parse beads JSONL", async () => {
+      const { parseBeadsJsonl } = await import("../src/utils/import-beads.js");
+      const issues = parseBeadsJsonl(beadsFile);
+      
+      expect(issues.length).toBe(3);
+      expect(issues[0].id).toBe("bd-test-1");
+      expect(issues[1].dependencies).toBeDefined();
+    });
+
+    test("should filter closed issues", async () => {
+      const { parseBeadsJsonl, filterIssues } = await import("../src/utils/import-beads.js");
+      const issues = parseBeadsJsonl(beadsFile);
+      const filtered = filterIssues(issues, { includeClosed: false });
+      
+      expect(filtered.length).toBe(2);
+      expect(filtered.every(i => i.status !== "closed")).toBe(true);
+    });
+
+    test("should check for duplicates", async () => {
+      const { parseBeadsJsonl, filterIssues, checkDuplicates } = await import("../src/utils/import-beads.js");
+      const { getTeamId } = await import("../src/utils/linear.js");
+      
+      const issues = parseBeadsJsonl(beadsFile);
+      const filtered = filterIssues(issues, { includeClosed: false });
+      const teamId = await getTeamId();
+      
+      const duplicates = await checkDuplicates(filtered, teamId);
+      
+      // Should be a Map
+      expect(duplicates instanceof Map).toBe(true);
+    });
+
+    test("should import issues and create mapping", async () => {
+      const { parseBeadsJsonl, filterIssues, createImportedIssues, saveImportMapping } = await import("../src/utils/import-beads.js");
+      const { getTeamId } = await import("../src/utils/linear.js");
+      const { dirname } = await import("path");
+      
+      const issues = parseBeadsJsonl(beadsFile);
+      const filtered = filterIssues(issues, { includeClosed: false });
+      const teamId = await getTeamId();
+      
+      // Import issues
+      const mapping = await createImportedIssues(filtered, teamId);
+      
+      expect(mapping.size).toBeGreaterThan(0);
+      expect(mapping.has("bd-test-1")).toBe(true);
+      
+      // Save mapping
+      const { mkdirSync, existsSync } = await import("fs");
+      mkdirSync(dirname(importMapFile), { recursive: true });
+      saveImportMapping(mapping, importMapFile);
+      
+      expect(existsSync(importMapFile)).toBe(true);
+      
+      // Read and verify mapping format
+      const { readFileSync } = await import("fs");
+      const content = readFileSync(importMapFile, "utf-8");
+      const lines = content.split("\n").filter(l => l.trim());
+      
+      expect(lines.length).toBe(mapping.size);
+      const firstLine = JSON.parse(lines[0]);
+      expect(firstLine.beads_id).toBeDefined();
+      expect(firstLine.linear_id).toBeDefined();
+      expect(firstLine.imported_at).toBeDefined();
+    });
+  });
 });
