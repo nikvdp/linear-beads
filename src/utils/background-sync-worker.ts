@@ -117,8 +117,25 @@ async function processOutboxItem(item: any, teamId: string): Promise<void> {
         description?: string;
         status?: Issue["status"];
         priority?: Priority;
+        deps?: string;
       };
       await updateIssue(payload.issueId, payload, teamId);
+
+      // Handle deps after update
+      if (payload.deps) {
+        const deps = payload.deps.split(",").map((dep: string) => {
+          const [type, targetId] = dep.trim().split(":");
+          return { type, targetId };
+        });
+        for (const dep of deps) {
+          try {
+            const relationType = dep.type === "blocks" ? "blocks" : "related";
+            await createRelation(payload.issueId, dep.targetId, relationType as "blocks" | "related");
+          } catch {
+            // Ignore relation creation failures in background
+          }
+        }
+      }
       break;
     }
 

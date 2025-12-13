@@ -4,10 +4,28 @@
 
 import { Command } from "commander";
 import { queueOutboxItem, getCachedIssue } from "../utils/database.js";
-import { updateIssue, getTeamId, fetchIssue, getViewer, getUserByEmail } from "../utils/linear.js";
+import {
+  updateIssue,
+  getTeamId,
+  fetchIssue,
+  getViewer,
+  getUserByEmail,
+  createRelation,
+} from "../utils/linear.js";
 import { formatIssueJson, formatIssueHuman, output, outputError } from "../utils/output.js";
 import { spawnWorkerIfNeeded } from "../utils/spawn-worker.js";
 import type { Priority, IssueStatus } from "../types.js";
+
+/**
+ * Parse deps string into array of {type, targetId}
+ */
+function parseDeps(deps: string): Array<{ type: string; targetId: string }> {
+  if (!deps) return [];
+  return deps.split(",").map((dep) => {
+    const [type, targetId] = dep.trim().split(":");
+    return { type, targetId };
+  });
+}
 
 export const updateCommand = new Command("update")
   .description("Update an issue")
@@ -18,6 +36,7 @@ export const updateCommand = new Command("update")
   .option("-p, --priority <priority>", "New priority (0-4)")
   .option("--assign <email>", "Assign to user (email or 'me')")
   .option("--unassign", "Remove assignee")
+  .option("--deps <deps>", "Add relations (e.g., 'blocks:LIN-123,related:LIN-456')")
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Sync immediately (block on network)")
   .option("--team <team>", "Team key (overrides config)")
@@ -70,7 +89,7 @@ export const updateCommand = new Command("update")
         }
       }
 
-      if (Object.keys(updates).length === 0) {
+      if (Object.keys(updates).length === 0 && !options.deps) {
         outputError("No updates specified");
         process.exit(1);
       }
@@ -78,12 +97,35 @@ export const updateCommand = new Command("update")
       if (options.sync) {
         // Sync mode: update directly in Linear
         const teamId = await getTeamId(options.team);
-        const issue = await updateIssue(id, updates, teamId);
+        let issue = null;
 
-        if (options.json) {
-          output(formatIssueJson(issue));
+        if (Object.keys(updates).length > 0) {
+          issue = await updateIssue(id, updates, teamId);
         } else {
-          output(formatIssueHuman(issue));
+          issue = await fetchIssue(id);
+        }
+
+        // Handle deps
+        if (options.deps) {
+          const deps = parseDeps(options.deps);
+          for (const dep of deps) {
+            try {
+              const relationType = dep.type === "blocks" ? "blocks" : "related";
+              await createRelation(id, dep.targetId, relationType);
+            } catch (error) {
+              outputError(
+                `Failed to create ${dep.type} relation to ${dep.targetId}: ${error instanceof Error ? error.message : error}`
+              );
+            }
+          }
+        }
+
+        if (issue) {
+          if (options.json) {
+            output(formatIssueJson(issue));
+          } else {
+            output(formatIssueHuman(issue));
+          }
         }
       } else {
         // Queue mode: add to outbox and spawn background worker
@@ -95,6 +137,7 @@ export const updateCommand = new Command("update")
         // Pass assign/unassign flags for worker to resolve
         if (options.assign) payload.assign = options.assign;
         if (options.unassign) payload.unassign = true;
+        if (options.deps) payload.deps = options.deps;
         // Remove assigneeId from payload - worker will resolve it
         delete payload.assigneeId;
 
