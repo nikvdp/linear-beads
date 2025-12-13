@@ -363,4 +363,32 @@ describe("lb CLI Integration Tests", () => {
       expect(Array.isArray(showResult)).toBe(true);
     });
   });
+
+  describe("background sync", () => {
+    test("should queue and auto-sync in background", async () => {
+      // Create without --sync flag (queues and spawns worker)
+      const title = `${TEST_PREFIX} Background sync test`;
+      const createResult = await lbJson<Array<{ id: string; title: string }>>(
+        "create", title, "-t", "task"
+      );
+
+      // Should return immediately with pending ID
+      expect(createResult[0].id).toBe("pending");
+      expect(createResult[0].title).toBe(title);
+
+      // Wait for worker to process queue (give it a few seconds)
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      // Sync to refresh cache from Linear
+      await lb("sync");
+
+      // Verify issue exists in Linear with real ID
+      const listResult = await lbJson<Array<{ id: string; title: string }>>("list");
+      const found = listResult.find(issue => issue.title === title);
+      
+      expect(found).toBeDefined();
+      expect(found?.id).not.toBe("pending");
+      expect(found?.id).toMatch(/^LIN-\d+$/); // Real Linear ID
+    });
+  });
 });
