@@ -1,0 +1,132 @@
+/**
+ * Background sync worker - processes outbox queue
+ * Should be spawned as a detached process by write commands
+ */
+
+import { writePidFile, removePidFile } from "./pid-manager.js";
+import { getPendingOutboxItems, removeOutboxItem, updateOutboxItemError } from "./database.js";
+import { getTeamId, createIssue, updateIssue, closeIssue, createRelation } from "./linear.js";
+import type { Issue, IssueType, Priority } from "../types.js";
+
+/**
+ * Process the outbox queue until empty
+ */
+async function processOutbox(): Promise<void> {
+  // Write our PID first
+  writePidFile(process.pid);
+
+  try {
+    while (true) {
+      const items = getPendingOutboxItems();
+      
+      if (items.length === 0) {
+        // Queue is empty - we're done
+        break;
+      }
+
+      // Get team ID once for this batch
+      const teamId = await getTeamId();
+
+      // Process items one by one
+      for (const item of items) {
+        try {
+          await processOutboxItem(item, teamId);
+          removeOutboxItem(item.id);
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          console.error(`Failed to process outbox item ${item.id}:`, errorMsg);
+          updateOutboxItemError(item.id, errorMsg);
+          
+          // Brief pause before continuing to next item
+          await sleep(1000);
+        }
+      }
+
+      // Brief pause before checking for more items
+      await sleep(500);
+    }
+  } finally {
+    // Clean up PID file when exiting
+    removePidFile();
+  }
+}
+
+/**
+ * Process a single outbox item
+ */
+async function processOutboxItem(item: any, teamId: string): Promise<void> {
+  switch (item.operation) {
+    case "create": {
+      const payload = item.payload as {
+        title: string;
+        description?: string;
+        priority: Priority;
+        issueType: IssueType;
+        parentId?: string;
+      };
+      await createIssue({
+        ...payload,
+        teamId,
+      });
+      break;
+    }
+    
+    case "update": {
+      const payload = item.payload as {
+        issueId: string;
+        title?: string;
+        description?: string;
+        status?: Issue["status"];
+        priority?: Priority;
+      };
+      await updateIssue(payload.issueId, payload, teamId);
+      break;
+    }
+    
+    case "close": {
+      const payload = item.payload as {
+        issueId: string;
+        reason?: string;
+      };
+      await closeIssue(payload.issueId, teamId, payload.reason);
+      break;
+    }
+    
+    case "create_relation": {
+      const payload = item.payload as {
+        issueId: string;
+        relatedIssueId: string;
+        type: "blocks" | "related";
+      };
+      await createRelation(payload.issueId, payload.relatedIssueId, payload.type);
+      break;
+    }
+    
+    default:
+      throw new Error(`Unknown operation: ${item.operation}`);
+  }
+}
+
+/**
+ * Sleep for ms milliseconds
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Main entry point when run as a script
+ */
+if (import.meta.main) {
+  processOutbox()
+    .then(() => {
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error("Worker failed:", error);
+      removePidFile();
+      process.exit(1);
+    });
+}
+
+export { processOutbox };
