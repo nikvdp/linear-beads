@@ -34,35 +34,51 @@ npm link
 
 ## Configuration
 
-**Required:** Set your Linear API key:
+Three ways to configure (in priority order):
+
+### 1. **Easiest: Use `lb auth`** (Recommended)
+
+```bash
+lb auth
+# Enter your Linear API key (get one at https://linear.app/settings/api)
+# Optionally: lb auth --team MYTEAM
+```
+
+Saves to `~/.config/lb/config.json` - works across all projects!
+
+### 2. Environment Variables
 
 ```bash
 export LINEAR_API_KEY=lin_api_xxxxx
+export LB_TEAM_KEY=MYTEAM  # Optional: auto-detected for single-team users
 ```
 
-**Optional:** Team key (only needed if you have multiple Linear teams):
+Env vars **override** global config.
 
-```bash
-export LB_TEAM_KEY=MYTEAM  # Omit this to auto-detect your team
-```
-
-Or create `.lb.json`:
+### 3. Project Config (`.lb.json`)
 
 ```json
 {
-  "api_key": "lin_api_xxxxx"
-  // "team_key": "MYTEAM"  <- Optional, only for multi-team users
+  "api_key": "lin_api_xxxxx",
+  "team_key": "MYTEAM"  // Optional
 }
 ```
 
-**How team detection works:**
-- If you have only 1 team → Auto-selected (you'll see "Auto-detected team: TeamName")
-- If you have multiple teams → You must set `LB_TEAM_KEY` or use `--team` flag
-- Team key is your Linear team's short code (e.g., "LIN", "ENG", "PROD")
+Project config **overrides** global config but not env vars.
+
+**Config Priority:** `env vars` > `project .lb.json` > `global ~/.config/lb/config.json`
+
+**Team detection:**
+- 1 team → Auto-detected
+- Multiple teams → Set via `LB_TEAM_KEY`, `--team` flag, or `lb auth --team`
 
 ## Quick Start
 
 ```bash
+# First time: Configure your Linear API key
+lb auth
+# (or set LINEAR_API_KEY env var)
+
 # Verify connection
 lb whoami
 
@@ -89,6 +105,9 @@ lb sync
 
 | Command | Description |
 |---------|-------------|
+| `lb auth` | Configure Linear API key globally |
+| `lb auth --show` | Show current config source and masked key |
+| `lb auth --clear` | Remove global config |
 | `lb whoami` | Verify API connection and show your teams |
 | `lb list` | List all issues (repo-scoped) |
 | `lb ready` | List unblocked issues (ready to work) |
