@@ -66,8 +66,16 @@ lb close LIN-42 --reason "Completed" --json
 4. **Discover new work?** Create linked issue:
    - \`lb create "Found bug" -p 1 --deps discovered-from:<parent-id> --json\`
 5. **Complete**: \`lb close <id> --reason "Done" --json\`
+6. **Sync**: Run \`lb sync\` to push changes to Linear
 
-All commands sync to Linear immediately - no manual sync needed.
+### Syncing with Linear
+
+lb caches issues locally for fast access. To push pending changes and pull latest:
+\`\`\`bash
+lb sync
+\`\`\`
+
+Commands also accept \`--sync\` to push immediately instead of queuing.
 
 ### CLI Help
 
@@ -80,6 +88,7 @@ For example: \`lb create --help\` shows \`--parent\`, \`--deps\`, \`--type\`, et
 - Always use \`--json\` flag for programmatic use
 - Link discovered work with \`--deps discovered-from:<id>\`
 - Check \`lb ready\` before asking "what should I work on?"
+- Run \`lb sync\` to persist changes to Linear
 - Do NOT create markdown TODO lists
 - Do NOT use external issue trackers
 - Do NOT duplicate tracking systems

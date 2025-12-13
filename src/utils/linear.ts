@@ -189,19 +189,41 @@ export async function ensureTypeLabel(teamId: string, type: IssueType): Promise<
 }
 
 /**
- * Get team ID from team key
+ * Get team ID from team key, or auto-detect if not provided
  */
 export async function getTeamId(teamKey?: string): Promise<string> {
   const client = getGraphQLClient();
   const key = teamKey || getTeamKey();
 
-  if (!key) {
-    throw new Error("Team key not configured. Set LB_TEAM_KEY or use --team flag.");
+  // If team key is provided, look it up
+  if (key) {
+    const query = `
+      query GetTeam($key: String!) {
+        teams(filter: { key: { eq: $key } }) {
+          nodes {
+            id
+            key
+            name
+          }
+        }
+      }
+    `;
+
+    const result = await client.request<{
+      teams: { nodes: Array<{ id: string; key: string; name: string }> };
+    }>(query, { key });
+
+    if (result.teams.nodes.length === 0) {
+      throw new Error(`Team not found: ${key}`);
+    }
+
+    return result.teams.nodes[0].id;
   }
 
+  // No team key provided - auto-detect from user's teams
   const query = `
-    query GetTeam($key: String!) {
-      teams(filter: { key: { eq: $key } }) {
+    query GetTeams {
+      teams {
         nodes {
           id
           key
@@ -213,13 +235,26 @@ export async function getTeamId(teamKey?: string): Promise<string> {
 
   const result = await client.request<{
     teams: { nodes: Array<{ id: string; key: string; name: string }> };
-  }>(query, { key });
+  }>(query);
 
   if (result.teams.nodes.length === 0) {
-    throw new Error(`Team not found: ${key}`);
+    throw new Error("No teams found for this Linear account.");
   }
 
-  return result.teams.nodes[0].id;
+  if (result.teams.nodes.length === 1) {
+    // Auto-select single team
+    const team = result.teams.nodes[0];
+    console.error(`Auto-detected team: ${team.name} (${team.key})`);
+    return team.id;
+  }
+
+  // Multiple teams - ask user to specify
+  const teamList = result.teams.nodes
+    .map((t) => `  - ${t.name} (${t.key})`)
+    .join("\n");
+  throw new Error(
+    `Multiple teams found. Please set LB_TEAM_KEY or use --team flag:\n${teamList}`
+  );
 }
 
 /**
