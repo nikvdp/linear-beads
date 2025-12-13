@@ -115,11 +115,9 @@ export const updateCommand = new Command("update")
             output(formatIssueJson(updated));
           } else {
             output(formatIssueHuman(updated));
-            output("(queued - background sync started)");
           }
         } else {
-          output(`Queued update for: ${id}`);
-          output("Background sync started");
+          output(`Updated: ${id}`);
         }
       }
     } catch (error) {
