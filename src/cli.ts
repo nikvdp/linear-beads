@@ -12,6 +12,7 @@ import { updateCommand } from "./commands/update.js";
 import { closeCommand } from "./commands/close.js";
 import { syncCommand } from "./commands/sync.js";
 import { onboardCommand } from "./commands/onboard.js";
+import { authCommand } from "./commands/auth.js";
 import { verifyConnection } from "./utils/linear.js";
 import { closeDatabase } from "./utils/database.js";
 
@@ -23,6 +24,7 @@ program
   .version("0.1.0");
 
 // Add subcommands
+program.addCommand(authCommand);
 program.addCommand(listCommand);
 program.addCommand(readyCommand);
 program.addCommand(showCommand);
