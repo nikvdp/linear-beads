@@ -37,6 +37,7 @@ lb create "Found this" --deps discovered-from:LIN-123 -d "Context from parent"
 - \`lb list\` - all issues
 - \`lb show LIN-123\` - issue details with description
 - \`lb update LIN-123 --status in_progress\` - update status
+- \`lb update LIN-123 --deps blocks:LIN-456\` - add blocking relation
 - \`lb close LIN-123 --reason "why"\` - close with reason
 
 ### Rules
