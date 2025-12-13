@@ -245,7 +245,6 @@ export async function getTeamId(teamKey?: string): Promise<string> {
   if (result.teams.nodes.length === 1) {
     // Auto-select single team
     const team = result.teams.nodes[0];
-    console.error(`Auto-detected team: ${team.name} (${team.key})`);
     return team.id;
   }
 
