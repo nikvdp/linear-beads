@@ -38,12 +38,14 @@ export function exportToJsonl(): void {
         title: issue.title,
         status: issue.status,
         priority: issue.priority,
-        issue_type: issue.issue_type,
         created_at: issue.created_at,
         updated_at: issue.updated_at,
       };
 
       // Optional fields
+      if (issue.issue_type) {
+        issueObj.issue_type = issue.issue_type;
+      }
       if (issue.description) {
         issueObj.description = issue.description;
       }

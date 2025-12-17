@@ -109,9 +109,8 @@ describe("lb CLI Integration Tests", () => {
           title: string;
           status: string;
           priority: number;
-          issue_type: string;
         }>
-      >("create", title, "-t", "task", "-p", "2", "--sync");
+      >("create", title, "-p", "2", "--sync");
 
       expect(Array.isArray(result)).toBe(true);
       expect(result.length).toBe(1);
@@ -119,7 +118,6 @@ describe("lb CLI Integration Tests", () => {
       expect(result[0].title).toBe(title);
       expect(result[0].status).toBe("open");
       expect(result[0].priority).toBe(2);
-      expect(result[0].issue_type).toBe("task");
     });
 
     test("should queue issue without --sync", async () => {
@@ -129,7 +127,7 @@ describe("lb CLI Integration Tests", () => {
           id: string;
           title: string;
         }>
-      >("create", title, "-t", "bug", "-p", "1");
+      >("create", title, "-p", "1");
 
       expect(result[0].id).toBe("pending");
       expect(result[0].title).toBe(title);
@@ -138,7 +136,9 @@ describe("lb CLI Integration Tests", () => {
       await lb("sync");
     });
 
-    test("should support bug type", async () => {
+    // Type tests are skipped by default since use_types is off
+    // To run: set use_types: true in config
+    test.skip("should support bug type (requires use_types: true)", async () => {
       const title = `${TEST_PREFIX} Type test: bug`;
       const result = await lbJson<
         Array<{
@@ -150,7 +150,7 @@ describe("lb CLI Integration Tests", () => {
       expect(result[0].issue_type).toBe("bug");
     });
 
-    test("should support feature type", async () => {
+    test.skip("should support feature type (requires use_types: true)", async () => {
       const title = `${TEST_PREFIX} Type test: feature`;
       const result = await lbJson<
         Array<{
@@ -189,8 +189,8 @@ describe("lb CLI Integration Tests", () => {
 
   describe("sync", () => {
     test("should push queued items and pull issues", async () => {
-      // First create a queued issue
-      await lb("create", `${TEST_PREFIX} Sync test`, "-t", "task");
+      // First create a queued issue (no --sync, so it queues)
+      await lb("create", `${TEST_PREFIX} Sync test`);
 
       // Then sync
       const result = await lbJson<{
@@ -370,7 +370,7 @@ describe("lb CLI Integration Tests", () => {
 
       if (result.length > 0) {
         const issue = result[0];
-        expect("issue_type" in issue).toBe(true);
+        // issue_type is now optional (only present when use_types is enabled)
         expect("created_at" in issue).toBe(true);
         expect("updated_at" in issue).toBe(true);
         expect("dependency_count" in issue).toBe(true);
@@ -407,9 +407,7 @@ describe("lb CLI Integration Tests", () => {
       const title = `${TEST_PREFIX} Background sync test`;
       const createResult = await lbJson<Array<{ id: string; title: string }>>(
         "create",
-        title,
-        "-t",
-        "task"
+        title
       );
 
       // Should return immediately with pending ID
@@ -450,7 +448,6 @@ describe("lb CLI Integration Tests", () => {
           description: "First test issue",
           status: "open",
           priority: 1,
-          issue_type: "bug",
           created_at: new Date().toISOString(),
         },
         {
@@ -459,7 +456,6 @@ describe("lb CLI Integration Tests", () => {
           description: "Second test issue",
           status: "open",
           priority: 2,
-          issue_type: "feature",
           created_at: new Date().toISOString(),
           dependencies: [{ type: "blocks", issue_id: "bd-test-1" }],
         },
@@ -468,7 +464,6 @@ describe("lb CLI Integration Tests", () => {
           title: `${TEST_PREFIX} Beads import test 3 (closed)`,
           status: "closed",
           priority: 3,
-          issue_type: "task",
           created_at: new Date().toISOString(),
           closed_at: new Date().toISOString(),
         },

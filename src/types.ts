@@ -36,7 +36,7 @@ export interface Issue {
   description?: string;
   status: IssueStatus;
   priority: Priority;
-  issue_type: IssueType;
+  issue_type?: IssueType; // Optional - only set when use_types is enabled
   created_at: string;
   updated_at: string;
   closed_at?: string;
@@ -121,6 +121,9 @@ export interface Config {
   team_key?: string;
   repo_name?: string;
   cache_ttl_seconds?: number;
+  // Issue type labeling (off by default)
+  use_types?: boolean;
+  type_label_group?: string; // Label group name, default "Type"
 }
 
 /**
@@ -153,27 +156,33 @@ export function linearStateToStatus(stateType: string): IssueStatus {
 }
 
 /**
- * Map bd issue type to a reasonable default (Linear doesn't have issue types)
- * We'll use labels for this
+ * Valid issue types
  */
-export function issueTypeToLabel(type: IssueType): string {
-  return `type:${type}`;
-}
+export const VALID_ISSUE_TYPES: IssueType[] = ["bug", "feature", "task", "epic", "chore"];
 
 /**
- * Extract issue type from labels
+ * Extract issue type from labels (looks for label matching type name in a group)
+ * Returns undefined if no type label found
  */
-export function labelToIssueType(labels: string[]): IssueType {
+export function labelToIssueType(labels: string[]): IssueType | undefined {
   for (const label of labels) {
+    // Check for exact match with type names (e.g., "Bug", "Feature")
+    const normalized = label.toLowerCase();
+    if (VALID_ISSUE_TYPES.includes(normalized as IssueType)) {
+      return normalized as IssueType;
+    }
+    // Also check old format for backwards compatibility
     if (label.startsWith("type:")) {
-      const type = label.slice(5) as IssueType;
-      if (["bug", "feature", "task", "epic", "chore"].includes(type)) {
+      const type = label.slice(5).toLowerCase() as IssueType;
+      if (VALID_ISSUE_TYPES.includes(type)) {
         return type;
       }
     }
   }
-  return "task"; // default
+  return undefined;
 }
+
+
 
 /**
  * Map bd priority (0=critical) to Linear priority (1=urgent, 0=none)

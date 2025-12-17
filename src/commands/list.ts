@@ -7,11 +7,11 @@ import { ensureFresh } from "../utils/sync.js";
 import { getCachedIssues, getDependencies, getDependents } from "../utils/database.js";
 import { formatIssuesListJson, formatIssuesListHuman, output } from "../utils/output.js";
 import { getViewer } from "../utils/linear.js";
-import type { Issue, IssueStatus, IssueType } from "../types.js";
-import { parsePriority } from "../types.js";
+import type { IssueStatus } from "../types.js";
+import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
+import { useTypes } from "../utils/config.js";
 
 const VALID_STATUSES: IssueStatus[] = ["open", "in_progress", "closed"];
-const VALID_TYPES: IssueType[] = ["bug", "feature", "task", "epic", "chore"];
 
 export const listCommand = new Command("list")
   .description("List issues")
@@ -53,8 +53,12 @@ export const listCommand = new Command("list")
         issues = issues.filter((i) => i.priority === priority);
       }
       if (options.type) {
-        if (!VALID_TYPES.includes(options.type)) {
-          console.error(`Invalid type '${options.type}'. Must be one of: ${VALID_TYPES.join(", ")}`);
+        if (!useTypes()) {
+          console.error(`Issue types are disabled. Enable with 'use_types: true' in config.`);
+          process.exit(1);
+        }
+        if (!VALID_ISSUE_TYPES.includes(options.type)) {
+          console.error(`Invalid type '${options.type}'. Must be one of: ${VALID_ISSUE_TYPES.join(", ")}`);
           process.exit(1);
         }
         issues = issues.filter((i) => i.issue_type === options.type);

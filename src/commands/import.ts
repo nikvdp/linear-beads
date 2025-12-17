@@ -100,8 +100,9 @@ export const importCommand = new Command("import")
       if (options.dryRun) {
         output(`\nDry run: Would import ${toImport.length} issues:\n`);
         for (const issue of toImport) {
+          const typeStr = issue.issue_type ? `, ${issue.issue_type}` : "";
           output(
-            `- ${issue.id}: "${issue.title}" (${issue.status}, ${issue.issue_type}, priority ${issue.priority})`
+            `- ${issue.id}: "${issue.title}" (${issue.status}${typeStr}, priority ${issue.priority})`
           );
         }
         output("\nRun without --dry-run to proceed");

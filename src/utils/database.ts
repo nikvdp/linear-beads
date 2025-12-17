@@ -35,27 +35,76 @@ export function getDatabase(): Database {
  * Initialize database schema
  */
 function initSchema(db: Database): void {
-  db.exec(`
-    -- Issues cache
-    CREATE TABLE IF NOT EXISTS issues (
-      id TEXT PRIMARY KEY,
-      identifier TEXT NOT NULL,
-      title TEXT NOT NULL,
-      description TEXT,
-      status TEXT NOT NULL,
-      priority INTEGER NOT NULL,
-      issue_type TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      closed_at TEXT,
-      assignee TEXT,
-      linear_state_id TEXT,
-      cached_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
+  // Check schema version and migrate if needed
+  const versionRow = db.query("PRAGMA user_version").get() as { user_version: number };
+  const currentVersion = versionRow?.user_version || 0;
 
-    CREATE INDEX IF NOT EXISTS idx_issues_identifier ON issues(identifier);
-    CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
-    CREATE INDEX IF NOT EXISTS idx_issues_cached_at ON issues(cached_at);
+  if (currentVersion < 1) {
+    // Initial schema or migration from v0
+    db.exec(`
+      -- Issues cache
+      CREATE TABLE IF NOT EXISTS issues (
+        id TEXT PRIMARY KEY,
+        identifier TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL,
+        priority INTEGER NOT NULL,
+        issue_type TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        closed_at TEXT,
+        assignee TEXT,
+        linear_state_id TEXT,
+        cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_issues_identifier ON issues(identifier);
+      CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+      CREATE INDEX IF NOT EXISTS idx_issues_cached_at ON issues(cached_at);
+    `);
+
+    // Migrate existing issue_type column to allow NULL if needed
+    // SQLite doesn't support ALTER COLUMN, so we need to recreate the table
+    // Check if we have the old NOT NULL constraint
+    const tableInfo = db.query("PRAGMA table_info(issues)").all() as Array<{
+      name: string;
+      notnull: number;
+    }>;
+    const issueTypeCol = tableInfo.find((c) => c.name === "issue_type");
+    if (issueTypeCol && issueTypeCol.notnull === 1) {
+      // Need to migrate - recreate table without NOT NULL on issue_type
+      db.exec(`
+        -- Migrate issue_type to nullable
+        CREATE TABLE issues_new (
+          id TEXT PRIMARY KEY,
+          identifier TEXT NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT,
+          status TEXT NOT NULL,
+          priority INTEGER NOT NULL,
+          issue_type TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          closed_at TEXT,
+          assignee TEXT,
+          linear_state_id TEXT,
+          cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO issues_new SELECT * FROM issues;
+        DROP TABLE issues;
+        ALTER TABLE issues_new RENAME TO issues;
+        CREATE INDEX idx_issues_identifier ON issues(identifier);
+        CREATE INDEX idx_issues_status ON issues(status);
+        CREATE INDEX idx_issues_cached_at ON issues(cached_at);
+      `);
+    }
+
+    db.exec("PRAGMA user_version = 1");
+  }
+
+  // Continue with rest of schema (these are idempotent with IF NOT EXISTS)
+  db.exec(`
 
     -- Dependencies/relations cache
     CREATE TABLE IF NOT EXISTS dependencies (
@@ -142,7 +191,7 @@ export function cacheIssue(issue: Issue & { linear_state_id?: string }): void {
       issue.description || null,
       issue.status,
       issue.priority,
-      issue.issue_type,
+      issue.issue_type || null,
       issue.created_at,
       issue.updated_at,
       issue.closed_at || null,
@@ -172,7 +221,7 @@ export function cacheIssues(issues: Array<Issue & { linear_state_id?: string }>)
         issue.description || null,
         issue.status,
         issue.priority,
-        issue.issue_type,
+        issue.issue_type || null,
         issue.created_at,
         issue.updated_at,
         issue.closed_at || null,
@@ -197,18 +246,23 @@ export function getCachedIssue(id: string): Issue | null {
 
   if (!row) return null;
 
-  return {
+  const issue: Issue = {
     id: row.id as string,
     title: row.title as string,
     description: row.description as string | undefined,
     status: row.status as Issue["status"],
     priority: row.priority as Issue["priority"],
-    issue_type: row.issue_type as Issue["issue_type"],
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
     closed_at: row.closed_at as string | undefined,
     assignee: row.assignee as string | undefined,
   };
+
+  if (row.issue_type) {
+    issue.issue_type = row.issue_type as Issue["issue_type"];
+  }
+
+  return issue;
 }
 
 /**
@@ -220,18 +274,25 @@ export function getCachedIssues(): Issue[] {
     Record<string, unknown>
   >;
 
-  return rows.map((row) => ({
-    id: row.id as string,
-    title: row.title as string,
-    description: row.description as string | undefined,
-    status: row.status as Issue["status"],
-    priority: row.priority as Issue["priority"],
-    issue_type: row.issue_type as Issue["issue_type"],
-    created_at: row.created_at as string,
-    updated_at: row.updated_at as string,
-    closed_at: row.closed_at as string | undefined,
-    assignee: row.assignee as string | undefined,
-  }));
+  return rows.map((row) => {
+    const issue: Issue = {
+      id: row.id as string,
+      title: row.title as string,
+      description: row.description as string | undefined,
+      status: row.status as Issue["status"],
+      priority: row.priority as Issue["priority"],
+      created_at: row.created_at as string,
+      updated_at: row.updated_at as string,
+      closed_at: row.closed_at as string | undefined,
+      assignee: row.assignee as string | undefined,
+    };
+
+    if (row.issue_type) {
+      issue.issue_type = row.issue_type as Issue["issue_type"];
+    }
+
+    return issue;
+  });
 }
 
 /**

@@ -167,6 +167,20 @@ export function getRepoLabel(): string {
 }
 
 /**
+ * Check if issue types are enabled
+ */
+export function useTypes(): boolean {
+  return getOption("use_types") === true;
+}
+
+/**
+ * Get the label group name for types
+ */
+export function getTypeLabelGroup(): string {
+  return getOption("type_label_group") || "Type";
+}
+
+/**
  * Get database path
  */
 export function getDbPath(): string {

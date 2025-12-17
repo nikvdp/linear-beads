@@ -32,7 +32,8 @@ export function formatIssuesListJson(
     title: issue.title,
     status: issue.status,
     priority: issue.priority,
-    issue_type: issue.issue_type,
+    // Only include issue_type if set
+    ...(issue.issue_type ? { issue_type: issue.issue_type } : {}),
     created_at: issue.created_at,
     updated_at: issue.updated_at,
     closed_at: issue.closed_at,
@@ -56,7 +57,8 @@ export function formatReadyJson(
     title: issue.title,
     status: issue.status,
     priority: issue.priority,
-    issue_type: issue.issue_type,
+    // Only include issue_type if set
+    ...(issue.issue_type ? { issue_type: issue.issue_type } : {}),
     created_at: issue.created_at,
     updated_at: issue.updated_at,
     // bd-style: only include assignee if non-null
@@ -76,7 +78,8 @@ export function formatShowJson(issue: Issue, dependencies?: Dependency[]): strin
     description: issue.description,
     status: issue.status,
     priority: issue.priority,
-    issue_type: issue.issue_type,
+    // Only include issue_type if set
+    ...(issue.issue_type ? { issue_type: issue.issue_type } : {}),
     created_at: issue.created_at,
     updated_at: issue.updated_at,
     closed_at: issue.closed_at,
@@ -106,7 +109,9 @@ export function formatIssueHuman(issue: Issue): string {
   lines.push(`${issue.id}: ${issue.title}`);
   lines.push(`  Status: ${issue.status}`);
   lines.push(`  Priority: ${PRIORITY_LABELS[issue.priority] || issue.priority}`);
-  lines.push(`  Type: ${issue.issue_type}`);
+  if (issue.issue_type) {
+    lines.push(`  Type: ${issue.issue_type}`);
+  }
   if (issue.assignee) {
     lines.push(`  Assignee: ${issue.assignee}`);
   }

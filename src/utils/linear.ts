@@ -3,7 +3,7 @@
  */
 
 import { getGraphQLClient, ISSUE_FRAGMENT, ISSUE_WITH_RELATIONS_FRAGMENT } from "./graphql.js";
-import { getRepoLabel, getTeamKey, getOption } from "./config.js";
+import { getRepoLabel, getTeamKey, useTypes, getTypeLabelGroup } from "./config.js";
 import {
   cacheIssue,
   cacheIssues,
@@ -14,13 +14,12 @@ import {
   getLabelIdByName,
   updateLastSync,
 } from "./database.js";
-import type { Issue, Dependency, IssueType, Priority, LinearIssue, IssueStatus } from "../types.js";
+import type { Issue, IssueType, Priority, LinearIssue, IssueStatus } from "../types.js";
 import {
   linearStateToStatus,
   linearToPriority,
   labelToIssueType,
   priorityToLinear,
-  issueTypeToLabel,
   statusToLinearState,
 } from "../types.js";
 
@@ -29,20 +28,26 @@ import {
  */
 function linearToBdIssue(linear: LinearIssue): Issue & { linear_state_id: string } {
   const labels = linear.labels.nodes.map((l) => l.name);
+  const issueType = useTypes() ? labelToIssueType(labels) : undefined;
 
-  return {
+  const issue: Issue & { linear_state_id: string } = {
     id: linear.identifier,
     title: linear.title,
     description: linear.description || undefined,
     status: linearStateToStatus(linear.state.type),
     priority: linearToPriority(linear.priority),
-    issue_type: labelToIssueType(labels),
     created_at: linear.createdAt,
     updated_at: linear.updatedAt,
     closed_at: linear.completedAt || linear.canceledAt || undefined,
     assignee: linear.assignee?.email || undefined,
     linear_state_id: linear.state.id,
   };
+
+  if (issueType) {
+    issue.issue_type = issueType;
+  }
+
+  return issue;
 }
 
 /**
@@ -119,24 +124,31 @@ export async function ensureRepoLabel(teamId: string): Promise<string> {
 }
 
 /**
- * Ensure issue type label exists
+ * Ensure issue type label exists in label group
+ * Uses Linear label groups for proper categorization
  */
 export async function ensureTypeLabel(teamId: string, type: IssueType): Promise<string> {
   const client = getGraphQLClient();
-  const labelName = issueTypeToLabel(type);
+  const groupName = getTypeLabelGroup();
+  // Label names are capitalized (e.g., "Bug", "Feature")
+  const labelName = type.charAt(0).toUpperCase() + type.slice(1);
 
   // Check cache first
   const cachedId = getLabelIdByName(labelName);
   if (cachedId) return cachedId;
 
-  // Query existing labels
+  // Query existing labels and label groups
   const query = `
-    query GetLabels($teamId: String!) {
+    query GetLabelsAndGroups($teamId: String!) {
       team(id: $teamId) {
         labels {
           nodes {
             id
             name
+            parent {
+              id
+              name
+            }
           }
         }
       }
@@ -144,16 +156,63 @@ export async function ensureTypeLabel(teamId: string, type: IssueType): Promise<
   `;
 
   const result = await client.request<{
-    team: { labels: { nodes: Array<{ id: string; name: string }> } };
+    team: {
+      labels: {
+        nodes: Array<{
+          id: string;
+          name: string;
+          parent?: { id: string; name: string } | null;
+        }>;
+      };
+    };
   }>(query, { teamId });
 
-  const existing = result.team.labels.nodes.find((l) => l.name === labelName);
+  // Look for existing label in the Type group (or matching name)
+  const existing = result.team.labels.nodes.find(
+    (l) =>
+      l.name.toLowerCase() === labelName.toLowerCase() &&
+      (l.parent?.name === groupName || !l.parent)
+  );
   if (existing) {
     cacheLabel(existing.id, existing.name, teamId);
     return existing.id;
   }
 
-  // Create label
+  // Find or create the label group
+  let groupId: string | undefined;
+  const existingGroup = result.team.labels.nodes.find(
+    (l) => l.parent?.name === groupName
+  )?.parent;
+  
+  if (existingGroup) {
+    groupId = existingGroup.id;
+  } else {
+    // Create the label group
+    const createGroupMutation = `
+      mutation CreateLabelGroup($teamId: String!, $name: String!) {
+        issueLabelCreate(input: { name: $name, teamId: $teamId }) {
+          success
+          issueLabel {
+            id
+            name
+          }
+        }
+      }
+    `;
+    
+    const groupResult = await client.request<{
+      issueLabelCreate: {
+        success: boolean;
+        issueLabel: { id: string; name: string };
+      };
+    }>(createGroupMutation, { teamId, name: groupName });
+    
+    if (groupResult.issueLabelCreate.success) {
+      groupId = groupResult.issueLabelCreate.issueLabel.id;
+    }
+  }
+
+  // Create the type label (under group if we have one)
   const createMutation = `
     mutation CreateLabel($input: IssueLabelCreateInput!) {
       issueLabelCreate(input: $input) {
@@ -166,17 +225,20 @@ export async function ensureTypeLabel(teamId: string, type: IssueType): Promise<
     }
   `;
 
+  const input: Record<string, unknown> = {
+    name: labelName,
+    teamId,
+  };
+  if (groupId) {
+    input.parentId = groupId;
+  }
+
   const createResult = await client.request<{
     issueLabelCreate: {
       success: boolean;
       issueLabel: { id: string; name: string };
     };
-  }>(createMutation, {
-    input: {
-      name: labelName,
-      teamId,
-    },
-  });
+  }>(createMutation, { input });
 
   if (!createResult.issueLabelCreate.success) {
     throw new Error(`Failed to create type label: ${labelName}`);
@@ -492,7 +554,7 @@ export async function createIssue(params: {
   title: string;
   description?: string;
   priority: Priority;
-  issueType: IssueType;
+  issueType?: IssueType; // Optional - only used when use_types is enabled
   teamId: string;
   parentId?: string;
   assigneeId?: string;
@@ -502,7 +564,14 @@ export async function createIssue(params: {
 
   // Get required labels
   const repoLabelId = await ensureRepoLabel(params.teamId);
-  const typeLabelId = await ensureTypeLabel(params.teamId, params.issueType);
+  const labelIds: string[] = [repoLabelId];
+
+  // Only add type label if types are enabled and type is provided
+  if (useTypes() && params.issueType) {
+    const typeLabelId = await ensureTypeLabel(params.teamId, params.issueType);
+    labelIds.push(typeLabelId);
+  }
+
   const stateId = await getWorkflowStateId(params.teamId, params.status || "open");
 
   // Resolve parentId if provided (identifier -> UUID)
@@ -531,7 +600,7 @@ export async function createIssue(params: {
     priority: priorityToLinear(params.priority),
     teamId: params.teamId,
     stateId,
-    labelIds: [repoLabelId, typeLabelId],
+    labelIds,
     parentId: parentUuid,
   };
 

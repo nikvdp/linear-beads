@@ -13,8 +13,9 @@ import {
 } from "../utils/linear.js";
 import { formatIssueJson, formatIssueHuman, output } from "../utils/output.js";
 import { spawnWorkerIfNeeded } from "../utils/spawn-worker.js";
-import type { IssueType, Priority } from "../types.js";
-import { parsePriority } from "../types.js";
+import type { Issue, IssueType } from "../types.js";
+import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
+import { useTypes } from "../utils/config.js";
 
 const VALID_DEP_TYPES = ["blocks", "related", "discovered-from"];
 
@@ -53,7 +54,7 @@ export const createCommand = new Command("create")
   .description("Create a new issue")
   .argument("<title>", "Issue title")
   .option("-d, --description <desc>", "Issue description")
-  .option("-t, --type <type>", "Type: bug, feature, task, epic, chore", "task")
+  .option("-t, --type <type>", "Type: bug, feature, task, epic, chore (requires use_types config)")
   .option("-p, --priority <priority>", "Priority: urgent, high, medium, low, backlog (or 0-4)", "2")
   .option("--parent <id>", "Parent issue ID (makes this a subtask)")
   .option("--deps <deps>", "Relations: 'blocks:ID' or 'discovered-from:ID' (NOT for subtasks, use --parent)")
@@ -70,18 +71,24 @@ export const createCommand = new Command("create")
         process.exit(1);
       }
 
-      const validTypes = ["bug", "feature", "task", "epic", "chore"];
-      if (!validTypes.includes(options.type)) {
-        console.error(`Invalid type '${options.type}'. Must be one of: ${validTypes.join(", ")}`);
-        process.exit(1);
+      // Handle issue type - only if types are enabled or explicitly provided
+      let issueType: IssueType | undefined;
+      if (options.type) {
+        if (!VALID_ISSUE_TYPES.includes(options.type)) {
+          console.error(`Invalid type '${options.type}'. Must be one of: ${VALID_ISSUE_TYPES.join(", ")}`);
+          process.exit(1);
+        }
+        if (!useTypes()) {
+          console.error(`Issue types are disabled. Enable with 'use_types: true' in config, or remove -t flag.`);
+          process.exit(1);
+        }
+        issueType = options.type as IssueType;
       }
 
       // Validate deps early before creating anything
       if (options.deps) {
         parseDeps(options.deps); // Will exit if invalid
       }
-
-      const issueType = options.type as IssueType;
 
       if (options.sync) {
         // Sync mode: create directly in Linear
@@ -115,7 +122,7 @@ export const createCommand = new Command("create")
           title,
           description: options.description,
           priority,
-          issueType,
+          issueType, // undefined if types disabled
           teamId,
           parentId: options.parent,
           assigneeId,
@@ -147,22 +154,25 @@ export const createCommand = new Command("create")
         // Queue mode: add to outbox and spawn background worker
         // For queue mode, we pass the assign/unassign flags
         // The worker will resolve them when processing
-        queueOutboxItem("create", {
+        const payload: Record<string, unknown> = {
           title,
           description: options.description,
           priority,
-          issueType,
           parentId: options.parent,
           assign: options.assign,
           unassign: options.unassign || false,
           deps: options.deps,
-        });
+        };
+        if (issueType) {
+          payload.issueType = issueType;
+        }
+        queueOutboxItem("create", payload);
 
         // Spawn background worker if not already running
         spawnWorkerIfNeeded();
 
         // Return a placeholder response immediately
-        const placeholder = {
+        const placeholder: Issue = {
           id: "pending",
           title,
           description: options.description,

@@ -80,7 +80,7 @@ async function processOutboxItem(item: any, teamId: string): Promise<void> {
         title: string;
         description?: string;
         priority: Priority;
-        issueType: IssueType;
+        issueType?: IssueType;
         parentId?: string;
         deps?: string;
       };

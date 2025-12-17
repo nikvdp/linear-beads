@@ -35,7 +35,7 @@ export async function pushOutbox(teamId: string): Promise<{ success: number; fai
             title: string;
             description?: string;
             priority: Priority;
-            issueType: IssueType;
+            issueType?: IssueType;
             parentId?: string;
           };
           await createIssue({
