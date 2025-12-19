@@ -76,6 +76,18 @@ jobs:
           chmod +x lb-linux-x64 lb-linux-arm64 lb-darwin-x64 lb-darwin-arm64
           sha256sum * > checksums.txt
 
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          # Extract version from tag (e.g., v4 -> v4)
+          VERSION="${GITHUB_REF_NAME}"
+          # Extract section between "## $VERSION" and next "## v" (or EOF)
+          awk "/^## ${VERSION}\$/,/^## v[0-9]/" CHANGELOG.md | head -n -1 | tail -n +2 > release_notes.md
+          # If empty (last version), extract from header to EOF
+          if [ ! -s release_notes.md ]; then
+            awk "/^## ${VERSION}\$/,0" CHANGELOG.md | tail -n +2 > release_notes.md
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -86,5 +98,5 @@ jobs:
             release/lb-darwin-arm64
             release/lb-windows-x64.exe
             release/checksums.txt
-          generate_release_notes: true
+          body_path: release_notes.md
           make_latest: true
