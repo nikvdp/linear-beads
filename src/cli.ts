@@ -18,6 +18,7 @@ import { onboardCommand } from "./commands/onboard.js";
 import { migrateCommand } from "./commands/migrate.js";
 import { verifyConnection } from "./utils/linear.js";
 import { closeDatabase } from "./utils/database.js";
+import { exportToJsonl } from "./utils/jsonl.js";
 import { processOutbox } from "./utils/background-sync-worker.js";
 
 const program = new Command();
@@ -26,13 +27,21 @@ program
   .name("lb")
   .description("Linear-native beads-style issue tracker")
   .version("0.1.0")
-  .option("--worker", "Internal: run background sync worker");
+  .option("--worker", "Internal: run background sync worker")
+  .option("--export-worker", "Internal: run JSONL export worker");
 
 // Check for --worker flag before parsing commands
 if (process.argv.includes("--worker")) {
   processOutbox()
     .then(() => process.exit(0))
     .catch(() => process.exit(1));
+} else if (process.argv.includes("--export-worker")) {
+  try {
+    exportToJsonl();
+    process.exit(0);
+  } catch {
+    process.exit(1);
+  }
 } else {
   // Add subcommands
   program.addCommand(initCommand);

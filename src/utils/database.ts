@@ -7,6 +7,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { getDbPath } from "./config.js";
+import { requestJsonlExport } from "./jsonl-scheduler.js";
 import type { Issue, Dependency, OutboxItem } from "../types.js";
 
 let db: Database | null = null;
@@ -171,6 +172,7 @@ export function isCacheStale(ttlSeconds: number = 120): boolean {
 export function updateLastSync(): void {
   const db = getDatabase();
   db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_sync', datetime('now'))");
+  requestJsonlExport();
 }
 
 /**
@@ -199,6 +201,7 @@ export function cacheIssue(issue: Issue & { linear_state_id?: string }): void {
       issue.linear_state_id || null,
     ]
   );
+  requestJsonlExport();
 }
 
 /**
@@ -232,6 +235,7 @@ export function cacheIssues(issues: Array<Issue & { linear_state_id?: string }>)
   });
 
   transaction();
+  requestJsonlExport();
 }
 
 /**
@@ -308,6 +312,7 @@ export function cacheDependency(dep: Dependency): void {
   `,
     [dep.issue_id, dep.depends_on_id, dep.type, dep.created_at, dep.created_by]
   );
+  requestJsonlExport();
 }
 
 /**
@@ -316,6 +321,7 @@ export function cacheDependency(dep: Dependency): void {
 export function clearIssueDependencies(issueId: string): void {
   const db = getDatabase();
   db.run("DELETE FROM dependencies WHERE issue_id = ?", [issueId]);
+  requestJsonlExport();
 }
 
 /**
@@ -476,6 +482,7 @@ export function clearCache(): void {
     DELETE FROM labels;
     DELETE FROM metadata;
   `);
+  requestJsonlExport();
 }
 
 /**
@@ -487,6 +494,7 @@ export function clearIssuesCache(): void {
     DELETE FROM issues;
     DELETE FROM dependencies WHERE type = 'parent-child';
   `);
+  requestJsonlExport();
 }
 
 /**
