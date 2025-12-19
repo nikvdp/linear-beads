@@ -138,7 +138,7 @@ export const exportCommand = new Command("export")
         };
 
         if (issue.description) beadsIssue.description = issue.description;
-        if (issue.issue_type) beadsIssue.issue_type = issue.issue_type;
+        beadsIssue.issue_type = issue.issue_type || "task";
         if (issue.closed_at) beadsIssue.closed_at = issue.closed_at;
         if (parent) beadsIssue.parent = parent;
         if (deps.length > 0) beadsIssue.dependencies = deps;
