@@ -9,6 +9,7 @@ import { authCommand } from "./commands/auth.js";
 import { importCommand } from "./commands/import.js";
 import { listCommand } from "./commands/list.js";
 import { readyCommand } from "./commands/ready.js";
+import { blockedCommand } from "./commands/blocked.js";
 import { showCommand } from "./commands/show.js";
 import { createCommand } from "./commands/create.js";
 import { updateCommand } from "./commands/update.js";
@@ -61,6 +62,7 @@ if (process.argv.includes("--worker")) {
   // Issue operations
   program.addCommand(listCommand);
   program.addCommand(readyCommand);
+  program.addCommand(blockedCommand);
   program.addCommand(showCommand);
   program.addCommand(createCommand);
   program.addCommand(updateCommand);
