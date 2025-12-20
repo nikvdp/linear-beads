@@ -102,8 +102,13 @@ async function processOutboxItem(item: any, teamId: string): Promise<void> {
         });
         for (const dep of deps) {
           try {
-            const relationType = dep.type === "blocks" ? "blocks" : "related";
-            await createRelation(issue.id, dep.targetId, relationType as "blocks" | "related");
+            if (dep.type === "blocked-by") {
+              // blocked-by is inverse: target blocks this issue
+              await createRelation(dep.targetId, issue.id, "blocks");
+            } else {
+              const relationType = dep.type === "blocks" ? "blocks" : "related";
+              await createRelation(issue.id, dep.targetId, relationType as "blocks" | "related");
+            }
           } catch {
             // Ignore relation creation failures in background
           }
@@ -141,8 +146,13 @@ async function processOutboxItem(item: any, teamId: string): Promise<void> {
         });
         for (const dep of deps) {
           try {
-            const relationType = dep.type === "blocks" ? "blocks" : "related";
-            await createRelation(payload.issueId, dep.targetId, relationType as "blocks" | "related");
+            if (dep.type === "blocked-by") {
+              // blocked-by is inverse: target blocks this issue
+              await createRelation(dep.targetId, payload.issueId, "blocks");
+            } else {
+              const relationType = dep.type === "blocks" ? "blocks" : "related";
+              await createRelation(payload.issueId, dep.targetId, relationType as "blocks" | "related");
+            }
           } catch {
             // Ignore relation creation failures in background
           }

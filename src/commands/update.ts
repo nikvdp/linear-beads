@@ -18,7 +18,7 @@ import { spawnWorkerIfNeeded } from "../utils/spawn-worker.js";
 import type { Priority, IssueStatus } from "../types.js";
 import { parsePriority } from "../types.js";
 
-const VALID_DEP_TYPES = ["blocks", "related"];
+const VALID_DEP_TYPES = ["blocks", "blocked-by", "related"];
 
 /**
  * Parse deps string into array of {type, targetId}
@@ -51,6 +51,13 @@ function parseDeps(deps: string): Array<{ type: string; targetId: string }> {
   });
 }
 
+/**
+ * Collect repeatable option values into an array
+ */
+function collect(value: string, previous: string[] = []): string[] {
+  return previous.concat([value]);
+}
+
 export const updateCommand = new Command("update")
   .description("Update an issue")
   .argument("<id>", "Issue ID")
@@ -61,7 +68,9 @@ export const updateCommand = new Command("update")
   .option("--assign <email>", "Assign to user (email or 'me')")
   .option("--unassign", "Remove assignee")
   .option("--parent <id>", "Set parent issue (makes this a subtask)")
-  .option("--deps <deps>", "Relations: 'blocks:ID' (NOT for subtasks, use --parent)")
+  .option("--blocks <id>", "This issue blocks ID (repeatable)", collect)
+  .option("--blocked-by <id>", "This issue is blocked by ID (repeatable)", collect)
+  .option("--related <id>", "Related issue ID (repeatable)", collect)
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Sync immediately (block on network)")
   .option("--team <team>", "Team key (overrides config)")
@@ -114,7 +123,24 @@ export const updateCommand = new Command("update")
         }
       }
 
-      if (Object.keys(updates).length === 0 && !options.deps && !options.parent) {
+      // Build deps array from explicit flags + legacy --deps
+      const allDeps: Array<{ type: string; targetId: string }> = [];
+      
+      for (const tid of options.blocks || []) {
+        allDeps.push({ type: "blocks", targetId: tid });
+      }
+      for (const tid of options.blockedBy || []) {
+        allDeps.push({ type: "blocked-by", targetId: tid });
+      }
+      for (const tid of options.related || []) {
+        allDeps.push({ type: "related", targetId: tid });
+      }
+      
+      if (options.deps) {
+        allDeps.push(...parseDeps(options.deps));
+      }
+
+      if (Object.keys(updates).length === 0 && allDeps.length === 0 && !options.parent) {
         outputError("No updates specified");
         process.exit(1);
       }
@@ -142,12 +168,16 @@ export const updateCommand = new Command("update")
         }
 
         // Handle deps
-        if (options.deps) {
-          const deps = parseDeps(options.deps);
-          for (const dep of deps) {
+        if (allDeps.length > 0) {
+          for (const dep of allDeps) {
             try {
-              const relationType = dep.type === "blocks" ? "blocks" : "related";
-              await createRelation(id, dep.targetId, relationType);
+              if (dep.type === "blocked-by") {
+                // blocked-by is inverse: target blocks this issue
+                await createRelation(dep.targetId, id, "blocks");
+              } else {
+                const relationType = dep.type === "blocks" ? "blocks" : "related";
+                await createRelation(id, dep.targetId, relationType);
+              }
             } catch (error) {
               outputError(
                 `Failed to create ${dep.type} relation to ${dep.targetId}: ${error instanceof Error ? error.message : error}`
@@ -164,12 +194,10 @@ export const updateCommand = new Command("update")
           }
         }
       } else {
-        // Validate deps before queueing
-        if (options.deps) {
-          parseDeps(options.deps); // Will exit if invalid
-        }
-
         // Queue mode: add to outbox and spawn background worker
+        // Convert allDeps to string format for queue
+        const depsString = allDeps.map(d => `${d.type}:${d.targetId}`).join(",");
+        
         // For queue mode, pass flags for worker to resolve
         const payload: Record<string, unknown> = {
           issueId: id,
@@ -178,7 +206,7 @@ export const updateCommand = new Command("update")
         // Pass assign/unassign flags for worker to resolve
         if (options.assign) payload.assign = options.assign;
         if (options.unassign) payload.unassign = true;
-        if (options.deps) payload.deps = options.deps;
+        if (depsString) payload.deps = depsString;
         if (options.parent) payload.parentId = options.parent;
         // Remove assigneeId from payload - worker will resolve it
         delete payload.assigneeId;

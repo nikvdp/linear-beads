@@ -50,6 +50,13 @@ function parseDeps(deps: string): Array<{ type: string; targetId: string }> {
   });
 }
 
+/**
+ * Collect repeatable option values into an array
+ */
+function collect(value: string, previous: string[] = []): string[] {
+  return previous.concat([value]);
+}
+
 export const createCommand = new Command("create")
   .description("Create a new issue")
   .argument("<title>", "Issue title")
@@ -57,7 +64,10 @@ export const createCommand = new Command("create")
   .option("-t, --type <type>", "Type: bug, feature, task, epic, chore (requires use_types config)")
   .option("-p, --priority <priority>", "Priority: urgent, high, medium, low, backlog (or 0-4)", "2")
   .option("--parent <id>", "Parent issue ID (makes this a subtask)")
-  .option("--deps <deps>", "Relations: 'blocks:ID' or 'discovered-from:ID' (NOT for subtasks, use --parent)")
+  .option("--blocks <id>", "This issue blocks ID (repeatable)", collect)
+  .option("--blocked-by <id>", "This issue is blocked by ID (repeatable)", collect)
+  .option("--related <id>", "Related issue ID (repeatable)", collect)
+  .option("--discovered-from <id>", "Found while working on ID (repeatable)", collect)
   .option("--assign <email>", "Assign to user (email or 'me')")
   .option("--unassign", "Leave unassigned (skip auto-assign)")
   .option("-j, --json", "Output as JSON")
@@ -85,9 +95,28 @@ export const createCommand = new Command("create")
         }
       }
 
-      // Validate deps early before creating anything
+      // Build deps array from explicit flags + legacy --deps
+      const allDeps: Array<{ type: string; targetId: string }> = [];
+      
+      // Add explicit flag deps
+      for (const id of options.blocks || []) {
+        allDeps.push({ type: "blocks", targetId: id });
+      }
+      for (const id of options.blockedBy || []) {
+        // blocked-by is the inverse: if A is blocked-by B, then B blocks A
+        // We store this as: B blocks A, so we create relation from the target
+        allDeps.push({ type: "blocked-by", targetId: id });
+      }
+      for (const id of options.related || []) {
+        allDeps.push({ type: "related", targetId: id });
+      }
+      for (const id of options.discoveredFrom || []) {
+        allDeps.push({ type: "discovered-from", targetId: id });
+      }
+      
+      // Add legacy --deps format
       if (options.deps) {
-        parseDeps(options.deps); // Will exit if invalid
+        allDeps.push(...parseDeps(options.deps));
       }
 
       if (options.sync) {
@@ -129,13 +158,17 @@ export const createCommand = new Command("create")
         });
 
         // Handle deps after issue creation
-        if (options.deps) {
-          const deps = parseDeps(options.deps);
-          for (const dep of deps) {
+        if (allDeps.length > 0) {
+          for (const dep of allDeps) {
             try {
-              // Map dep types to Linear relation types
-              const relationType = dep.type === "blocks" ? "blocks" : "related";
-              await createRelation(issue.id, dep.targetId, relationType);
+              if (dep.type === "blocked-by") {
+                // blocked-by is inverse: target blocks this issue
+                await createRelation(dep.targetId, issue.id, "blocks");
+              } else {
+                // Map dep types to Linear relation types
+                const relationType = dep.type === "blocks" ? "blocks" : "related";
+                await createRelation(issue.id, dep.targetId, relationType);
+              }
             } catch (error) {
               console.error(
                 `Warning: Failed to create ${dep.type} relation to ${dep.targetId}:`,
@@ -154,6 +187,10 @@ export const createCommand = new Command("create")
         // Queue mode: add to outbox and spawn background worker
         // For queue mode, we pass the assign/unassign flags
         // The worker will resolve them when processing
+        
+        // Convert allDeps to string format for queue
+        const depsString = allDeps.map(d => `${d.type}:${d.targetId}`).join(",");
+        
         const payload: Record<string, unknown> = {
           title,
           description: options.description,
@@ -161,7 +198,7 @@ export const createCommand = new Command("create")
           parentId: options.parent,
           assign: options.assign,
           unassign: options.unassign || false,
-          deps: options.deps,
+          deps: depsString || undefined,
         };
         if (issueType) {
           payload.issueType = issueType;
