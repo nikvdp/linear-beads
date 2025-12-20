@@ -72,15 +72,34 @@ export const listCommand = new Command("list")
 
       // Output
       if (options.json) {
-        output(
-          formatIssuesListJson(
-            issues,
-            (id) => getDependencies(id).length,
-            (id) => getDependents(id).length
-          )
-        );
+        // Add parent info to JSON output
+        const issuesWithParent = issues.map(issue => {
+          const deps = getDependencies(issue.id);
+          const parentDep = deps.find(d => d.type === "parent-child");
+          return {
+            ...issue,
+            parent: parentDep?.depends_on_id || null,
+            dependency_count: deps.length,
+            dependent_count: getDependents(issue.id).length,
+          };
+        });
+        output(JSON.stringify(issuesWithParent, null, 2));
       } else {
-        output(formatIssuesListHuman(issues));
+        if (issues.length === 0) {
+          output("No issues found.");
+          return;
+        }
+        
+        // Build output with parent context
+        for (const issue of issues) {
+          const deps = getDependencies(issue.id);
+          const parentDep = deps.find(d => d.type === "parent-child");
+          const parentSuffix = parentDep ? ` (↳ ${parentDep.depends_on_id})` : "";
+          const priorityName = ["crit", "high", "medi", "low", "back"][issue.priority] || "medi";
+          const status = issue.status.padEnd(12);
+          
+          output(`${issue.id}  ${status}  ${priorityName}  ${issue.title}${parentSuffix}`);
+        }
       }
     } catch (error) {
       console.error("Error:", error instanceof Error ? error.message : error);
