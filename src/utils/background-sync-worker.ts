@@ -7,7 +7,7 @@
  */
 
 import { writePidFile, removePidFile, getPidFileMtime } from "./pid-manager.js";
-import { getPendingOutboxItems, removeOutboxItem, updateOutboxItemError } from "./database.js";
+import { getPendingOutboxItems, removeOutboxItem, updateOutboxItemError, getParentId, getChildIds, getCachedIssue } from "./database.js";
 import {
   getTeamId,
   createIssue,
@@ -24,6 +24,50 @@ import type { Issue, IssueType, Priority } from "../types.js";
 
 const IDLE_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 500;
+
+/**
+ * Propagate status changes to parent issue.
+ * - When child goes in_progress: set parent to in_progress (if open)
+ * - When child closes: if no other children in_progress, set parent to open
+ */
+async function propagateStatusToParent(
+  issueId: string,
+  newStatus: string,
+  teamId: string
+): Promise<void> {
+  const parentId = getParentId(issueId);
+  if (!parentId) return;
+
+  const parent = getCachedIssue(parentId);
+  if (!parent) return;
+
+  if (newStatus === "in_progress") {
+    // Child started work - parent should also be in_progress
+    if (parent.status === "open") {
+      try {
+        await updateIssue(parentId, { status: "in_progress" }, teamId);
+      } catch {
+        // Ignore - best effort
+      }
+    }
+  } else if (newStatus === "closed") {
+    // Child finished - check if any siblings still in_progress
+    const siblingIds = getChildIds(parentId);
+    const hasActiveWork = siblingIds.some((sibId) => {
+      if (sibId === issueId) return false; // Skip self
+      const sib = getCachedIssue(sibId);
+      return sib?.status === "in_progress";
+    });
+
+    if (!hasActiveWork && parent.status === "in_progress") {
+      try {
+        await updateIssue(parentId, { status: "open" }, teamId);
+      } catch {
+        // Ignore - best effort
+      }
+    }
+  }
+}
 
 /**
  * Process the outbox queue with polling and idle timeout
@@ -161,6 +205,11 @@ async function processOutboxItem(item: any, teamId: string): Promise<void> {
       };
       await updateIssue(payload.issueId, payload, teamId);
 
+      // Propagate status changes to parent
+      if (payload.status) {
+        await propagateStatusToParent(payload.issueId, payload.status, teamId);
+      }
+
       // Handle parent after update
       if (payload.parentId) {
         try {
@@ -199,6 +248,9 @@ async function processOutboxItem(item: any, teamId: string): Promise<void> {
         reason?: string;
       };
       await closeIssue(payload.issueId, teamId, payload.reason);
+
+      // Propagate close to parent
+      await propagateStatusToParent(payload.issueId, "closed", teamId);
       break;
     }
 

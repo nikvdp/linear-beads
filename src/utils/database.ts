@@ -354,6 +354,26 @@ export function getDependencies(issueId: string): Dependency[] {
 }
 
 /**
+ * Get parent issue ID (if any)
+ */
+export function getParentId(issueId: string): string | null {
+  const deps = getDependencies(issueId);
+  const parentDep = deps.find((d) => d.type === "parent-child");
+  return parentDep?.depends_on_id || null;
+}
+
+/**
+ * Get child issue IDs
+ */
+export function getChildIds(issueId: string): string[] {
+  const db = getDatabase();
+  const rows = db
+    .query("SELECT issue_id FROM dependencies WHERE depends_on_id = ? AND type = 'parent-child'")
+    .all(issueId) as Array<{ issue_id: string }>;
+  return rows.map((r) => r.issue_id);
+}
+
+/**
  * Get inverse dependencies for an issue (incoming: others depend on this issue)
  */
 export function getInverseDependencies(issueId: string): Dependency[] {
