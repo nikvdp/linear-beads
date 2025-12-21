@@ -6,7 +6,7 @@ import { Command } from "commander";
 import { queueOutboxItem, getCachedIssue } from "../utils/database.js";
 import { closeIssue, getTeamId, fetchIssue } from "../utils/linear.js";
 import { formatIssueJson, formatIssueHuman, output } from "../utils/output.js";
-import { spawnWorkerIfNeeded } from "../utils/spawn-worker.js";
+import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 
 export const closeCommand = new Command("close")
   .description("Close an issue")
@@ -34,8 +34,8 @@ export const closeCommand = new Command("close")
           reason: options.reason,
         });
 
-        // Spawn background worker if not already running
-        spawnWorkerIfNeeded();
+        // Ensure worker processes the outbox
+        ensureOutboxProcessed();
 
         // Return cached issue with status updated
         let issue = getCachedIssue(id);

@@ -12,7 +12,7 @@ import {
   createRelation,
 } from "../utils/linear.js";
 import { formatIssueJson, formatIssueHuman, output } from "../utils/output.js";
-import { spawnWorkerIfNeeded } from "../utils/spawn-worker.js";
+import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Issue, IssueType } from "../types.js";
 import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
 import { useTypes } from "../utils/config.js";
@@ -206,7 +206,7 @@ export const createCommand = new Command("create")
         queueOutboxItem("create", payload);
 
         // Spawn background worker if not already running
-        spawnWorkerIfNeeded();
+        ensureOutboxProcessed();
 
         // Return a placeholder response immediately
         const placeholder: Issue = {

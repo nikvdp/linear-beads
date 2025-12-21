@@ -14,7 +14,7 @@ import {
   createRelation,
 } from "../utils/linear.js";
 import { formatIssueJson, formatIssueHuman, output, outputError } from "../utils/output.js";
-import { spawnWorkerIfNeeded } from "../utils/spawn-worker.js";
+import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Priority, IssueStatus } from "../types.js";
 import { parsePriority } from "../types.js";
 
@@ -214,7 +214,7 @@ export const updateCommand = new Command("update")
         queueOutboxItem("update", payload);
 
         // Spawn background worker if not already running
-        spawnWorkerIfNeeded();
+        ensureOutboxProcessed();
 
         // Return cached issue with updates applied
         let issue = getCachedIssue(id);

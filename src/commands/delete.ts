@@ -6,7 +6,7 @@ import { Command } from "commander";
 import { deleteIssue } from "../utils/linear.js";
 import { deleteCachedIssue, getCachedIssue, queueOutboxItem } from "../utils/database.js";
 import { output } from "../utils/output.js";
-import { spawnWorkerIfNeeded } from "../utils/spawn-worker.js";
+import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 
 export const deleteCommand = new Command("delete")
   .description("Delete an issue permanently")
@@ -46,7 +46,7 @@ export const deleteCommand = new Command("delete")
         deleteCachedIssue(id);
 
         // Spawn background worker
-        spawnWorkerIfNeeded();
+        ensureOutboxProcessed();
 
         if (options.json) {
           output(JSON.stringify({ deleted: id, title, queued: true }));
