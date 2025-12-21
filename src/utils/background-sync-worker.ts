@@ -14,7 +14,6 @@ import {
   deleteIssue,
   createRelation,
   fetchIssues,
-  fetchRelations,
 } from "./linear.js";
 import { exportToJsonl } from "./jsonl.js";
 import type { Issue, IssueType, Priority } from "../types.js";
@@ -59,12 +58,12 @@ async function processOutbox(): Promise<void> {
 
     // All done - pull latest from Linear and export to JSONL
     const teamId = await getTeamId();
-    const issues = await fetchIssues(teamId);
+    await fetchIssues(teamId);
     exportToJsonl();
 
-    // Fetch relations in background (this is slow but user isn't waiting)
-    const issueIds = issues.map((i) => i.id);
-    await fetchRelations(issueIds);
+    // Note: We intentionally skip fetching relations here.
+    // Fetching relations for all issues is O(n) API calls which is too slow.
+    // Relations are fetched on-demand via `lb show <id> --sync`.
   } finally {
     // Clean up PID file when exiting
     removePidFile();
