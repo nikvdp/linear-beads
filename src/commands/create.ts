@@ -3,7 +3,7 @@
  */
 
 import { Command } from "commander";
-import { queueOutboxItem } from "../utils/database.js";
+import { queueOutboxItem, generateLocalId, cacheIssue, cacheDependency } from "../utils/database.js";
 import {
   createIssue,
   getTeamId,
@@ -15,7 +15,7 @@ import { formatIssueJson, formatIssueHuman, output } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Issue, IssueType } from "../types.js";
 import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
-import { useTypes } from "../utils/config.js";
+import { useTypes, isLocalOnly } from "../utils/config.js";
 
 const VALID_DEP_TYPES = ["blocks", "related", "discovered-from"];
 
@@ -117,6 +117,65 @@ export const createCommand = new Command("create")
       // Add legacy --deps format
       if (options.deps) {
         allDeps.push(...parseDeps(options.deps));
+      }
+
+      // Local-only mode: create locally without Linear
+      if (isLocalOnly()) {
+        const localId = generateLocalId();
+        const now = new Date().toISOString();
+        
+        const issue: Issue = {
+          id: localId,
+          title,
+          description: options.description,
+          status: "open",
+          priority,
+          issue_type: issueType,
+          created_at: now,
+          updated_at: now,
+        };
+        
+        cacheIssue(issue);
+        
+        // Handle parent relationship
+        if (options.parent) {
+          cacheDependency({
+            issue_id: localId,
+            depends_on_id: options.parent,
+            type: "parent-child",
+            created_at: now,
+            created_by: "local",
+          });
+        }
+        
+        // Handle deps
+        for (const dep of allDeps) {
+          if (dep.type === "blocked-by") {
+            cacheDependency({
+              issue_id: dep.targetId,
+              depends_on_id: localId,
+              type: "blocks",
+              created_at: now,
+              created_by: "local",
+            });
+          } else {
+            const depType = dep.type === "blocks" ? "blocks" : "related";
+            cacheDependency({
+              issue_id: localId,
+              depends_on_id: dep.targetId,
+              type: depType as "blocks" | "related",
+              created_at: now,
+              created_by: "local",
+            });
+          }
+        }
+        
+        if (options.json) {
+          output(formatIssueJson(issue));
+        } else {
+          output(`Created: ${localId}: ${title}`);
+        }
+        return;
       }
 
       if (options.sync) {

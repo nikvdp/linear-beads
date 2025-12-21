@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { fullSync } from "../utils/sync.js";
 import { output, outputError } from "../utils/output.js";
 import { getPendingOutboxItems } from "../utils/database.js";
+import { isLocalOnly } from "../utils/config.js";
 
 /**
  * Check if error is a network/connectivity issue
@@ -29,6 +30,12 @@ export const syncCommand = new Command("sync")
   .option("-j, --json", "Output as JSON")
   .action(async (options) => {
     try {
+      // Local-only mode: no sync needed
+      if (isLocalOnly()) {
+        output("Local-only mode: sync disabled (set local_only: false in config to enable)");
+        return;
+      }
+
       const result = await fullSync(options.team);
 
       if (options.json) {

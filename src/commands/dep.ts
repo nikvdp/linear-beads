@@ -4,9 +4,10 @@
 
 import { Command } from "commander";
 import { createRelation, deleteRelation } from "../utils/linear.js";
-import { getDependencies, getCachedIssue, getDatabase } from "../utils/database.js";
+import { getDependencies, getCachedIssue, getDatabase, cacheDependency, deleteDependency } from "../utils/database.js";
 import { output, outputError } from "../utils/output.js";
 import { queueOperation } from "../utils/spawn-worker.js";
+import { isLocalOnly } from "../utils/config.js";
 import type { Dependency } from "../types.js";
 
 /**
@@ -88,10 +89,23 @@ const addCommand = new Command("add")
         process.exit(1);
       }
 
+      const localOnly = isLocalOnly();
+      const now = new Date().toISOString();
+
       if (options.blocks) {
-        if (options.sync) {
+        const dep: Dependency = {
+          issue_id: issueId,
+          depends_on_id: options.blocks,
+          type: "blocks",
+          created_at: now,
+          created_by: "local",
+        };
+        if (localOnly) {
+          cacheDependency(dep);
+        } else if (options.sync) {
           await createRelation(issueId, options.blocks, "blocks");
         } else {
+          cacheDependency(dep);
           queueOperation("create_relation", {
             issueId,
             relatedIssueId: options.blocks,
@@ -103,9 +117,19 @@ const addCommand = new Command("add")
 
       if (options.blockedBy) {
         // blocked-by is inverse: target blocks this issue
-        if (options.sync) {
+        const dep: Dependency = {
+          issue_id: options.blockedBy,
+          depends_on_id: issueId,
+          type: "blocks",
+          created_at: now,
+          created_by: "local",
+        };
+        if (localOnly) {
+          cacheDependency(dep);
+        } else if (options.sync) {
           await createRelation(options.blockedBy, issueId, "blocks");
         } else {
+          cacheDependency(dep);
           queueOperation("create_relation", {
             issueId: options.blockedBy,
             relatedIssueId: issueId,
@@ -116,9 +140,19 @@ const addCommand = new Command("add")
       }
 
       if (options.related) {
-        if (options.sync) {
+        const dep: Dependency = {
+          issue_id: issueId,
+          depends_on_id: options.related,
+          type: "related",
+          created_at: now,
+          created_by: "local",
+        };
+        if (localOnly) {
+          cacheDependency(dep);
+        } else if (options.sync) {
           await createRelation(issueId, options.related, "related");
         } else {
+          cacheDependency(dep);
           queueOperation("create_relation", {
             issueId,
             relatedIssueId: options.related,
@@ -141,9 +175,14 @@ const removeCommand = new Command("remove")
   .option("--sync", "Sync immediately (block on network)")
   .action(async (issueA: string, issueB: string, options) => {
     try {
-      if (options.sync) {
+      const localOnly = isLocalOnly();
+      
+      if (localOnly) {
+        deleteDependency(issueA, issueB);
+      } else if (options.sync) {
         await deleteRelation(issueA, issueB);
       } else {
+        deleteDependency(issueA, issueB);
         queueOperation("delete_relation", {
           issueA,
           issueB,

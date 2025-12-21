@@ -149,6 +149,27 @@ function initSchema(db: Database): void {
 }
 
 /**
+ * Generate next local issue ID (LOCAL-001, LOCAL-002, etc.)
+ */
+export function generateLocalId(): string {
+  const db = getDatabase();
+  
+  // Get current counter
+  const row = db.query("SELECT value FROM metadata WHERE key = 'local_id_counter'").get() as {
+    value: string;
+  } | null;
+  
+  const nextNum = row ? parseInt(row.value) + 1 : 1;
+  
+  // Update counter
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('local_id_counter', ?)", [
+    nextNum.toString(),
+  ]);
+  
+  return `LOCAL-${nextNum.toString().padStart(3, "0")}`;
+}
+
+/**
  * Check if cache is stale
  */
 export function isCacheStale(ttlSeconds: number = 120): boolean {

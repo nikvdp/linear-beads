@@ -3,7 +3,7 @@
  */
 
 import { Command } from "commander";
-import { queueOutboxItem, getCachedIssue } from "../utils/database.js";
+import { queueOutboxItem, getCachedIssue, cacheIssue, cacheDependency } from "../utils/database.js";
 import {
   updateIssue,
   updateIssueParent,
@@ -17,6 +17,7 @@ import { formatIssueJson, formatIssueHuman, output, outputError } from "../utils
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Priority, IssueStatus } from "../types.js";
 import { parsePriority } from "../types.js";
+import { isLocalOnly } from "../utils/config.js";
 
 const VALID_DEP_TYPES = ["blocks", "blocked-by", "related"];
 
@@ -143,6 +144,59 @@ export const updateCommand = new Command("update")
       if (Object.keys(updates).length === 0 && allDeps.length === 0 && !options.parent) {
         outputError("No updates specified");
         process.exit(1);
+      }
+
+      // Local-only mode: update cache directly
+      if (isLocalOnly()) {
+        const issue = getCachedIssue(id);
+        if (!issue) {
+          outputError(`Issue not found: ${id}`);
+          process.exit(1);
+        }
+
+        const now = new Date().toISOString();
+        const updated = { ...issue, ...updates, updated_at: now };
+        cacheIssue(updated);
+
+        // Handle parent
+        if (options.parent) {
+          cacheDependency({
+            issue_id: id,
+            depends_on_id: options.parent,
+            type: "parent-child",
+            created_at: now,
+            created_by: "local",
+          });
+        }
+
+        // Handle deps
+        for (const dep of allDeps) {
+          if (dep.type === "blocked-by") {
+            cacheDependency({
+              issue_id: dep.targetId,
+              depends_on_id: id,
+              type: "blocks",
+              created_at: now,
+              created_by: "local",
+            });
+          } else {
+            const depType = dep.type === "blocks" ? "blocks" : "related";
+            cacheDependency({
+              issue_id: id,
+              depends_on_id: dep.targetId,
+              type: depType as "blocks" | "related",
+              created_at: now,
+              created_by: "local",
+            });
+          }
+        }
+
+        if (options.json) {
+          output(formatIssueJson(updated));
+        } else {
+          output(formatIssueHuman(updated));
+        }
+        return;
       }
 
       if (options.sync) {

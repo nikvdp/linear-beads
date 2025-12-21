@@ -118,6 +118,7 @@ export function deepMerge<T extends object>(
 export const DEFAULT_CONFIG: LoadedConfig = {
   use_issue_types: false,
   cache_ttl_seconds: 120,
+  local_only: false,
 };
 
 /**
@@ -262,6 +263,13 @@ export function useTypes(): boolean {
  */
 export function getRepoName(): string | undefined {
   return getOption("repo_name");
+}
+
+/**
+ * Check if running in local-only mode (no Linear sync)
+ */
+export function isLocalOnly(): boolean {
+  return getOption("local_only") === true;
 }
 
 /**

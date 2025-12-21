@@ -22,4 +22,8 @@ export interface HttpsLbCliDevConfigSchemaJson {
    * How long to trust cached data before re-syncing from Linear, in seconds.
    */
   cache_ttl_seconds?: number;
+  /**
+   * Run in local-only mode without syncing to Linear. Issues get LOCAL-xxx IDs. Useful for LLM-only task tracking.
+   */
+  local_only?: boolean;
 }
