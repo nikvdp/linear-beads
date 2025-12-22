@@ -325,11 +325,40 @@ export function clearIssueDependencies(issueId: string): void {
 }
 
 /**
- * Get dependencies for an issue
+ * Delete a specific dependency between two issues
+ */
+export function deleteDependency(issueId: string, dependsOnId: string): void {
+  const db = getDatabase();
+  db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [issueId, dependsOnId]);
+  // Also try the reverse direction
+  db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [dependsOnId, issueId]);
+  requestJsonlExport();
+}
+
+/**
+ * Get dependencies for an issue (outgoing: this issue depends on others)
  */
 export function getDependencies(issueId: string): Dependency[] {
   const db = getDatabase();
   const rows = db.query("SELECT * FROM dependencies WHERE issue_id = ?").all(issueId) as Array<
+    Record<string, unknown>
+  >;
+
+  return rows.map((row) => ({
+    issue_id: row.issue_id as string,
+    depends_on_id: row.depends_on_id as string,
+    type: row.type as Dependency["type"],
+    created_at: row.created_at as string,
+    created_by: row.created_by as string,
+  }));
+}
+
+/**
+ * Get inverse dependencies for an issue (incoming: others depend on this issue)
+ */
+export function getInverseDependencies(issueId: string): Dependency[] {
+  const db = getDatabase();
+  const rows = db.query("SELECT * FROM dependencies WHERE depends_on_id = ?").all(issueId) as Array<
     Record<string, unknown>
   >;
 
@@ -494,6 +523,16 @@ export function clearIssuesCache(): void {
     DELETE FROM issues;
     DELETE FROM dependencies WHERE type = 'parent-child';
   `);
+  requestJsonlExport();
+}
+
+/**
+ * Delete a single issue from cache
+ */
+export function deleteCachedIssue(issueId: string): void {
+  const db = getDatabase();
+  db.run("DELETE FROM issues WHERE id = ?", [issueId]);
+  db.run("DELETE FROM dependencies WHERE issue_id = ? OR depends_on_id = ?", [issueId, issueId]);
   requestJsonlExport();
 }
 

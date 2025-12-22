@@ -115,7 +115,7 @@ export interface LinearIssue {
  */
 export interface OutboxItem {
   id: number;
-  operation: "create" | "update" | "close" | "create_relation" | "delete_relation";
+  operation: "create" | "update" | "close" | "delete" | "create_relation" | "delete_relation";
   payload: Record<string, unknown>;
   created_at: string;
   retry_count: number;

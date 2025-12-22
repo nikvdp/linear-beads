@@ -12,101 +12,95 @@ const AGENTS_MD_CONTENT = `## CRITICAL: Task Tracking with \`lb\`
 
 This repo uses \`lb\` for issue tracking. All tasks live in Linear. The \`lb\` CLI is your todo list - not your built-in task tools.
 
-### First Time Setup
-
-If \`lb\` hasn't been initialized in this repo:
-\`\`\`bash
-lb init          # Initialize lb
-lb onboard       # Get instructions for AGENTS.md setup
-\`\`\`
-
-Add \`.lb\` and \`AGENTS.md\` to \`.git/info/exclude\` (NOT .gitignore - these are local-only).
-
-### Before Starting ANY Work
+### Quick Start
 
 \`\`\`bash
 lb sync                    # Pull latest from Linear
-lb ready                   # See unblocked work
+lb ready                   # See unblocked work (issues with no blockers)
 lb show LIN-XXX            # Read full description before starting
 lb update LIN-XXX --status in_progress   # Claim it
 \`\`\`
 
+### Dependencies & Blocking
+
+\`lb\` tracks relationships between issues. \`lb ready\` only shows unblocked issues.
+
+\`\`\`bash
+# This issue blocks another (other can't start until this is done)
+lb create "Must do first" --blocks LIN-123
+
+# This issue is blocked by another (can't start until other is done)
+lb create "Depends on auth" --blocked-by LIN-100
+
+# Found a bug while working on LIN-50? Link it
+lb create "Found: race condition" --discovered-from LIN-50 -d "Details..."
+
+# General relation (doesn't block)
+lb create "Related work" --related LIN-200
+
+# Manage deps after creation
+lb dep add LIN-A --blocks LIN-B
+lb dep remove LIN-A LIN-B
+lb dep tree LIN-A          # Visualize dependency tree
+\`\`\`
+
+**Dependency types:**
+- \`--blocks ID\` - This issue must finish before ID can start
+- \`--blocked-by ID\` - This issue can't start until ID finishes
+- \`--related ID\` - Soft link, doesn't block progress
+- \`--discovered-from ID\` - Found while working on ID (creates relation)
+
 ### Planning Work
 
-When you need to break down a task into steps, **create subtasks in lb**, not mental notes or TodoWrite:
+Break down tasks into subtasks:
 
 \`\`\`bash
-# Break down a task into subtasks
 lb create "Step 1: Do X" --parent LIN-XXX -d "Details..."
 lb create "Step 2: Do Y" --parent LIN-XXX -d "Details..."
-lb create "Step 3: Do Z" --parent LIN-XXX -d "Details..."
 \`\`\`
 
-### During Work
+### Workflow
+
+1. \`lb ready\` - Find unblocked work
+2. \`lb update ID --status in_progress\` - Claim it
+3. Work on it
+4. Found new issue? \`lb create "Found: X" --discovered-from ID\`
+5. \`lb close ID --reason "Done"\`
+
+### Viewing Issues
 
 \`\`\`bash
-# Found something that needs doing? Create an issue, don't just remember it
-lb create "Found: need to fix X" --parent LIN-XXX -d "Context..."
-
-# Discovered a blocker or dependency?
-lb update LIN-AAA --deps blocks:LIN-BBB   # AAA blocks BBB
+lb list                    # All issues
+lb list --status open      # Filter by status
+lb ready                   # Unblocked issues ready to work
+lb blocked                 # Blocked issues (shows what's blocking them)
+lb show LIN-XXX            # Full details with all relationships
 \`\`\`
 
-### Completing Work
-
-\`\`\`bash
-lb close LIN-XXX --reason "Brief summary of what was done"
-\`\`\`
-
-### Creating Good Issues
-
-Always include \`-d "description"\` with:
-- What needs to be done and WHY
-- Relevant file paths or code references  
-- Any constraints or acceptance criteria
-- Enough context for another agent to pick it up
-
-\`\`\`bash
-# Good
-lb create "Fix race condition in model refresh" -d "chatModels.refresh() can be called multiple times concurrently causing state corruption. Add mutex. See src/lib/stores/stores/llmProvider.ts:297"
-
-# Bad
-lb create "Fix bug"
-\`\`\`
-
-### Issue Types
-
-\`\`\`bash
-lb create "Title" -t task     # Default - general work
-lb create "Title" -t bug      # Bug fix
-lb create "Title" -t feature  # New feature
-lb create "Title" -t epic     # Large initiative with subtasks
-lb create "Title" -t chore    # Maintenance/cleanup
-\`\`\`
-
-### Key Commands Reference
+### Key Commands
 
 | Command | Purpose |
 |---------|---------|
 | \`lb sync\` | Sync with Linear |
-| \`lb ready\` | Show unblocked issues you can work on |
-| \`lb list\` | Show all issues |
-| \`lb show LIN-XXX\` | Full issue details |
-| \`lb update LIN-XXX --status in_progress\` | Claim work |
-| \`lb update LIN-XXX --status open\` | Unclaim/pause work |
-| \`lb close LIN-XXX --reason "why"\` | Complete work |
-| \`lb create "Title" --parent LIN-XXX -d "..."\` | Create subtask |
-| \`lb update LIN-XXX --deps blocks:LIN-YYY\` | Add dependency |
+| \`lb ready\` | Show unblocked issues |
+| \`lb blocked\` | Show blocked issues with blockers |
+| \`lb show ID\` | Full issue details + relationships |
+| \`lb create "Title" -d "..."\` | Create issue |
+| \`lb create "Title" --parent ID\` | Create subtask |
+| \`lb create "Title" --blocked-by ID\` | Create blocked issue |
+| \`lb update ID --status in_progress\` | Claim work |
+| \`lb close ID --reason "why"\` | Complete work |
+| \`lb dep add ID --blocks OTHER\` | Add blocking dependency |
+| \`lb dep tree ID\` | Show dependency tree |
 
 ### Rules
 
-1. **NEVER use built-in task tools** - use \`lb create\` for subtasks instead
-2. **Always \`lb sync\` and \`lb ready\`** before asking what to work on
+1. **NEVER use built-in task tools** - use \`lb create\` for subtasks
+2. **Always \`lb ready\`** before asking what to work on
 3. **Always \`lb show\`** to read the full description before starting
-4. **Always \`lb update --status in_progress\`** before starting work
-5. **Create subtasks in lb** when breaking down work, not mental notes
-6. **Always include descriptions** with context for handoff
-7. **Close issues with reasons** explaining what was done`;
+4. **Link discovered work** with \`--discovered-from\` to maintain context graph
+5. **Include descriptions** with enough context for handoff
+6. **Close with reasons** explaining what was done`;
 
 const ONBOARD_CONTENT = `# lb Onboard
 
@@ -120,14 +114,6 @@ This ensures all future agents know to use \`lb\`:
 ---
 
 ${AGENTS_MD_CONTENT}
-
----
-
-## Git Workflow
-
-Commit atomically as you work (one logical change per commit) unless told otherwise.
-
-Don't commit AGENTS.md or .lb - they're in .git/info/exclude for a reason.
 
 ---
 

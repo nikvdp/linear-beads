@@ -840,6 +840,133 @@ export async function createRelation(
 }
 
 /**
+ * Delete a relation between two issues
+ */
+export async function deleteRelation(issueId: string, relatedIssueId: string): Promise<void> {
+  const client = getGraphQLClient();
+
+  // Resolve identifiers to UUIDs
+  const issueUuid = (await resolveIssueId(issueId)) || issueId;
+  const relatedUuid = (await resolveIssueId(relatedIssueId)) || relatedIssueId;
+
+  // First, find the relation ID by querying the issue's relations
+  const query = `
+    query GetIssueRelations($id: String!) {
+      issue(id: $id) {
+        relations {
+          nodes {
+            id
+            relatedIssue {
+              id
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const result = await client.request<{
+    issue: {
+      relations: {
+        nodes: Array<{ id: string; relatedIssue: { id: string } }>;
+      };
+    } | null;
+  }>(query, { id: issueUuid });
+
+  if (!result.issue) {
+    throw new Error(`Issue not found: ${issueId}`);
+  }
+
+  // Find the relation that points to the related issue
+  const relation = result.issue.relations.nodes.find(
+    (r) => r.relatedIssue.id === relatedUuid
+  );
+
+  if (!relation) {
+    // Try the inverse direction
+    const inverseResult = await client.request<{
+      issue: {
+        relations: {
+          nodes: Array<{ id: string; relatedIssue: { id: string } }>;
+        };
+      } | null;
+    }>(query, { id: relatedUuid });
+
+    const inverseRelation = inverseResult.issue?.relations.nodes.find(
+      (r) => r.relatedIssue.id === issueUuid
+    );
+
+    if (!inverseRelation) {
+      throw new Error(`No relation found between ${issueId} and ${relatedIssueId}`);
+    }
+
+    // Delete the inverse relation
+    const deleteMutation = `
+      mutation DeleteRelation($id: String!) {
+        issueRelationDelete(id: $id) {
+          success
+        }
+      }
+    `;
+
+    const deleteResult = await client.request<{
+      issueRelationDelete: { success: boolean };
+    }>(deleteMutation, { id: inverseRelation.id });
+
+    if (!deleteResult.issueRelationDelete.success) {
+      throw new Error("Failed to delete relation");
+    }
+  } else {
+    // Delete the direct relation
+    const deleteMutation = `
+      mutation DeleteRelation($id: String!) {
+        issueRelationDelete(id: $id) {
+          success
+        }
+      }
+    `;
+
+    const deleteResult = await client.request<{
+      issueRelationDelete: { success: boolean };
+    }>(deleteMutation, { id: relation.id });
+
+    if (!deleteResult.issueRelationDelete.success) {
+      throw new Error("Failed to delete relation");
+    }
+  }
+
+  // Remove from local cache (both directions)
+  const { deleteDependency } = await import("./database.js");
+  deleteDependency(issueId, relatedIssueId);
+}
+
+/**
+ * Delete an issue from Linear
+ */
+export async function deleteIssue(issueId: string): Promise<void> {
+  const client = getGraphQLClient();
+
+  // Resolve identifier to UUID if needed
+  const issueUuid = (await resolveIssueId(issueId)) || issueId;
+
+  const mutation = `
+    mutation DeleteIssue($id: String!) {
+      issueDelete(id: $id) {
+        success
+      }
+    }
+  `;
+
+  const result = await client.request<{
+    issueDelete: { success: boolean };
+  }>(mutation, { id: issueUuid });
+
+  if (!result.issueDelete.success) {
+    throw new Error("Failed to delete issue");
+  }
+}
+
+/**
  * Add comment to an issue
  */
 export async function addComment(issueId: string, body: string): Promise<void> {

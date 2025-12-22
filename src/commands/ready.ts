@@ -4,8 +4,8 @@
 
 import { Command } from "commander";
 import { ensureFresh } from "../utils/sync.js";
-import { getCachedIssues, getDependencies, getBlockedIssueIds } from "../utils/database.js";
-import { formatReadyJson, formatIssuesListHuman, output } from "../utils/output.js";
+import { getCachedIssues, getCachedIssue, getDependencies, getBlockedIssueIds } from "../utils/database.js";
+import { formatReadyJson, output } from "../utils/output.js";
 import { getViewer } from "../utils/linear.js";
 
 export const readyCommand = new Command("ready")
@@ -42,7 +42,23 @@ export const readyCommand = new Command("ready")
       if (options.json) {
         output(formatReadyJson(readyIssues, getDependencies));
       } else {
-        output(formatIssuesListHuman(readyIssues));
+        if (readyIssues.length === 0) {
+          output("No ready issues.");
+          return;
+        }
+        
+        output(`\n📋 Ready work (${readyIssues.length} issue${readyIssues.length === 1 ? '' : 's'} with no blockers):\n`);
+        
+        readyIssues.forEach((issue, index) => {
+          // Check if this is a subtask
+          const deps = getDependencies(issue.id);
+          const parentDep = deps.find(d => d.type === "parent-child");
+          const parentInfo = parentDep ? ` (↳ ${parentDep.depends_on_id})` : "";
+          
+          output(`${index + 1}. [P${issue.priority}] ${issue.id}: ${issue.title}${parentInfo}`);
+        });
+        
+        output("");
       }
     } catch (error) {
       console.error("Error:", error instanceof Error ? error.message : error);
