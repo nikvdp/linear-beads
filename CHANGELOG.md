@@ -55,4 +55,25 @@
 
 ## v3
 
-Initial public release.
+- **Fast sync**: Parallelized relation fetching (25s -> 3.7s), removed O(n) fetchRelations from bulk sync (27s -> 0.75s)
+- **Dependency tracking**: `--deps` flag on create, relations cached and preserved across syncs
+- **Background worker fixes**: Reliable spawning with --worker flag and process.execPath
+- **Import improvements**: Preserves closed status and parent-child relationships from beads
+
+## v2
+
+- **Install fix**: Fixed bin path for `bun install -g`
+- **README rewrite**: Focused on human setup, agent takes over from `lb onboard`
+
+## v1
+
+Initial release.
+
+- Linear-backed issue tracking with local SQLite cache
+- Background sync with outbox queue
+- `lb auth`, `lb init`, `lb sync` for setup
+- `lb create`, `lb update`, `lb close`, `lb list`, `lb show`, `lb ready` for issue management
+- `lb import` for beads JSONL migration
+- `lb onboard` for agent self-configuration
+- Auto-assign issues to current user
+- Auto-detect Linear team from repo
