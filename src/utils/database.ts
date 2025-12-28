@@ -154,19 +154,19 @@ function initSchema(db: Database): void {
  */
 export function generateLocalId(): string {
   const db = getDatabase();
-  
+
   // Get current counter
   const row = db.query("SELECT value FROM metadata WHERE key = 'local_id_counter'").get() as {
     value: string;
   } | null;
-  
+
   const nextNum = row ? parseInt(row.value) + 1 : 1;
-  
+
   // Update counter
   db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('local_id_counter', ?)", [
     nextNum.toString(),
   ]);
-  
+
   return `LOCAL-${nextNum.toString().padStart(3, "0")}`;
 }
 
@@ -371,9 +371,15 @@ export function clearIssueDependencies(issueId: string): void {
  */
 export function deleteDependency(issueId: string, dependsOnId: string): void {
   const db = getDatabase();
-  db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [issueId, dependsOnId]);
+  db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [
+    issueId,
+    dependsOnId,
+  ]);
   // Also try the reverse direction
-  db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [dependsOnId, issueId]);
+  db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [
+    dependsOnId,
+    issueId,
+  ]);
   requestJsonlExport();
 }
 

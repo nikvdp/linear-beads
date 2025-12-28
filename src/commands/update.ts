@@ -92,7 +92,9 @@ export const updateCommand = new Command("update")
       if (options.status) {
         const validStatuses = ["open", "in_progress", "closed"];
         if (!validStatuses.includes(options.status)) {
-          outputError(`Invalid status '${options.status}'. Must be one of: ${validStatuses.join(", ")}`);
+          outputError(
+            `Invalid status '${options.status}'. Must be one of: ${validStatuses.join(", ")}`
+          );
           process.exit(1);
         }
         updates.status = options.status as IssueStatus;
@@ -126,7 +128,7 @@ export const updateCommand = new Command("update")
 
       // Build deps array from explicit flags + legacy --deps
       const allDeps: Array<{ type: string; targetId: string }> = [];
-      
+
       for (const tid of options.blocks || []) {
         allDeps.push({ type: "blocks", targetId: tid });
       }
@@ -136,7 +138,7 @@ export const updateCommand = new Command("update")
       for (const tid of options.related || []) {
         allDeps.push({ type: "related", targetId: tid });
       }
-      
+
       if (options.deps) {
         allDeps.push(...parseDeps(options.deps));
       }
@@ -250,8 +252,8 @@ export const updateCommand = new Command("update")
       } else {
         // Queue mode: add to outbox and spawn background worker
         // Convert allDeps to string format for queue
-        const depsString = allDeps.map(d => `${d.type}:${d.targetId}`).join(",");
-        
+        const depsString = allDeps.map((d) => `${d.type}:${d.targetId}`).join(",");
+
         // For queue mode, pass flags for worker to resolve
         const payload: Record<string, unknown> = {
           issueId: id,

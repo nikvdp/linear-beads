@@ -1,7 +1,7 @@
 /**
  * Configuration management for lb-cli
  * Loads from environment, JSONC config files, and CLI options
- * 
+ *
  * Config sources (in priority order):
  * 1. CLI options (highest priority)
  * 2. Per-repo config (.lb/config.jsonc)
@@ -84,20 +84,13 @@ function loadConfigLayer(primaryPath: string): Record<string, unknown> | null {
  * Deep merge two objects (target <- source)
  * Source values override target values at all levels
  */
-export function deepMerge<T extends object>(
-  target: T,
-  source: Partial<T>
-): T {
+export function deepMerge<T extends object>(target: T, source: Partial<T>): T {
   const result = { ...target };
 
   for (const key in source) {
     if (source[key] === undefined) continue;
 
-    if (
-      source[key] !== null &&
-      typeof source[key] === "object" &&
-      !Array.isArray(source[key])
-    ) {
+    if (source[key] !== null && typeof source[key] === "object" && !Array.isArray(source[key])) {
       // Recursively merge nested objects
       result[key] = deepMerge(
         (result[key] as Record<string, unknown>) || {},

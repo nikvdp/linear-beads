@@ -3,7 +3,12 @@
  */
 
 import { Command } from "commander";
-import { queueOutboxItem, generateLocalId, cacheIssue, cacheDependency } from "../utils/database.js";
+import {
+  queueOutboxItem,
+  generateLocalId,
+  cacheIssue,
+  cacheDependency,
+} from "../utils/database.js";
 import {
   createIssue,
   getTeamId,
@@ -85,7 +90,9 @@ export const createCommand = new Command("create")
       let issueType: IssueType | undefined;
       if (options.type) {
         if (!VALID_ISSUE_TYPES.includes(options.type)) {
-          console.error(`Invalid type '${options.type}'. Must be one of: ${VALID_ISSUE_TYPES.join(", ")}`);
+          console.error(
+            `Invalid type '${options.type}'. Must be one of: ${VALID_ISSUE_TYPES.join(", ")}`
+          );
           process.exit(1);
         }
         if (!useTypes()) {
@@ -97,7 +104,7 @@ export const createCommand = new Command("create")
 
       // Build deps array from explicit flags + legacy --deps
       const allDeps: Array<{ type: string; targetId: string }> = [];
-      
+
       // Add explicit flag deps
       for (const id of options.blocks || []) {
         allDeps.push({ type: "blocks", targetId: id });
@@ -113,7 +120,7 @@ export const createCommand = new Command("create")
       for (const id of options.discoveredFrom || []) {
         allDeps.push({ type: "discovered-from", targetId: id });
       }
-      
+
       // Add legacy --deps format
       if (options.deps) {
         allDeps.push(...parseDeps(options.deps));
@@ -123,7 +130,7 @@ export const createCommand = new Command("create")
       if (isLocalOnly()) {
         const localId = generateLocalId();
         const now = new Date().toISOString();
-        
+
         const issue: Issue = {
           id: localId,
           title,
@@ -134,9 +141,9 @@ export const createCommand = new Command("create")
           created_at: now,
           updated_at: now,
         };
-        
+
         cacheIssue(issue);
-        
+
         // Handle parent relationship
         if (options.parent) {
           cacheDependency({
@@ -147,7 +154,7 @@ export const createCommand = new Command("create")
             created_by: "local",
           });
         }
-        
+
         // Handle deps
         for (const dep of allDeps) {
           if (dep.type === "blocked-by") {
@@ -169,7 +176,7 @@ export const createCommand = new Command("create")
             });
           }
         }
-        
+
         if (options.json) {
           output(formatIssueJson(issue));
         } else {
@@ -246,10 +253,10 @@ export const createCommand = new Command("create")
         // Queue mode: add to outbox and spawn background worker
         // For queue mode, we pass the assign/unassign flags
         // The worker will resolve them when processing
-        
+
         // Convert allDeps to string format for queue
-        const depsString = allDeps.map(d => `${d.type}:${d.targetId}`).join(",");
-        
+        const depsString = allDeps.map((d) => `${d.type}:${d.targetId}`).join(",");
+
         const payload: Record<string, unknown> = {
           title,
           description: options.description,

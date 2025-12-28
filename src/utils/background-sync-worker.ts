@@ -1,13 +1,20 @@
 /**
  * Background sync worker - processes outbox queue
  * Should be spawned as a detached process by write commands
- * 
+ *
  * Polls outbox every 500ms, exits after 5s of inactivity.
  * Parent can touch PID file to signal "stay alive" for new work.
  */
 
 import { writePidFile, removePidFile, getPidFileMtime } from "./pid-manager.js";
-import { getPendingOutboxItems, removeOutboxItem, updateOutboxItemError, getParentId, getChildIds, getCachedIssue } from "./database.js";
+import {
+  getPendingOutboxItems,
+  removeOutboxItem,
+  updateOutboxItemError,
+  getParentId,
+  getChildIds,
+  getCachedIssue,
+} from "./database.js";
 import {
   getTeamId,
   createIssue,
@@ -112,7 +119,7 @@ async function processOutbox(): Promise<void> {
       } else {
         // No items - check if we should stay alive
         const currentPidMtime = getPidFileMtime();
-        
+
         // If PID file was touched since last check, reset idle timer
         if (currentPidMtime > lastPidMtime) {
           lastActivityTime = Date.now();
@@ -232,7 +239,11 @@ async function processOutboxItem(item: any, teamId: string): Promise<void> {
               await createRelation(dep.targetId, payload.issueId, "blocks");
             } else {
               const relationType = dep.type === "blocks" ? "blocks" : "related";
-              await createRelation(payload.issueId, dep.targetId, relationType as "blocks" | "related");
+              await createRelation(
+                payload.issueId,
+                dep.targetId,
+                relationType as "blocks" | "related"
+              );
             }
           } catch {
             // Ignore relation creation failures in background

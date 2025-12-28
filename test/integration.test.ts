@@ -8,7 +8,16 @@
  * Run with: bun test test/integration.test.ts
  */
 
-import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
+import {
+  describe,
+  test,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  setDefaultTimeout,
+} from "bun:test";
 import { GraphQLClient } from "graphql-request";
 import { mkdirSync, rmSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -50,7 +59,10 @@ async function lbJson<T>(...args: string[]): Promise<T> {
 }
 
 // Helper to create test issue and track for cleanup
-async function createTestIssue(title: string, ...extraArgs: string[]): Promise<{ id: string; title: string }> {
+async function createTestIssue(
+  title: string,
+  ...extraArgs: string[]
+): Promise<{ id: string; title: string }> {
   const result = await lbJson<Array<{ id: string; title: string }>>(
     "create",
     `${TEST_PREFIX} ${title}`,
@@ -443,10 +455,7 @@ describe("lb CLI Integration Tests", () => {
     test("should queue and auto-sync in background", async () => {
       // Create without --sync flag (queues and spawns worker)
       const title = `${TEST_PREFIX} Background sync test`;
-      const createResult = await lbJson<Array<{ id: string; title: string }>>(
-        "create",
-        title
-      );
+      const createResult = await lbJson<Array<{ id: string; title: string }>>("create", title);
 
       // Should return immediately with pending ID
       expect(createResult[0].id).toBe("pending");
@@ -602,7 +611,7 @@ describe("lb CLI Integration Tests", () => {
  */
 describe("Local-only Mode", () => {
   const testDir = "/tmp/lb-local-test-" + Date.now();
-  
+
   // Helper to run lb in the test directory
   async function lbLocal(
     ...args: string[]
@@ -654,9 +663,12 @@ describe("Local-only Mode", () => {
   describe("create", () => {
     test("should generate LOCAL-xxx IDs", async () => {
       const result = await lbLocalJson<Array<{ id: string; title: string }>>(
-        "create", "Test issue", "-d", "Description"
+        "create",
+        "Test issue",
+        "-d",
+        "Description"
       );
-      
+
       expect(result[0].id).toMatch(/^LOCAL-\d+$/);
       expect(result[0].title).toBe("Test issue");
     });
@@ -664,32 +676,31 @@ describe("Local-only Mode", () => {
     test("should increment IDs", async () => {
       const result1 = await lbLocalJson<Array<{ id: string }>>("create", "First");
       const result2 = await lbLocalJson<Array<{ id: string }>>("create", "Second");
-      
+
       const id1 = parseInt(result1[0].id.replace("LOCAL-", ""));
       const id2 = parseInt(result2[0].id.replace("LOCAL-", ""));
-      
+
       expect(id2).toBe(id1 + 1);
     });
 
     test("should support --parent flag", async () => {
       const parent = await lbLocalJson<Array<{ id: string }>>("create", "Parent");
       const child = await lbLocalJson<Array<{ id: string }>>(
-        "create", "Child", "--parent", parent[0].id
+        "create",
+        "Child",
+        "--parent",
+        parent[0].id
       );
-      
+
       // Verify parent-child relationship via show
-      const showResult = await lbLocalJson<Array<{ children?: string[] }>>(
-        "show", parent[0].id
-      );
-      
+      const showResult = await lbLocalJson<Array<{ children?: string[] }>>("show", parent[0].id);
+
       expect(showResult[0].children).toContain(child[0].id);
     });
 
     test("should support priority", async () => {
-      const result = await lbLocalJson<Array<{ priority: number }>>(
-        "create", "Urgent", "-p", "0"
-      );
-      
+      const result = await lbLocalJson<Array<{ priority: number }>>("create", "Urgent", "-p", "0");
+
       expect(result[0].priority).toBe(0);
     });
   });
@@ -699,21 +710,22 @@ describe("Local-only Mode", () => {
       // Create a couple issues
       await lbLocal("create", "List test 1");
       await lbLocal("create", "List test 2");
-      
+
       const result = await lbLocalJson<Array<{ id: string; title: string }>>("list");
-      
+
       expect(Array.isArray(result)).toBe(true);
       expect(result.length).toBeGreaterThanOrEqual(2);
-      expect(result.every(i => i.id.startsWith("LOCAL-"))).toBe(true);
+      expect(result.every((i) => i.id.startsWith("LOCAL-"))).toBe(true);
     });
 
     test("should include parent info", async () => {
       const parent = await lbLocalJson<Array<{ id: string }>>("create", "Parent for list");
       await lbLocal("create", "Child for list", "--parent", parent[0].id);
-      
-      const result = await lbLocalJson<Array<{ id: string; title: string; parent: string | null }>>("list");
-      const child = result.find(i => i.title === "Child for list");
-      
+
+      const result =
+        await lbLocalJson<Array<{ id: string; title: string; parent: string | null }>>("list");
+      const child = result.find((i) => i.title === "Child for list");
+
       expect(child?.parent).toBe(parent[0].id);
     });
   });
@@ -721,13 +733,17 @@ describe("Local-only Mode", () => {
   describe("show", () => {
     test("should show issue details", async () => {
       const created = await lbLocalJson<Array<{ id: string }>>(
-        "create", "Show test", "-d", "Test description"
+        "create",
+        "Show test",
+        "-d",
+        "Test description"
       );
-      
+
       const result = await lbLocalJson<Array<{ id: string; title: string; description: string }>>(
-        "show", created[0].id
+        "show",
+        created[0].id
       );
-      
+
       expect(result[0].id).toBe(created[0].id);
       expect(result[0].title).toBe("Show test");
       expect(result[0].description).toBe("Test description");
@@ -736,13 +752,17 @@ describe("Local-only Mode", () => {
     test("should show relationships", async () => {
       const parent = await lbLocalJson<Array<{ id: string }>>("create", "Parent for show");
       const child = await lbLocalJson<Array<{ id: string }>>(
-        "create", "Child for show", "--parent", parent[0].id
+        "create",
+        "Child for show",
+        "--parent",
+        parent[0].id
       );
-      
+
       const result = await lbLocalJson<Array<{ id: string; children?: string[]; parent?: string }>>(
-        "show", parent[0].id
+        "show",
+        parent[0].id
       );
-      
+
       expect(result[0].children).toContain(child[0].id);
     });
   });
@@ -750,13 +770,16 @@ describe("Local-only Mode", () => {
   describe("update", () => {
     test("should update status", async () => {
       const created = await lbLocalJson<Array<{ id: string }>>("create", "Update test");
-      
+
       const result = await lbLocalJson<Array<{ id: string; status: string }>>(
-        "update", created[0].id, "--status", "in_progress"
+        "update",
+        created[0].id,
+        "--status",
+        "in_progress"
       );
-      
+
       expect(result[0].status).toBe("in_progress");
-      
+
       // Verify it persisted
       const show = await lbLocalJson<Array<{ status: string }>>("show", created[0].id);
       expect(show[0].status).toBe("in_progress");
@@ -764,11 +787,14 @@ describe("Local-only Mode", () => {
 
     test("should update priority", async () => {
       const created = await lbLocalJson<Array<{ id: string }>>("create", "Priority update");
-      
+
       const result = await lbLocalJson<Array<{ priority: number }>>(
-        "update", created[0].id, "-p", "0"
+        "update",
+        created[0].id,
+        "-p",
+        "0"
       );
-      
+
       expect(result[0].priority).toBe(0);
     });
   });
@@ -776,11 +802,14 @@ describe("Local-only Mode", () => {
   describe("close", () => {
     test("should close issue", async () => {
       const created = await lbLocalJson<Array<{ id: string }>>("create", "Close test");
-      
+
       const result = await lbLocalJson<Array<{ id: string; status: string; closed_at: string }>>(
-        "close", created[0].id, "--reason", "Done"
+        "close",
+        created[0].id,
+        "--reason",
+        "Done"
       );
-      
+
       expect(result[0].status).toBe("closed");
       expect(result[0].closed_at).toBeDefined();
     });
@@ -790,13 +819,11 @@ describe("Local-only Mode", () => {
     test("should delete issue", async () => {
       const created = await lbLocalJson<Array<{ id: string }>>("create", "Delete test");
       const issueId = created[0].id;
-      
-      const result = await lbLocalJson<{ deleted: string }>(
-        "delete", issueId, "--force"
-      );
-      
+
+      const result = await lbLocalJson<{ deleted: string }>("delete", issueId, "--force");
+
       expect(result.deleted).toBe(issueId);
-      
+
       // Verify it's gone
       const show = await lbLocal("show", issueId);
       expect(show.exitCode).not.toBe(0);
@@ -806,22 +833,22 @@ describe("Local-only Mode", () => {
   describe("ready", () => {
     test("should show unblocked issues", async () => {
       const issue = await lbLocalJson<Array<{ id: string }>>("create", "Ready test");
-      
+
       const result = await lbLocalJson<Array<{ id: string; status: string }>>("ready");
-      
-      expect(result.some(i => i.id === issue[0].id)).toBe(true);
+
+      expect(result.some((i) => i.id === issue[0].id)).toBe(true);
     });
 
     test("should exclude blocked issues", async () => {
       const blocker = await lbLocalJson<Array<{ id: string }>>("create", "Blocker");
       const blocked = await lbLocalJson<Array<{ id: string }>>("create", "Blocked");
-      
+
       await lbLocal("dep", "add", blocked[0].id, "--blocked-by", blocker[0].id);
-      
+
       const result = await lbLocalJson<Array<{ id: string }>>("ready");
-      
-      expect(result.some(i => i.id === blocker[0].id)).toBe(true);
-      expect(result.some(i => i.id === blocked[0].id)).toBe(false);
+
+      expect(result.some((i) => i.id === blocker[0].id)).toBe(true);
+      expect(result.some((i) => i.id === blocked[0].id)).toBe(false);
     });
   });
 
@@ -829,12 +856,12 @@ describe("Local-only Mode", () => {
     test("should show blocked issues", async () => {
       const blocker = await lbLocalJson<Array<{ id: string }>>("create", "Blocker for blocked");
       const blocked = await lbLocalJson<Array<{ id: string }>>("create", "Blocked issue");
-      
+
       await lbLocal("dep", "add", blocked[0].id, "--blocked-by", blocker[0].id);
-      
+
       const result = await lbLocalJson<Array<{ id: string; blocked_by: string[] }>>("blocked");
-      
-      const found = result.find(i => i.id === blocked[0].id);
+
+      const found = result.find((i) => i.id === blocked[0].id);
       expect(found).toBeDefined();
       expect(found?.blocked_by).toContain(blocker[0].id);
     });
@@ -844,12 +871,12 @@ describe("Local-only Mode", () => {
     test("should add blocks dependency", async () => {
       const a = await lbLocalJson<Array<{ id: string }>>("create", "Dep A");
       const b = await lbLocalJson<Array<{ id: string }>>("create", "Dep B");
-      
+
       const result = await lbLocal("dep", "add", a[0].id, "--blocks", b[0].id);
-      
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("blocks");
-      
+
       // Verify via show
       const show = await lbLocalJson<Array<{ blocks?: string[] }>>("show", a[0].id);
       expect(show[0].blocks).toContain(b[0].id);
@@ -858,9 +885,9 @@ describe("Local-only Mode", () => {
     test("should add blocked-by dependency", async () => {
       const a = await lbLocalJson<Array<{ id: string }>>("create", "BlockedBy A");
       const b = await lbLocalJson<Array<{ id: string }>>("create", "BlockedBy B");
-      
+
       await lbLocal("dep", "add", a[0].id, "--blocked-by", b[0].id);
-      
+
       // Verify via show - a should be blocked by b
       const show = await lbLocalJson<Array<{ blocked_by?: string[] }>>("show", a[0].id);
       expect(show[0].blocked_by).toContain(b[0].id);
@@ -869,10 +896,10 @@ describe("Local-only Mode", () => {
     test("should remove dependency", async () => {
       const a = await lbLocalJson<Array<{ id: string }>>("create", "Remove A");
       const b = await lbLocalJson<Array<{ id: string }>>("create", "Remove B");
-      
+
       await lbLocal("dep", "add", a[0].id, "--blocks", b[0].id);
       await lbLocal("dep", "remove", a[0].id, b[0].id);
-      
+
       // Verify removed
       const show = await lbLocalJson<Array<{ blocks?: string[] }>>("show", a[0].id);
       expect(show[0].blocks || []).not.toContain(b[0].id);
@@ -880,9 +907,9 @@ describe("Local-only Mode", () => {
 
     test("should show dep tree", async () => {
       const parent = await lbLocalJson<Array<{ id: string }>>("create", "Tree parent");
-      
+
       const result = await lbLocal("dep", "tree", parent[0].id);
-      
+
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(parent[0].id);
     });

@@ -35,7 +35,9 @@ program
   .option("--export-worker", "Internal: run JSONL export worker")
   .configureHelp({
     subcommandTerm: (cmd) => {
-      const args = cmd.registeredArguments.map((a) => (a.required ? `<${a.name()}>` : `[${a.name()}]`));
+      const args = cmd.registeredArguments.map((a) =>
+        a.required ? `<${a.name()}>` : `[${a.name()}]`
+      );
       return args.length ? `${cmd.name()} ${args.join(" ")}` : cmd.name();
     },
   });

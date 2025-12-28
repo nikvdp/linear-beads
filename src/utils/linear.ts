@@ -180,10 +180,8 @@ export async function ensureTypeLabel(teamId: string, type: IssueType): Promise<
 
   // Find or create the label group
   let groupId: string | undefined;
-  const existingGroup = result.team.labels.nodes.find(
-    (l) => l.parent?.name === groupName
-  )?.parent;
-  
+  const existingGroup = result.team.labels.nodes.find((l) => l.parent?.name === groupName)?.parent;
+
   if (existingGroup) {
     groupId = existingGroup.id;
   } else {
@@ -199,14 +197,14 @@ export async function ensureTypeLabel(teamId: string, type: IssueType): Promise<
         }
       }
     `;
-    
+
     const groupResult = await client.request<{
       issueLabelCreate: {
         success: boolean;
         issueLabel: { id: string; name: string };
       };
     }>(createGroupMutation, { teamId, name: groupName });
-    
+
     if (groupResult.issueLabelCreate.success) {
       groupId = groupResult.issueLabelCreate.issueLabel.id;
     }
@@ -878,9 +876,7 @@ export async function deleteRelation(issueId: string, relatedIssueId: string): P
   }
 
   // Find the relation that points to the related issue
-  const relation = result.issue.relations.nodes.find(
-    (r) => r.relatedIssue.id === relatedUuid
-  );
+  const relation = result.issue.relations.nodes.find((r) => r.relatedIssue.id === relatedUuid);
 
   if (!relation) {
     // Try the inverse direction
