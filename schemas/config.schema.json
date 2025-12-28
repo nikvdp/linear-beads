@@ -21,6 +21,11 @@
       "default": 120,
       "minimum": 0,
       "description": "How long to trust cached data before re-syncing from Linear, in seconds."
+    },
+    "local_only": {
+      "type": "boolean",
+      "default": false,
+      "description": "Run in local-only mode without syncing to Linear. Issues get LOCAL-xxx IDs. Useful for LLM-only task tracking."
     }
   },
   "additionalProperties": false

@@ -4,12 +4,17 @@
 
 import { Command } from "commander";
 import { ensureFresh } from "../utils/sync.js";
-import { getCachedIssues, getDependencies, getDependents } from "../utils/database.js";
+import {
+  getCachedIssues,
+  getDependencies,
+  getDependents,
+  getCacheInfo,
+} from "../utils/database.js";
 import { formatIssuesListJson, formatIssuesListHuman, output } from "../utils/output.js";
 import { getViewer } from "../utils/linear.js";
 import type { IssueStatus } from "../types.js";
 import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
-import { useTypes } from "../utils/config.js";
+import { useTypes, isLocalOnly } from "../utils/config.js";
 
 const VALID_STATUSES: IssueStatus[] = ["open", "in_progress", "closed"];
 
@@ -18,20 +23,32 @@ export const listCommand = new Command("list")
   .option("-j, --json", "Output as JSON")
   .option("-a, --all", "Show all issues (not just mine)")
   .option("-s, --status <status>", "Filter by status: open, in_progress, closed")
-  .option("-p, --priority <priority>", "Filter by priority: urgent, high, medium, low, backlog (or 0-4)")
+  .option(
+    "-p, --priority <priority>",
+    "Filter by priority: urgent, high, medium, low, backlog (or 0-4)"
+  )
   .option("-t, --type <type>", "Filter by type: bug, feature, task, epic, chore")
   .option("--sync", "Force sync before listing")
   .option("--team <team>", "Team key (overrides config)")
   .action(async (options) => {
     try {
-      // Ensure cache is fresh
-      await ensureFresh(options.team, options.sync);
+      // Try to ensure cache is fresh, but don't fail if offline
+      let syncFailed = false;
+      const localOnly = isLocalOnly();
+
+      if (!localOnly) {
+        try {
+          await ensureFresh(options.team, options.sync);
+        } catch {
+          syncFailed = true;
+        }
+      }
 
       // Get issues from cache
       let issues = getCachedIssues();
 
-      // Filter by assignee unless --all
-      if (!options.all) {
+      // Filter by assignee unless --all (skip in local-only mode)
+      if (!options.all && !localOnly) {
         const viewer = await getViewer();
         issues = issues.filter((i) => !i.assignee || i.assignee === viewer.email);
       }
@@ -39,7 +56,9 @@ export const listCommand = new Command("list")
       // Apply filters with validation
       if (options.status) {
         if (!VALID_STATUSES.includes(options.status)) {
-          console.error(`Invalid status '${options.status}'. Must be one of: ${VALID_STATUSES.join(", ")}`);
+          console.error(
+            `Invalid status '${options.status}'. Must be one of: ${VALID_STATUSES.join(", ")}`
+          );
           process.exit(1);
         }
         issues = issues.filter((i) => i.status === options.status);
@@ -57,7 +76,9 @@ export const listCommand = new Command("list")
           console.warn(`Warning: -t ignored (issue types disabled in config)`);
         } else {
           if (!VALID_ISSUE_TYPES.includes(options.type)) {
-            console.error(`Invalid type '${options.type}'. Must be one of: ${VALID_ISSUE_TYPES.join(", ")}`);
+            console.error(
+              `Invalid type '${options.type}'. Must be one of: ${VALID_ISSUE_TYPES.join(", ")}`
+            );
             process.exit(1);
           }
           issues = issues.filter((i) => i.issue_type === options.type);
@@ -73,9 +94,9 @@ export const listCommand = new Command("list")
       // Output
       if (options.json) {
         // Add parent info to JSON output
-        const issuesWithParent = issues.map(issue => {
+        const issuesWithParent = issues.map((issue) => {
           const deps = getDependencies(issue.id);
-          const parentDep = deps.find(d => d.type === "parent-child");
+          const parentDep = deps.find((d) => d.type === "parent-child");
           return {
             ...issue,
             parent: parentDep?.depends_on_id || null,
@@ -89,16 +110,27 @@ export const listCommand = new Command("list")
           output("No issues found.");
           return;
         }
-        
+
         // Build output with parent context
         for (const issue of issues) {
           const deps = getDependencies(issue.id);
-          const parentDep = deps.find(d => d.type === "parent-child");
+          const parentDep = deps.find((d) => d.type === "parent-child");
           const parentSuffix = parentDep ? ` (↳ ${parentDep.depends_on_id})` : "";
           const priorityName = ["crit", "high", "medi", "low", "back"][issue.priority] || "medi";
           const status = issue.status.padEnd(12);
-          
+
           output(`${issue.id}  ${status}  ${priorityName}  ${issue.title}${parentSuffix}`);
+        }
+
+        // Show stale cache warning if sync failed or cache is old (skip in local-only mode)
+        if (!localOnly) {
+          const cacheInfo = getCacheInfo();
+          if (syncFailed || cacheInfo.ageSeconds > 300) {
+            const ageMinutes = Math.floor(cacheInfo.ageSeconds / 60);
+            output(
+              `\n(cache ${ageMinutes}m old${syncFailed ? ", offline" : ""} - run lb sync to refresh)`
+            );
+          }
         }
       }
     } catch (error) {

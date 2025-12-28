@@ -37,7 +37,7 @@ function getLogFilePath(): string {
 function spawnWorker(): boolean {
   try {
     const { cmd, args } = getWorkerCommand();
-    
+
     // Log to file for debugging spawn failures
     const logFd = openSync(getLogFilePath(), "a");
 

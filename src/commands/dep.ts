@@ -4,9 +4,16 @@
 
 import { Command } from "commander";
 import { createRelation, deleteRelation } from "../utils/linear.js";
-import { getDependencies, getCachedIssue, getDatabase } from "../utils/database.js";
+import {
+  getDependencies,
+  getCachedIssue,
+  getDatabase,
+  cacheDependency,
+  deleteDependency,
+} from "../utils/database.js";
 import { output, outputError } from "../utils/output.js";
 import { queueOperation } from "../utils/spawn-worker.js";
+import { isLocalOnly } from "../utils/config.js";
 import type { Dependency } from "../types.js";
 
 /**
@@ -14,10 +21,14 @@ import type { Dependency } from "../types.js";
  */
 function getAllDependencies(issueId: string): { outgoing: Dependency[]; incoming: Dependency[] } {
   const db = getDatabase();
-  
-  const outgoing = db.query("SELECT * FROM dependencies WHERE issue_id = ?").all(issueId) as Dependency[];
-  const incoming = db.query("SELECT * FROM dependencies WHERE depends_on_id = ?").all(issueId) as Dependency[];
-  
+
+  const outgoing = db
+    .query("SELECT * FROM dependencies WHERE issue_id = ?")
+    .all(issueId) as Dependency[];
+  const incoming = db
+    .query("SELECT * FROM dependencies WHERE depends_on_id = ?")
+    .all(issueId) as Dependency[];
+
   return { outgoing, incoming };
 }
 
@@ -25,9 +36,9 @@ function getAllDependencies(issueId: string): { outgoing: Dependency[]; incoming
  * Print dependency tree recursively
  */
 function printTree(
-  issueId: string, 
-  prefix: string = "", 
-  isLast: boolean = true, 
+  issueId: string,
+  prefix: string = "",
+  isLast: boolean = true,
   visited: Set<string> = new Set()
 ): void {
   if (visited.has(issueId)) {
@@ -40,11 +51,11 @@ function printTree(
   const title = issue?.title || "Unknown";
   const priority = issue?.priority ?? "?";
   const status = issue?.status || "unknown";
-  
+
   // Check if this issue is ready (no open blockers)
   const { incoming } = getAllDependencies(issueId);
-  const blockers = incoming.filter(d => d.type === "blocks");
-  const openBlockers = blockers.filter(d => {
+  const blockers = incoming.filter((d) => d.type === "blocks");
+  const openBlockers = blockers.filter((d) => {
     const blockerIssue = getCachedIssue(d.issue_id);
     return blockerIssue && blockerIssue.status !== "closed";
   });
@@ -55,13 +66,15 @@ function printTree(
     // Root node
     output(`${issueId}: ${title} [P${priority}] (${status})${readyTag}`);
   } else {
-    output(`${prefix}${isLast ? "└── " : "├── "}${issueId}: ${title} [P${priority}] (${status})${readyTag}`);
+    output(
+      `${prefix}${isLast ? "└── " : "├── "}${issueId}: ${title} [P${priority}] (${status})${readyTag}`
+    );
   }
 
   // Get outgoing dependencies (things this issue depends on)
   const deps = getDependencies(issueId);
   const childPrefix = prefix + (isLast ? "    " : "│   ");
-  
+
   deps.forEach((dep, index) => {
     const isLastDep = index === deps.length - 1;
     printTree(dep.depends_on_id, childPrefix, isLastDep, visited);
@@ -69,8 +82,7 @@ function printTree(
 }
 
 // Main dep command
-export const depCommand = new Command("dep")
-  .description("Manage dependencies between issues");
+export const depCommand = new Command("dep").description("Manage dependencies between issues");
 
 // lb dep add
 const addCommand = new Command("add")
@@ -88,10 +100,23 @@ const addCommand = new Command("add")
         process.exit(1);
       }
 
+      const localOnly = isLocalOnly();
+      const now = new Date().toISOString();
+
       if (options.blocks) {
-        if (options.sync) {
+        const dep: Dependency = {
+          issue_id: issueId,
+          depends_on_id: options.blocks,
+          type: "blocks",
+          created_at: now,
+          created_by: "local",
+        };
+        if (localOnly) {
+          cacheDependency(dep);
+        } else if (options.sync) {
           await createRelation(issueId, options.blocks, "blocks");
         } else {
+          cacheDependency(dep);
           queueOperation("create_relation", {
             issueId,
             relatedIssueId: options.blocks,
@@ -103,9 +128,19 @@ const addCommand = new Command("add")
 
       if (options.blockedBy) {
         // blocked-by is inverse: target blocks this issue
-        if (options.sync) {
+        const dep: Dependency = {
+          issue_id: options.blockedBy,
+          depends_on_id: issueId,
+          type: "blocks",
+          created_at: now,
+          created_by: "local",
+        };
+        if (localOnly) {
+          cacheDependency(dep);
+        } else if (options.sync) {
           await createRelation(options.blockedBy, issueId, "blocks");
         } else {
+          cacheDependency(dep);
           queueOperation("create_relation", {
             issueId: options.blockedBy,
             relatedIssueId: issueId,
@@ -116,9 +151,19 @@ const addCommand = new Command("add")
       }
 
       if (options.related) {
-        if (options.sync) {
+        const dep: Dependency = {
+          issue_id: issueId,
+          depends_on_id: options.related,
+          type: "related",
+          created_at: now,
+          created_by: "local",
+        };
+        if (localOnly) {
+          cacheDependency(dep);
+        } else if (options.sync) {
           await createRelation(issueId, options.related, "related");
         } else {
+          cacheDependency(dep);
           queueOperation("create_relation", {
             issueId,
             relatedIssueId: options.related,
@@ -141,9 +186,14 @@ const removeCommand = new Command("remove")
   .option("--sync", "Sync immediately (block on network)")
   .action(async (issueA: string, issueB: string, options) => {
     try {
-      if (options.sync) {
+      const localOnly = isLocalOnly();
+
+      if (localOnly) {
+        deleteDependency(issueA, issueB);
+      } else if (options.sync) {
         await deleteRelation(issueA, issueB);
       } else {
+        deleteDependency(issueA, issueB);
         queueOperation("delete_relation", {
           issueA,
           issueB,

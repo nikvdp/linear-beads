@@ -3,7 +3,15 @@
  * Ensures only one sync worker runs per repo at a time
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync, utimesSync } from "fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  statSync,
+  utimesSync,
+} from "fs";
 import { join, dirname } from "path";
 import { getDbPath } from "./config.js";
 

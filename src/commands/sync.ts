@@ -4,7 +4,25 @@
 
 import { Command } from "commander";
 import { fullSync } from "../utils/sync.js";
-import { output } from "../utils/output.js";
+import { output, outputError } from "../utils/output.js";
+import { getPendingOutboxItems } from "../utils/database.js";
+import { isLocalOnly } from "../utils/config.js";
+
+/**
+ * Check if error is a network/connectivity issue
+ */
+function isNetworkError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const msg = error.message.toLowerCase();
+  return (
+    msg.includes("fetch failed") ||
+    msg.includes("network") ||
+    msg.includes("econnrefused") ||
+    msg.includes("enotfound") ||
+    msg.includes("etimedout") ||
+    msg.includes("unable to connect")
+  );
+}
 
 export const syncCommand = new Command("sync")
   .description("Sync with Linear (push pending changes, pull latest)")
@@ -12,6 +30,12 @@ export const syncCommand = new Command("sync")
   .option("-j, --json", "Output as JSON")
   .action(async (options) => {
     try {
+      // Local-only mode: no sync needed
+      if (isLocalOnly()) {
+        output("Local-only mode: sync disabled (set local_only: false in config to enable)");
+        return;
+      }
+
       const result = await fullSync(options.team);
 
       if (options.json) {
@@ -32,7 +56,16 @@ export const syncCommand = new Command("sync")
         output(`Pulled: ${result.pulled} issues`);
       }
     } catch (error) {
-      console.error("Error:", error instanceof Error ? error.message : error);
+      if (isNetworkError(error)) {
+        const pending = getPendingOutboxItems();
+        outputError("Offline: Unable to connect to Linear");
+        if (pending.length > 0) {
+          output(`  ${pending.length} pending change(s) will sync when back online`);
+        }
+        output("  Local cache is still available for reads");
+        process.exit(1);
+      }
+      outputError(error instanceof Error ? error.message : String(error));
       process.exit(1);
     }
   });

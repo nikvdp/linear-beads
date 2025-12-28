@@ -34,6 +34,33 @@ This project uses lb for issue tracking. Run `lb onboard` and follow the instruc
 
 Your agent will run `lb onboard`, which outputs everything it needs to set up AGENTS.md and start tracking work.
 
+## Offline & Local-Only Modes
+
+`lb` works offline and can run entirely without Linear.
+
+### Offline Mode
+
+When you lose internet connectivity, `lb` continues working:
+- All reads work from local SQLite cache
+- Writes queue in an outbox and sync when you're back online
+- `lb sync` shows a friendly message instead of failing
+
+### Local-Only Mode
+
+For pure local usage (no Linear backend), add to `.lb/config.jsonc`:
+
+```jsonc
+{
+  "local_only": true
+}
+```
+
+In local-only mode:
+- `lb sync` is disabled (shows a message)
+- `lb create` generates LOCAL-001, LOCAL-002, etc. IDs
+- All commands work from local SQLite only
+- Great for AI-only workflows or trying out lb without Linear
+
 ## License
 
 MIT

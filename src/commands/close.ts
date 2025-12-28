@@ -3,10 +3,11 @@
  */
 
 import { Command } from "commander";
-import { queueOutboxItem, getCachedIssue } from "../utils/database.js";
+import { queueOutboxItem, getCachedIssue, cacheIssue } from "../utils/database.js";
 import { closeIssue, getTeamId, fetchIssue } from "../utils/linear.js";
-import { formatIssueJson, formatIssueHuman, output } from "../utils/output.js";
+import { formatIssueJson, formatIssueHuman, output, outputError } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
+import { isLocalOnly } from "../utils/config.js";
 
 export const closeCommand = new Command("close")
   .description("Close an issue")
@@ -17,6 +18,31 @@ export const closeCommand = new Command("close")
   .option("--team <team>", "Team key (overrides config)")
   .action(async (id: string, options) => {
     try {
+      // Local-only mode: update cache directly
+      if (isLocalOnly()) {
+        const issue = getCachedIssue(id);
+        if (!issue) {
+          outputError(`Issue not found: ${id}`);
+          process.exit(1);
+        }
+
+        const now = new Date().toISOString();
+        const closed = {
+          ...issue,
+          status: "closed" as const,
+          closed_at: now,
+          updated_at: now,
+        };
+        cacheIssue(closed);
+
+        if (options.json) {
+          output(formatIssueJson(closed));
+        } else {
+          output(formatIssueHuman(closed));
+        }
+        return;
+      }
+
       if (options.sync) {
         // Sync mode: close directly in Linear
         const teamId = await getTeamId(options.team);

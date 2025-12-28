@@ -41,8 +41,7 @@ async function removeTypeLabels(teamId: string, dryRun: boolean): Promise<void> 
   // Find type labels (old format "type:X" or new format matching type names)
   const typeLabels = labelsResult.team.labels.nodes.filter(
     (l) =>
-      l.name.startsWith("type:") ||
-      ["Bug", "Feature", "Task", "Epic", "Chore"].includes(l.name)
+      l.name.startsWith("type:") || ["Bug", "Feature", "Task", "Epic", "Chore"].includes(l.name)
   );
 
   if (typeLabels.length === 0) {
@@ -100,9 +99,7 @@ async function removeTypeLabels(teamId: string, dryRun: boolean): Promise<void> 
     const newLabelIds = currentLabels.filter((l) => !typeLabelIds.has(l.id)).map((l) => l.id);
 
     if (dryRun) {
-      output(
-        `Would remove from ${issue.id}: ${typeLabelsOnIssue.map((l) => l.name).join(", ")}`
-      );
+      output(`Would remove from ${issue.id}: ${typeLabelsOnIssue.map((l) => l.name).join(", ")}`);
     } else {
       await client.request(updateMutation, {
         id: issueResult.issue.id,
@@ -120,20 +117,18 @@ async function removeTypeLabels(teamId: string, dryRun: boolean): Promise<void> 
   }
 }
 
-export const migrateCommand = new Command("migrate")
-  .description("Migration utilities")
-  .addCommand(
-    new Command("remove-type-labels")
-      .description("Remove type labels (type:X or Type group) from all issues in this repo")
-      .option("--dry-run", "Show what would be changed without making changes")
-      .option("--team <team>", "Team key (overrides config)")
-      .action(async (options) => {
-        try {
-          const teamId = await getTeamId(options.team);
-          await removeTypeLabels(teamId, options.dryRun);
-        } catch (error) {
-          console.error("Error:", error instanceof Error ? error.message : error);
-          process.exit(1);
-        }
-      })
-  );
+export const migrateCommand = new Command("migrate").description("Migration utilities").addCommand(
+  new Command("remove-type-labels")
+    .description("Remove type labels (type:X or Type group) from all issues in this repo")
+    .option("--dry-run", "Show what would be changed without making changes")
+    .option("--team <team>", "Team key (overrides config)")
+    .action(async (options) => {
+      try {
+        const teamId = await getTeamId(options.team);
+        await removeTypeLabels(teamId, options.dryRun);
+      } catch (error) {
+        console.error("Error:", error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    })
+);

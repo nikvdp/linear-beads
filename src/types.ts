@@ -216,8 +216,6 @@ export function priorityToLinear(bdPriority: Priority): number {
   return bdPriority + 1;
 }
 
-
-
 /**
  * Priority name to number mapping
  * Accepts: urgent/critical (0), high (1), medium/med (2), low (3), backlog/none (4)

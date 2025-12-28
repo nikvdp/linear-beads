@@ -1,5 +1,5 @@
 /**
- * lb delete - Delete an issue
+ * lb delete - Delete an issue permanently
  */
 
 import { Command } from "commander";
@@ -7,6 +7,7 @@ import { deleteIssue } from "../utils/linear.js";
 import { deleteCachedIssue, getCachedIssue, queueOutboxItem } from "../utils/database.js";
 import { output } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
+import { isLocalOnly } from "../utils/config.js";
 
 export const deleteCommand = new Command("delete")
   .description("Delete an issue permanently")
@@ -26,6 +27,17 @@ export const deleteCommand = new Command("delete")
         output(`This is permanent and cannot be undone.`);
         output(`Run with --force to confirm.`);
         process.exit(0);
+      }
+
+      // Local-only mode: just delete from cache
+      if (isLocalOnly()) {
+        deleteCachedIssue(id);
+        if (options.json) {
+          output(JSON.stringify({ deleted: id, title }));
+        } else {
+          output(`Deleted: ${id}: ${title}`);
+        }
+        return;
       }
 
       if (options.sync) {

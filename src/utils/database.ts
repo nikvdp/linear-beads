@@ -27,6 +27,7 @@ export function getDatabase(): Database {
 
     db = new Database(dbPath);
     db.exec("PRAGMA journal_mode = WAL");
+    db.exec("PRAGMA synchronous = NORMAL");
     initSchema(db);
   }
   return db;
@@ -149,6 +150,27 @@ function initSchema(db: Database): void {
 }
 
 /**
+ * Generate next local issue ID (LOCAL-001, LOCAL-002, etc.)
+ */
+export function generateLocalId(): string {
+  const db = getDatabase();
+
+  // Get current counter
+  const row = db.query("SELECT value FROM metadata WHERE key = 'local_id_counter'").get() as {
+    value: string;
+  } | null;
+
+  const nextNum = row ? parseInt(row.value) + 1 : 1;
+
+  // Update counter
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('local_id_counter', ?)", [
+    nextNum.toString(),
+  ]);
+
+  return `LOCAL-${nextNum.toString().padStart(3, "0")}`;
+}
+
+/**
  * Check if cache is stale
  */
 export function isCacheStale(ttlSeconds: number = 120): boolean {
@@ -164,6 +186,26 @@ export function isCacheStale(ttlSeconds: number = 120): boolean {
   const diffSeconds = (now.getTime() - lastSync.getTime()) / 1000;
 
   return diffSeconds > ttlSeconds;
+}
+
+/**
+ * Get last sync time and cache age info
+ */
+export function getCacheInfo(): { lastSync: Date | null; ageSeconds: number; isStale: boolean } {
+  const db = getDatabase();
+  const row = db.query("SELECT value FROM metadata WHERE key = 'last_sync'").get() as {
+    value: string;
+  } | null;
+
+  if (!row) {
+    return { lastSync: null, ageSeconds: Infinity, isStale: true };
+  }
+
+  const lastSync = new Date(row.value);
+  const now = new Date();
+  const ageSeconds = (now.getTime() - lastSync.getTime()) / 1000;
+
+  return { lastSync, ageSeconds, isStale: ageSeconds > 120 };
 }
 
 /**
@@ -329,9 +371,15 @@ export function clearIssueDependencies(issueId: string): void {
  */
 export function deleteDependency(issueId: string, dependsOnId: string): void {
   const db = getDatabase();
-  db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [issueId, dependsOnId]);
+  db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [
+    issueId,
+    dependsOnId,
+  ]);
   // Also try the reverse direction
-  db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [dependsOnId, issueId]);
+  db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [
+    dependsOnId,
+    issueId,
+  ]);
   requestJsonlExport();
 }
 
@@ -580,10 +628,16 @@ export function getLabelIdByName(name: string): string | null {
 }
 
 /**
- * Close database
+ * Close database, ensuring WAL is checkpointed
  */
 export function closeDatabase(): void {
   if (db) {
+    // Checkpoint WAL before closing to ensure all writes are in main DB
+    try {
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch {
+      // Ignore checkpoint errors on close
+    }
     db.close();
     db = null;
   }

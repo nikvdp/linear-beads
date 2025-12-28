@@ -68,10 +68,7 @@ function buildIdMapper(importMap: Map<string, string>): (linearId: string) => st
   };
 }
 
-function toBeadsDependencies(
-  deps: Dependency[],
-  mapId: (id: string) => string
-): Dependency[] {
+function toBeadsDependencies(deps: Dependency[], mapId: (id: string) => string): Dependency[] {
   return deps.map((dep) => ({
     ...dep,
     issue_id: mapId(dep.issue_id),

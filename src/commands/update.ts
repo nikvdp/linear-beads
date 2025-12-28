@@ -3,7 +3,7 @@
  */
 
 import { Command } from "commander";
-import { queueOutboxItem, getCachedIssue } from "../utils/database.js";
+import { queueOutboxItem, getCachedIssue, cacheIssue, cacheDependency } from "../utils/database.js";
 import {
   updateIssue,
   updateIssueParent,
@@ -17,6 +17,7 @@ import { formatIssueJson, formatIssueHuman, output, outputError } from "../utils
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Priority, IssueStatus } from "../types.js";
 import { parsePriority } from "../types.js";
+import { isLocalOnly } from "../utils/config.js";
 
 const VALID_DEP_TYPES = ["blocks", "blocked-by", "related"];
 
@@ -91,7 +92,9 @@ export const updateCommand = new Command("update")
       if (options.status) {
         const validStatuses = ["open", "in_progress", "closed"];
         if (!validStatuses.includes(options.status)) {
-          outputError(`Invalid status '${options.status}'. Must be one of: ${validStatuses.join(", ")}`);
+          outputError(
+            `Invalid status '${options.status}'. Must be one of: ${validStatuses.join(", ")}`
+          );
           process.exit(1);
         }
         updates.status = options.status as IssueStatus;
@@ -125,7 +128,7 @@ export const updateCommand = new Command("update")
 
       // Build deps array from explicit flags + legacy --deps
       const allDeps: Array<{ type: string; targetId: string }> = [];
-      
+
       for (const tid of options.blocks || []) {
         allDeps.push({ type: "blocks", targetId: tid });
       }
@@ -135,7 +138,7 @@ export const updateCommand = new Command("update")
       for (const tid of options.related || []) {
         allDeps.push({ type: "related", targetId: tid });
       }
-      
+
       if (options.deps) {
         allDeps.push(...parseDeps(options.deps));
       }
@@ -143,6 +146,59 @@ export const updateCommand = new Command("update")
       if (Object.keys(updates).length === 0 && allDeps.length === 0 && !options.parent) {
         outputError("No updates specified");
         process.exit(1);
+      }
+
+      // Local-only mode: update cache directly
+      if (isLocalOnly()) {
+        const issue = getCachedIssue(id);
+        if (!issue) {
+          outputError(`Issue not found: ${id}`);
+          process.exit(1);
+        }
+
+        const now = new Date().toISOString();
+        const updated = { ...issue, ...updates, updated_at: now };
+        cacheIssue(updated);
+
+        // Handle parent
+        if (options.parent) {
+          cacheDependency({
+            issue_id: id,
+            depends_on_id: options.parent,
+            type: "parent-child",
+            created_at: now,
+            created_by: "local",
+          });
+        }
+
+        // Handle deps
+        for (const dep of allDeps) {
+          if (dep.type === "blocked-by") {
+            cacheDependency({
+              issue_id: dep.targetId,
+              depends_on_id: id,
+              type: "blocks",
+              created_at: now,
+              created_by: "local",
+            });
+          } else {
+            const depType = dep.type === "blocks" ? "blocks" : "related";
+            cacheDependency({
+              issue_id: id,
+              depends_on_id: dep.targetId,
+              type: depType as "blocks" | "related",
+              created_at: now,
+              created_by: "local",
+            });
+          }
+        }
+
+        if (options.json) {
+          output(formatIssueJson(updated));
+        } else {
+          output(formatIssueHuman(updated));
+        }
+        return;
       }
 
       if (options.sync) {
@@ -196,8 +252,8 @@ export const updateCommand = new Command("update")
       } else {
         // Queue mode: add to outbox and spawn background worker
         // Convert allDeps to string format for queue
-        const depsString = allDeps.map(d => `${d.type}:${d.targetId}`).join(",");
-        
+        const depsString = allDeps.map((d) => `${d.type}:${d.targetId}`).join(",");
+
         // For queue mode, pass flags for worker to resolve
         const payload: Record<string, unknown> = {
           issueId: id,
