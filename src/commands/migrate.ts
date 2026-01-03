@@ -5,7 +5,7 @@
 import { Command } from "commander";
 import { getGraphQLClient } from "../utils/graphql.js";
 import { getTeamId, fetchIssues } from "../utils/linear.js";
-import { getRepoLabel, getRepoName } from "../utils/config.js";
+import { getRepoLabel, getRepoName, getRepoScope } from "../utils/config.js";
 import { output } from "../utils/output.js";
 import { ensureRepoProject } from "../utils/linear.js";
 
@@ -14,10 +14,10 @@ import { ensureRepoProject } from "../utils/linear.js";
  */
 async function removeTypeLabels(teamId: string, dryRun: boolean): Promise<void> {
   const client = getGraphQLClient();
-  const repoLabel = getRepoLabel();
+  const scope = getRepoScope();
 
-  // First, fetch all issues for this repo
-  output(`Fetching issues with label '${repoLabel}'...`);
+  // First, fetch all issues for this repo (respects repo_scope config)
+  output(`Fetching issues (scope: ${scope})...`);
   const issues = await fetchIssues(teamId);
   output(`Found ${issues.length} issues`);
 
