@@ -131,6 +131,15 @@ function initSchema(db: Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_labels_name ON labels(name);
 
+    -- Projects cache (for project-based repo scoping)
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      team_id TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
+
     -- Outbox queue for pending mutations
     CREATE TABLE IF NOT EXISTS outbox (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -577,6 +586,7 @@ export function clearCache(): void {
     DELETE FROM issues;
     DELETE FROM dependencies WHERE type = 'parent-child';
     DELETE FROM labels;
+    DELETE FROM projects;
     DELETE FROM metadata;
   `);
   requestJsonlExport();
@@ -624,6 +634,29 @@ export function cacheLabel(id: string, name: string, teamId?: string): void {
 export function getLabelIdByName(name: string): string | null {
   const db = getDatabase();
   const row = db.query("SELECT id FROM labels WHERE name = ?").get(name) as { id: string } | null;
+  return row?.id || null;
+}
+
+/**
+ * Cache a project
+ */
+export function cacheProject(id: string, name: string, teamId?: string): void {
+  const db = getDatabase();
+  db.run(
+    `
+    INSERT OR REPLACE INTO projects (id, name, team_id)
+    VALUES (?, ?, ?)
+  `,
+    [id, name, teamId || null]
+  );
+}
+
+/**
+ * Get project ID by name
+ */
+export function getProjectIdByName(name: string): string | null {
+  const db = getDatabase();
+  const row = db.query("SELECT id FROM projects WHERE name = ?").get(name) as { id: string } | null;
   return row?.id || null;
 }
 

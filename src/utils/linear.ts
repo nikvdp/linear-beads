@@ -3,7 +3,7 @@
  */
 
 import { getGraphQLClient, ISSUE_FRAGMENT, ISSUE_WITH_RELATIONS_FRAGMENT } from "./graphql.js";
-import { getRepoLabel, getTeamKey, useTypes } from "./config.js";
+import { getRepoLabel, getRepoName, getTeamKey, useTypes } from "./config.js";
 import {
   cacheIssue,
   cacheIssues,
@@ -12,6 +12,8 @@ import {
   clearIssuesCache,
   cacheLabel,
   getLabelIdByName,
+  cacheProject,
+  getProjectIdByName,
   updateLastSync,
 } from "./database.js";
 import type { Issue, IssueType, Priority, LinearIssue, IssueStatus } from "../types.js";
@@ -121,6 +123,77 @@ export async function ensureRepoLabel(teamId: string): Promise<string> {
   );
 
   return createResult.issueLabelCreate.issueLabel.id;
+}
+
+/**
+ * Get or create repo project (for project-based scoping)
+ */
+export async function ensureRepoProject(teamId: string): Promise<string> {
+  const client = getGraphQLClient();
+  const projectName = getRepoName() || "unknown";
+
+  // Check cache first
+  const cachedId = getProjectIdByName(projectName);
+  if (cachedId) return cachedId;
+
+  // Query existing projects by name
+  const query = `
+    query GetProjects($name: String!) {
+      projects(filter: { name: { eq: $name } }, first: 10) {
+        nodes {
+          id
+          name
+        }
+      }
+    }
+  `;
+
+  const result = await client.request<{
+    projects: { nodes: Array<{ id: string; name: string }> };
+  }>(query, { name: projectName });
+
+  const existing = result.projects.nodes.find((p) => p.name === projectName);
+  if (existing) {
+    cacheProject(existing.id, existing.name, teamId);
+    return existing.id;
+  }
+
+  // Create project
+  const createMutation = `
+    mutation CreateProject($input: ProjectCreateInput!) {
+      projectCreate(input: $input) {
+        success
+        project {
+          id
+          name
+        }
+      }
+    }
+  `;
+
+  const createResult = await client.request<{
+    projectCreate: {
+      success: boolean;
+      project: { id: string; name: string };
+    };
+  }>(createMutation, {
+    input: {
+      name: projectName,
+      teamIds: [teamId],
+    },
+  });
+
+  if (!createResult.projectCreate.success) {
+    throw new Error(`Failed to create repo project: ${projectName}`);
+  }
+
+  cacheProject(
+    createResult.projectCreate.project.id,
+    createResult.projectCreate.project.name,
+    teamId
+  );
+
+  return createResult.projectCreate.project.id;
 }
 
 /**
