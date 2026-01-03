@@ -106,12 +106,18 @@ export function deepMerge<T extends object>(target: T, source: Partial<T>): T {
 }
 
 /**
+ * Repo scoping mode type
+ */
+export type RepoScopeMode = "label" | "project" | "both";
+
+/**
  * Default config values
  */
 export const DEFAULT_CONFIG: LoadedConfig = {
   use_issue_types: false,
   cache_ttl_seconds: 120,
   local_only: false,
+  repo_scope: "label", // Default to label for backward compatibility
 };
 
 /**
@@ -263,6 +269,29 @@ export function getRepoName(): string | undefined {
  */
 export function isLocalOnly(): boolean {
   return getOption("local_only") === true;
+}
+
+/**
+ * Get repo scoping mode (label, project, or both)
+ */
+export function getRepoScope(): RepoScopeMode {
+  return (getOption("repo_scope") as RepoScopeMode) || "label";
+}
+
+/**
+ * Check if project scoping is enabled (project or both mode)
+ */
+export function useProjectScope(): boolean {
+  const scope = getRepoScope();
+  return scope === "project" || scope === "both";
+}
+
+/**
+ * Check if label scoping is enabled (label or both mode)
+ */
+export function useLabelScope(): boolean {
+  const scope = getRepoScope();
+  return scope === "label" || scope === "both";
 }
 
 /**
