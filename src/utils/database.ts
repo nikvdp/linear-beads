@@ -222,7 +222,10 @@ export function getCacheInfo(): { lastSync: Date | null; ageSeconds: number; isS
  */
 export function updateLastSync(): void {
   const db = getDatabase();
-  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_sync', datetime('now'))");
+  // Store as ISO string with Z suffix so parsing knows it's UTC
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_sync', ?)", [
+    new Date().toISOString(),
+  ]);
   requestJsonlExport();
 }
 
@@ -292,7 +295,9 @@ export function getLastFullSync(): string | null {
  */
 export function updateLastFullSync(): void {
   const db = getDatabase();
-  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_full_sync', datetime('now'))");
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_full_sync', ?)", [
+    new Date().toISOString(),
+  ]);
 }
 
 /**
