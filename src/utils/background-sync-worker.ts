@@ -1,9 +1,10 @@
 /**
- * Background sync worker - processes outbox queue
+ * Background sync worker - processes outbox queue and periodic full syncs
  * Should be spawned as a detached process by write commands
  *
  * Polls outbox every 500ms, exits after 5s of inactivity.
  * Parent can touch PID file to signal "stay alive" for new work.
+ * Also runs full sync if needsFullSync() is true.
  */
 
 import { writePidFile, removePidFile, getPidFileMtime } from "./pid-manager.js";
@@ -14,6 +15,8 @@ import {
   getParentId,
   getChildIds,
   getCachedIssue,
+  needsFullSync,
+  incrementSyncRunCount,
 } from "./database.js";
 import {
   getTeamId,
@@ -25,6 +28,7 @@ import {
   createRelation,
   deleteRelation,
   fetchIssues,
+  fetchAllIssuesPaginated,
 } from "./linear.js";
 import { exportToJsonl } from "./jsonl.js";
 import type { Issue, IssueType, Priority } from "../types.js";
@@ -136,13 +140,31 @@ async function processOutbox(): Promise<void> {
       await sleep(POLL_INTERVAL_MS);
     }
 
-    // Only sync if we actually did work
+    // Sync if we did work
     if (didWork) {
       if (!teamId) {
         teamId = await getTeamId();
       }
       await fetchIssues(teamId);
       exportToJsonl();
+    }
+
+    // Check if we should run a full sync (every 3rd run or >24h since last)
+    if (needsFullSync()) {
+      if (!teamId) {
+        teamId = await getTeamId();
+      }
+      try {
+        const { pruned } = await fetchAllIssuesPaginated(teamId);
+        if (pruned > 0) {
+          console.log(`Background full sync: pruned ${pruned} stale issues`);
+        }
+        exportToJsonl();
+        incrementSyncRunCount();
+      } catch (error) {
+        console.error("Background full sync failed:", error);
+        // Don't fail the worker, just log and continue
+      }
     }
 
     // Note: We intentionally skip fetching relations here.

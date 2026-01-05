@@ -3,7 +3,7 @@
  */
 
 import { Command } from "commander";
-import { fullSync } from "../utils/sync.js";
+import { smartSync, scheduleBackgroundFullSyncIfNeeded } from "../utils/sync.js";
 import { output, outputError } from "../utils/output.js";
 import { getPendingOutboxItems } from "../utils/database.js";
 import { isLocalOnly } from "../utils/config.js";
@@ -27,6 +27,7 @@ function isNetworkError(error: unknown): boolean {
 export const syncCommand = new Command("sync")
   .description("Sync with Linear (push pending changes, pull latest)")
   .option("--team <team>", "Team key (overrides config)")
+  .option("--full", "Force full sync (re-fetch all issues, prune stale)")
   .option("-j, --json", "Output as JSON")
   .action(async (options) => {
     try {
@@ -36,7 +37,7 @@ export const syncCommand = new Command("sync")
         return;
       }
 
-      const result = await fullSync(options.team);
+      const result = await smartSync(options.team, options.full);
 
       if (options.json) {
         output(
@@ -44,6 +45,8 @@ export const syncCommand = new Command("sync")
             {
               pushed: result.pushed,
               pulled: result.pulled,
+              pruned: result.pruned,
+              type: result.type,
             },
             null,
             2
@@ -53,7 +56,16 @@ export const syncCommand = new Command("sync")
         if (result.pushed.success > 0 || result.pushed.failed > 0) {
           output(`Pushed: ${result.pushed.success} succeeded, ${result.pushed.failed} failed`);
         }
-        output(`Pulled: ${result.pulled} issues`);
+        const typeLabel = result.type === "full" ? " (full sync)" : "";
+        output(`Pulled: ${result.pulled} issues${typeLabel}`);
+        if (result.pruned && result.pruned > 0) {
+          output(`Pruned: ${result.pruned} stale issues`);
+        }
+      }
+
+      // Schedule background full sync if needed (after incremental)
+      if (result.type === "incremental") {
+        scheduleBackgroundFullSyncIfNeeded();
       }
     } catch (error) {
       if (isNetworkError(error)) {

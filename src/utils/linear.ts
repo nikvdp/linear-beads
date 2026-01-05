@@ -23,6 +23,8 @@ import {
   cacheProject,
   getProjectIdByName,
   updateLastSync,
+  updateLastFullSync,
+  pruneStaleIssues,
 } from "./database.js";
 import type { Issue, IssueType, Priority, LinearIssue, IssueStatus } from "../types.js";
 import {
@@ -510,6 +512,228 @@ export async function fetchIssues(teamId: string): Promise<Issue[]> {
 
   updateLastSync();
   return issues;
+}
+
+/**
+ * Fetch all issues with pagination (full sync).
+ * Clears stale issues after fetching all pages.
+ * @returns Object with issues array and pruned count
+ */
+export async function fetchAllIssuesPaginated(
+  teamId: string
+): Promise<{ issues: Issue[]; pruned: number }> {
+  const client = getGraphQLClient();
+  const scope = getRepoScope();
+
+  // Build scope filter based on mode
+  let scopeFilter: string;
+  let baseVariables: Record<string, string | undefined> = { teamId };
+
+  if (scope === "project") {
+    const projectName = getRepoName() || "unknown";
+    scopeFilter = `filter: { project: { name: { eq: $projectName } } }`;
+    baseVariables.projectName = projectName;
+  } else if (scope === "both") {
+    const repoLabel = getRepoLabel();
+    const projectName = getRepoName() || "unknown";
+    scopeFilter = `filter: { or: [{ labels: { name: { eq: $labelName } } }, { project: { name: { eq: $projectName } } }] }`;
+    baseVariables.labelName = repoLabel;
+    baseVariables.projectName = projectName;
+  } else {
+    const repoLabel = getRepoLabel();
+    scopeFilter = `filter: { labels: { name: { eq: $labelName } } }`;
+    baseVariables.labelName = repoLabel;
+  }
+
+  const allIssues: Issue[] = [];
+  const allIssueIds = new Set<string>();
+  let cursor: string | undefined;
+  let hasMore = true;
+
+  while (hasMore) {
+    const variables = { ...baseVariables, cursor };
+
+    // Build variable declarations dynamically
+    const varDecls = Object.entries(variables)
+      .filter(([, v]) => v !== undefined)
+      .map(([k]) => (k === "cursor" ? `$${k}: String` : `$${k}: String!`))
+      .join(", ");
+
+    const query = `
+      query GetAllIssues(${varDecls}) {
+        team(id: $teamId) {
+          issues(${scopeFilter}, first: 50, after: $cursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              ${ISSUE_FRAGMENT}
+            }
+          }
+        }
+      }
+    `;
+
+    const result = await client.request<{
+      team: {
+        issues: {
+          pageInfo: { hasNextPage: boolean; endCursor?: string };
+          nodes: LinearIssue[];
+        };
+      };
+    }>(query, variables);
+
+    const issues = result.team.issues.nodes.map(linearToBdIssue);
+
+    // Track all issue IDs for stale pruning
+    for (const issue of issues) {
+      allIssueIds.add(issue.id);
+    }
+
+    // Upsert issues
+    if (issues.length > 0) {
+      cacheIssues(issues);
+    }
+
+    // Cache parent-child relations
+    for (const linear of result.team.issues.nodes) {
+      if (linear.parent) {
+        cacheDependency({
+          issue_id: linear.identifier,
+          depends_on_id: linear.parent.identifier,
+          type: "parent-child",
+          created_at: linear.createdAt,
+          created_by: "sync",
+        });
+      }
+    }
+
+    allIssues.push(...issues);
+    hasMore = result.team.issues.pageInfo.hasNextPage;
+    cursor = result.team.issues.pageInfo.endCursor;
+  }
+
+  // Prune stale issues that are no longer in remote
+  const pruned = pruneStaleIssues(allIssueIds);
+
+  updateLastSync();
+  updateLastFullSync();
+
+  return { issues: allIssues, pruned };
+}
+
+/**
+ * Fetch issues updated since a given timestamp (incremental sync).
+ * Does NOT clear cache - only upserts updated issues.
+ * Supports pagination via cursor.
+ */
+export async function fetchUpdatedIssues(
+  teamId: string,
+  since: string,
+  cursor?: string
+): Promise<{ issues: Issue[]; hasMore: boolean; endCursor?: string }> {
+  const client = getGraphQLClient();
+  const scope = getRepoScope();
+
+  // Build scope filter based on mode
+  let scopeFilter: string;
+  let variables: Record<string, string | undefined> = { teamId, since, cursor };
+
+  if (scope === "project") {
+    const projectName = getRepoName() || "unknown";
+    scopeFilter = `project: { name: { eq: $projectName } }`;
+    variables.projectName = projectName;
+  } else if (scope === "both") {
+    const repoLabel = getRepoLabel();
+    const projectName = getRepoName() || "unknown";
+    scopeFilter = `or: [{ labels: { name: { eq: $labelName } } }, { project: { name: { eq: $projectName } } }]`;
+    variables.labelName = repoLabel;
+    variables.projectName = projectName;
+  } else {
+    const repoLabel = getRepoLabel();
+    scopeFilter = `labels: { name: { eq: $labelName } }`;
+    variables.labelName = repoLabel;
+  }
+
+  // Build variable declarations dynamically
+  const varDecls = Object.entries(variables)
+    .filter(([, v]) => v !== undefined)
+    .map(([k]) => (k === "cursor" ? `$${k}: String` : `$${k}: String!`))
+    .join(", ");
+
+  // Combined filter: scope + updatedAt
+  const filter = `filter: { ${scopeFilter}, updatedAt: { gt: $since } }`;
+
+  const query = `
+    query GetUpdatedIssues(${varDecls}) {
+      team(id: $teamId) {
+        issues(${filter}, first: 50, after: $cursor, orderBy: updatedAt) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            ${ISSUE_FRAGMENT}
+          }
+        }
+      }
+    }
+  `;
+
+  const result = await client.request<{
+    team: {
+      issues: {
+        pageInfo: { hasNextPage: boolean; endCursor?: string };
+        nodes: LinearIssue[];
+      };
+    };
+  }>(query, variables);
+
+  const issues = result.team.issues.nodes.map(linearToBdIssue);
+
+  // Upsert issues (don't clear cache)
+  if (issues.length > 0) {
+    cacheIssues(issues);
+  }
+
+  // Cache parent-child relations from the query
+  for (const linear of result.team.issues.nodes) {
+    if (linear.parent) {
+      cacheDependency({
+        issue_id: linear.identifier,
+        depends_on_id: linear.parent.identifier,
+        type: "parent-child",
+        created_at: linear.createdAt,
+        created_by: "sync",
+      });
+    }
+  }
+
+  return {
+    issues,
+    hasMore: result.team.issues.pageInfo.hasNextPage,
+    endCursor: result.team.issues.pageInfo.endCursor,
+  };
+}
+
+/**
+ * Fetch all updated issues since timestamp with automatic pagination.
+ * Convenience wrapper around fetchUpdatedIssues.
+ */
+export async function fetchAllUpdatedIssues(teamId: string, since: string): Promise<Issue[]> {
+  const allIssues: Issue[] = [];
+  let cursor: string | undefined;
+  let hasMore = true;
+
+  while (hasMore) {
+    const result = await fetchUpdatedIssues(teamId, since, cursor);
+    allIssues.push(...result.issues);
+    hasMore = result.hasMore;
+    cursor = result.endCursor;
+  }
+
+  return allIssues;
 }
 
 /**

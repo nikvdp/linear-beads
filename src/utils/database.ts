@@ -227,6 +227,100 @@ export function updateLastSync(): void {
 }
 
 /**
+ * Get the last sync timestamp as ISO string (or null if never synced)
+ */
+export function getLastSync(): string | null {
+  const db = getDatabase();
+  const row = db.query("SELECT value FROM metadata WHERE key = 'last_sync'").get() as {
+    value: string;
+  } | null;
+  return row?.value || null;
+}
+
+/**
+ * Get timestamp for incremental sync with 5-minute lookback.
+ * Returns ISO string of (last_sync - 5 minutes) or null if never synced.
+ * The lookback prevents missing issues updated during the previous sync.
+ */
+export function getIncrementalSyncTimestamp(): string | null {
+  const lastSync = getLastSync();
+  if (!lastSync) return null;
+
+  const lastSyncDate = new Date(lastSync);
+  const lookbackMs = 5 * 60 * 1000; // 5 minutes
+  const lookbackDate = new Date(lastSyncDate.getTime() - lookbackMs);
+  return lookbackDate.toISOString();
+}
+
+/**
+ * Get the sync run count (how many times lb sync has been called)
+ */
+export function getSyncRunCount(): number {
+  const db = getDatabase();
+  const row = db.query("SELECT value FROM metadata WHERE key = 'sync_run_count'").get() as {
+    value: string;
+  } | null;
+  return row ? parseInt(row.value, 10) : 0;
+}
+
+/**
+ * Increment sync run count (called after each sync)
+ */
+export function incrementSyncRunCount(): number {
+  const db = getDatabase();
+  const current = getSyncRunCount();
+  const next = current + 1;
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('sync_run_count', ?)", [
+    next.toString(),
+  ]);
+  return next;
+}
+
+/**
+ * Get last full sync timestamp as ISO string (or null if never done)
+ */
+export function getLastFullSync(): string | null {
+  const db = getDatabase();
+  const row = db.query("SELECT value FROM metadata WHERE key = 'last_full_sync'").get() as {
+    value: string;
+  } | null;
+  return row?.value || null;
+}
+
+/**
+ * Update last full sync timestamp to now
+ */
+export function updateLastFullSync(): void {
+  const db = getDatabase();
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_full_sync', datetime('now'))");
+}
+
+/**
+ * Check if a full sync is needed based on run count or time.
+ * Full sync every 3rd run OR if last full sync was >24 hours ago.
+ */
+export function needsFullSync(): boolean {
+  const runCount = getSyncRunCount();
+  const lastFullSync = getLastFullSync();
+
+  // Every 3rd run
+  if (runCount > 0 && runCount % 3 === 0) {
+    return true;
+  }
+
+  // If never done a full sync, we need one
+  if (!lastFullSync) {
+    return true;
+  }
+
+  // If last full sync was more than 24 hours ago
+  const lastFullSyncDate = new Date(lastFullSync);
+  const now = new Date();
+  const hoursSinceFullSync = (now.getTime() - lastFullSyncDate.getTime()) / (1000 * 60 * 60);
+  return hoursSinceFullSync > 24;
+}
+
+/**
  * Cache an issue
  */
 export function cacheIssue(issue: Issue & { linear_state_id?: string }): void {
@@ -658,6 +752,41 @@ export function getProjectIdByName(name: string): string | null {
   const db = getDatabase();
   const row = db.query("SELECT id FROM projects WHERE name = ?").get(name) as { id: string } | null;
   return row?.id || null;
+}
+
+/**
+ * Get all cached issue IDs
+ */
+export function getAllCachedIssueIds(): string[] {
+  const db = getDatabase();
+  const rows = db.query("SELECT id FROM issues").all() as Array<{ id: string }>;
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Prune issues that are no longer in the remote (stale).
+ * Called after full sync to remove issues that were deleted or moved out of scope.
+ * @param validIds Set of issue IDs that are still valid (from remote)
+ * @returns Number of issues pruned
+ */
+export function pruneStaleIssues(validIds: Set<string>): number {
+  const db = getDatabase();
+  const allIds = getAllCachedIssueIds();
+  let pruned = 0;
+
+  for (const id of allIds) {
+    if (!validIds.has(id)) {
+      db.run("DELETE FROM issues WHERE id = ?", [id]);
+      db.run("DELETE FROM dependencies WHERE issue_id = ? OR depends_on_id = ?", [id, id]);
+      pruned++;
+    }
+  }
+
+  if (pruned > 0) {
+    requestJsonlExport();
+  }
+
+  return pruned;
 }
 
 /**
