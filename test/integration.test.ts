@@ -605,6 +605,119 @@ describe("lb CLI Integration Tests", () => {
 });
 
 /**
+ * Project scoping mode tests
+ * These tests run in an isolated directory with repo_scope: 'project' config
+ */
+describe("Project Scoping Mode", () => {
+  const testDir = "/tmp/lb-project-test-" + Date.now();
+  const projectTestPrefix = `[proj-test-${Date.now()}]`;
+
+  // Helper to run lb in the test directory
+  async function lbProject(
+    ...args: string[]
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const proc = Bun.spawn(["bun", "run", import.meta.dir + "/../src/cli.ts", ...args], {
+      cwd: testDir,
+      env: { ...process.env, LB_TEAM_KEY: TEAM_KEY },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    return { stdout, stderr, exitCode };
+  }
+
+  // Helper to run lb and parse JSON output
+  async function lbProjectJson<T>(...args: string[]): Promise<T> {
+    const result = await lbProject(...args, "--json");
+    if (result.exitCode !== 0) {
+      throw new Error(`lb ${args.join(" ")} failed: ${result.stderr}\n${result.stdout}`);
+    }
+    return JSON.parse(result.stdout);
+  }
+
+  beforeAll(async () => {
+    // Create test directory with git init and project-scoping config
+    mkdirSync(join(testDir, ".lb"), { recursive: true });
+    mkdirSync(join(testDir, ".git"), { recursive: true }); // Fake git repo
+    writeFileSync(
+      join(testDir, ".lb", "config.jsonc"),
+      `{ "repo_scope": "project", "repo_name": "lb-project-test-${Date.now()}" }`
+    );
+
+    // Initialize
+    await lbProject("init", "--force");
+  });
+
+  afterAll(async () => {
+    // Cleanup: delete any test issues and the project
+    try {
+      await lbProject("sync");
+      const issues = await lbProjectJson<Array<{ id: string; title: string }>>("list", "--all");
+      const testIssues = issues.filter((i) => i.title.includes(projectTestPrefix));
+
+      const client = new GraphQLClient("https://api.linear.app/graphql", {
+        headers: { Authorization: process.env.LINEAR_API_KEY! },
+      });
+
+      for (const issue of testIssues) {
+        try {
+          await client.request(
+            `mutation DeleteIssue($id: String!) { issueDelete(id: $id) { success } }`,
+            { id: issue.id }
+          );
+        } catch {
+          // Ignore
+        }
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
+
+    // Cleanup test directory
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  test("should initialize with project scoping", async () => {
+    const result = await lbProject("init", "--force");
+    expect(result.stdout).toContain("Repo scoping: project");
+    expect(result.stdout).toContain("Repo project:");
+    expect(result.stdout).not.toContain("Repo label:");
+  });
+
+  test("should create issue with project assignment", async () => {
+    const title = `${projectTestPrefix} Project create test`;
+    const result = await lbProjectJson<Array<{ id: string; title: string }>>(
+      "create",
+      title,
+      "--sync"
+    );
+
+    expect(result[0].id).toMatch(/^[A-Z]+-\d+$/);
+    expect(result[0].title).toBe(title);
+  });
+
+  test("should sync and fetch project-scoped issues", async () => {
+    // Create an issue
+    const title = `${projectTestPrefix} Project sync test`;
+    await lbProject("create", title, "--sync");
+
+    // Sync
+    const syncResult = await lbProjectJson<{ pushed: object; pulled: number }>("sync");
+    expect(syncResult.pulled).toBeGreaterThanOrEqual(1);
+
+    // List should include the issue
+    const listResult = await lbProjectJson<Array<{ title: string }>>("list");
+    expect(listResult.some((i) => i.title === title)).toBe(true);
+  });
+});
+
+/**
  * Local-only mode tests
  * These tests run in an isolated directory with local_only: true config
  * No Linear API calls are made

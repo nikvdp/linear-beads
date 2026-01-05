@@ -26,4 +26,8 @@ export interface HttpsLbCliDevConfigSchemaJson {
    * Run in local-only mode without syncing to Linear. Issues get LOCAL-xxx IDs. Useful for LLM-only task tracking.
    */
   local_only?: boolean;
+  /**
+   * How to scope issues to this repo in Linear. 'label' uses repo:name labels (default, backward compatible). 'project' uses Linear Projects. 'both' uses both for filtering/assignment.
+   */
+  repo_scope?: "label" | "project" | "both";
 }

@@ -3,7 +3,15 @@
  */
 
 import { getGraphQLClient, ISSUE_FRAGMENT, ISSUE_WITH_RELATIONS_FRAGMENT } from "./graphql.js";
-import { getRepoLabel, getTeamKey, useTypes } from "./config.js";
+import {
+  getRepoLabel,
+  getRepoName,
+  getRepoScope,
+  getTeamKey,
+  useLabelScope,
+  useProjectScope,
+  useTypes,
+} from "./config.js";
 import {
   cacheIssue,
   cacheIssues,
@@ -12,6 +20,8 @@ import {
   clearIssuesCache,
   cacheLabel,
   getLabelIdByName,
+  cacheProject,
+  getProjectIdByName,
   updateLastSync,
 } from "./database.js";
 import type { Issue, IssueType, Priority, LinearIssue, IssueStatus } from "../types.js";
@@ -121,6 +131,77 @@ export async function ensureRepoLabel(teamId: string): Promise<string> {
   );
 
   return createResult.issueLabelCreate.issueLabel.id;
+}
+
+/**
+ * Get or create repo project (for project-based scoping)
+ */
+export async function ensureRepoProject(teamId: string): Promise<string> {
+  const client = getGraphQLClient();
+  const projectName = getRepoName() || "unknown";
+
+  // Check cache first
+  const cachedId = getProjectIdByName(projectName);
+  if (cachedId) return cachedId;
+
+  // Query existing projects by name
+  const query = `
+    query GetProjects($name: String!) {
+      projects(filter: { name: { eq: $name } }, first: 10) {
+        nodes {
+          id
+          name
+        }
+      }
+    }
+  `;
+
+  const result = await client.request<{
+    projects: { nodes: Array<{ id: string; name: string }> };
+  }>(query, { name: projectName });
+
+  const existing = result.projects.nodes.find((p) => p.name === projectName);
+  if (existing) {
+    cacheProject(existing.id, existing.name, teamId);
+    return existing.id;
+  }
+
+  // Create project
+  const createMutation = `
+    mutation CreateProject($input: ProjectCreateInput!) {
+      projectCreate(input: $input) {
+        success
+        project {
+          id
+          name
+        }
+      }
+    }
+  `;
+
+  const createResult = await client.request<{
+    projectCreate: {
+      success: boolean;
+      project: { id: string; name: string };
+    };
+  }>(createMutation, {
+    input: {
+      name: projectName,
+      teamIds: [teamId],
+    },
+  });
+
+  if (!createResult.projectCreate.success) {
+    throw new Error(`Failed to create repo project: ${projectName}`);
+  }
+
+  cacheProject(
+    createResult.projectCreate.project.id,
+    createResult.projectCreate.project.name,
+    teamId
+  );
+
+  return createResult.projectCreate.project.id;
 }
 
 /**
@@ -351,16 +432,45 @@ export async function getWorkflowStateId(teamId: string, status: Issue["status"]
 /**
  * Fetch issues from Linear with repo scoping
  * Uses a simplified query to avoid Linear API complexity limits
+ * Supports label, project, or both scoping modes
  */
 export async function fetchIssues(teamId: string): Promise<Issue[]> {
   const client = getGraphQLClient();
-  const repoLabel = getRepoLabel();
+  const scope = getRepoScope();
+
+  // Build filter based on scoping mode
+  let filter: string;
+  let variables: Record<string, string> = { teamId };
+
+  if (scope === "project") {
+    // Project-only mode: filter by project name
+    const projectName = getRepoName() || "unknown";
+    filter = `filter: { project: { name: { eq: $projectName } } }`;
+    variables.projectName = projectName;
+  } else if (scope === "both") {
+    // Both mode: filter by label OR project (use 'or' combinator)
+    const repoLabel = getRepoLabel();
+    const projectName = getRepoName() || "unknown";
+    filter = `filter: { or: [{ labels: { name: { eq: $labelName } } }, { project: { name: { eq: $projectName } } }] }`;
+    variables.labelName = repoLabel;
+    variables.projectName = projectName;
+  } else {
+    // Label mode (default): filter by label
+    const repoLabel = getRepoLabel();
+    filter = `filter: { labels: { name: { eq: $labelName } } }`;
+    variables.labelName = repoLabel;
+  }
+
+  // Build variable declarations for GraphQL
+  const varDecls = Object.keys(variables)
+    .map((k) => `$${k}: String!`)
+    .join(", ");
 
   // Use simpler query without nested children/relations to avoid complexity limits
   const query = `
-    query GetIssues($teamId: String!, $labelName: String!) {
+    query GetIssues(${varDecls}) {
       team(id: $teamId) {
-        issues(filter: { labels: { name: { eq: $labelName } } }, first: 100) {
+        issues(${filter}, first: 100) {
           nodes {
             ${ISSUE_FRAGMENT}
           }
@@ -371,7 +481,7 @@ export async function fetchIssues(teamId: string): Promise<Issue[]> {
 
   const result = await client.request<{
     team: { issues: { nodes: LinearIssue[] } };
-  }>(query, { teamId, labelName: repoLabel });
+  }>(query, variables);
 
   const issues = result.team.issues.nodes.map(linearToBdIssue);
 
@@ -603,14 +713,25 @@ export async function createIssue(params: {
 }): Promise<Issue> {
   const client = getGraphQLClient();
 
-  // Get required labels
-  const repoLabelId = await ensureRepoLabel(params.teamId);
-  const labelIds: string[] = [repoLabelId];
+  // Build label IDs based on scoping mode
+  const labelIds: string[] = [];
 
-  // Only add type label if types are enabled and type is provided
+  // Add repo label if using label or both scoping
+  if (useLabelScope()) {
+    const repoLabelId = await ensureRepoLabel(params.teamId);
+    labelIds.push(repoLabelId);
+  }
+
+  // Add type label if types are enabled and type is provided
   if (useTypes() && params.issueType) {
     const typeLabelId = await ensureTypeLabel(params.teamId, params.issueType);
     labelIds.push(typeLabelId);
+  }
+
+  // Get project ID if using project or both scoping
+  let projectId: string | undefined;
+  if (useProjectScope()) {
+    projectId = await ensureRepoProject(params.teamId);
   }
 
   const stateId = await getWorkflowStateId(params.teamId, params.status || "open");
@@ -641,9 +762,18 @@ export async function createIssue(params: {
     priority: priorityToLinear(params.priority),
     teamId: params.teamId,
     stateId,
-    labelIds,
     parentId: parentUuid,
   };
+
+  // Only include labelIds if we have labels
+  if (labelIds.length > 0) {
+    input.labelIds = labelIds;
+  }
+
+  // Add projectId if using project scoping
+  if (projectId) {
+    input.projectId = projectId;
+  }
 
   if (params.assigneeId) {
     input.assigneeId = params.assigneeId;

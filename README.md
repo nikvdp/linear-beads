@@ -32,6 +32,41 @@ When your agent runs `lb onboard`, it will:
 
 After onboarding, your agent uses `lb` instead of its built-in task tools. Issues sync to Linear so you can see them in the Linear UI.
 
+## Repo Scoping (Label vs Project)
+
+By default, `lb` uses Linear labels to scope issues to a repository (e.g., `repo:my-project`). You can also use Linear Projects for scoping, or both.
+
+### Configuration
+
+Add to `.lb/config.jsonc`:
+
+```jsonc
+{
+  "repo_scope": "label"  // "label" (default), "project", or "both"
+}
+```
+
+| Mode | Description |
+|------|-------------|
+| `label` | Uses `repo:name` labels (default, backward compatible) |
+| `project` | Uses Linear Projects - one project per repo |
+| `both` | Uses both labels and projects |
+
+### Migrating from Labels to Projects
+
+If you have existing label-scoped issues and want to switch to project scoping:
+
+```bash
+# Preview what would change
+lb migrate to-project --dry-run
+
+# Migrate issues to project (keeps labels)
+lb migrate to-project
+
+# Migrate and remove the repo label
+lb migrate to-project --remove-label
+```
+
 ## Offline & Local-Only Modes
 
 `lb` works offline and can run entirely without Linear.

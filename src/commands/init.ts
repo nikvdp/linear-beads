@@ -5,8 +5,16 @@
 import { Command } from "commander";
 import { existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
-import { getDbPath, getApiKey, getRepoLabel } from "../utils/config.js";
-import { getTeamId, ensureRepoLabel } from "../utils/linear.js";
+import {
+  getDbPath,
+  getApiKey,
+  getRepoLabel,
+  getRepoName,
+  getRepoScope,
+  useLabelScope,
+  useProjectScope,
+} from "../utils/config.js";
+import { getTeamId, ensureRepoLabel, ensureRepoProject } from "../utils/linear.js";
 import { fullSync } from "../utils/sync.js";
 import { output } from "../utils/output.js";
 
@@ -48,10 +56,21 @@ export const initCommand = new Command("init")
         mkdirSync(lbDir, { recursive: true });
       }
 
-      // Ensure repo label exists
-      const repoLabel = getRepoLabel();
-      await ensureRepoLabel(teamId);
-      output(`✓ Repo label: ${repoLabel}`);
+      // Ensure repo scoping (label/project/both) based on config
+      const scope = getRepoScope();
+      output(`✓ Repo scoping: ${scope}`);
+
+      if (useLabelScope()) {
+        const repoLabel = getRepoLabel();
+        await ensureRepoLabel(teamId);
+        output(`✓ Repo label: ${repoLabel}`);
+      }
+
+      if (useProjectScope()) {
+        const projectName = getRepoName() || "unknown";
+        await ensureRepoProject(teamId);
+        output(`✓ Repo project: ${projectName}`);
+      }
 
       // Initial sync
       const result = await fullSync();
