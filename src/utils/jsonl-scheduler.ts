@@ -46,9 +46,10 @@ function spawnExportWorker(): void {
     console.error("Warning: Failed to spawn JSONL export worker:", error);
   } finally {
     // Allow future spawns after a short buffer
+    // Use .unref() so this timer doesn't keep the process alive
     setTimeout(() => {
       exportInFlight = false;
-    }, 2000);
+    }, 2000).unref();
   }
 }
 
@@ -66,4 +67,7 @@ export function requestJsonlExport(): void {
     exportTimer = null;
     spawnExportWorker();
   }, 750);
+  // Don't let this timer keep the process alive - export will happen
+  // in background worker anyway if process exits before timer fires
+  exportTimer.unref();
 }
