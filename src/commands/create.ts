@@ -12,6 +12,7 @@ import {
   getDisplayId,
   resolveIssueId,
   isLocalId,
+  runWithBusyRetry,
 } from "../utils/database.js";
 import {
   createIssue,
@@ -342,7 +343,9 @@ export const createCommand = new Command("create")
 
           queueOutboxItem("create", payload, localId);
         });
-        transaction();
+        runWithBusyRetry(() => {
+          transaction();
+        });
 
         // Spawn background worker if not already running
         ensureOutboxProcessed();

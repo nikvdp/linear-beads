@@ -12,6 +12,40 @@ import type { Issue, Dependency, OutboxItem } from "../types.js";
 
 let db: Database | null = null;
 const LOCAL_ID_PREFIX = "LOCAL-";
+const SQLITE_BUSY_TIMEOUT_MS = 10000;
+const SQLITE_MAX_LOCK_RETRIES = 20;
+const SQLITE_RETRY_BASE_DELAY_MS = 50;
+
+function isDatabaseLockedError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const msg = error.message.toLowerCase();
+  return (
+    msg.includes("database is locked") ||
+    msg.includes("database table is locked") ||
+    msg.includes("database schema is locked")
+  );
+}
+
+function sleepSync(ms: number): void {
+  const signal = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(signal, 0, 0, ms);
+}
+
+export function runWithBusyRetry<T>(operation: () => T): T {
+  let attempt = 0;
+  while (true) {
+    try {
+      return operation();
+    } catch (error) {
+      if (!isDatabaseLockedError(error) || attempt >= SQLITE_MAX_LOCK_RETRIES) {
+        throw error;
+      }
+      const backoffMs = SQLITE_RETRY_BASE_DELAY_MS * (attempt + 1);
+      sleepSync(backoffMs);
+      attempt++;
+    }
+  }
+}
 
 /**
  * Get database singleton, initializing schema if needed
@@ -29,7 +63,10 @@ export function getDatabase(): Database {
     db = new Database(dbPath);
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA synchronous = NORMAL");
-    initSchema(db);
+    db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+    runWithBusyRetry(() => {
+      initSchema(db!);
+    });
   }
   return db;
 }
@@ -230,9 +267,11 @@ export function generateLocalId(): string {
   const nextNum = row ? parseInt(row.value) + 1 : 1;
 
   // Update counter
-  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('local_id_counter', ?)", [
-    nextNum.toString(),
-  ]);
+  runWithBusyRetry(() => {
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('local_id_counter', ?)", [
+      nextNum.toString(),
+    ]);
+  });
 
   return `LOCAL-${nextNum.toString().padStart(3, "0")}`;
 }
@@ -281,9 +320,11 @@ export function getCacheInfo(): { lastSync: Date | null; ageSeconds: number; isS
 export function updateLastSync(): void {
   const db = getDatabase();
   // Store as ISO string with Z suffix so parsing knows it's UTC
-  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_sync', ?)", [
-    new Date().toISOString(),
-  ]);
+  runWithBusyRetry(() => {
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_sync', ?)", [
+      new Date().toISOString(),
+    ]);
+  });
   requestJsonlExport();
 }
 
@@ -331,9 +372,11 @@ export function incrementSyncRunCount(): number {
   const db = getDatabase();
   const current = getSyncRunCount();
   const next = current + 1;
-  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('sync_run_count', ?)", [
-    next.toString(),
-  ]);
+  runWithBusyRetry(() => {
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('sync_run_count', ?)", [
+      next.toString(),
+    ]);
+  });
   return next;
 }
 
@@ -353,9 +396,11 @@ export function getLastFullSync(): string | null {
  */
 export function updateLastFullSync(): void {
   const db = getDatabase();
-  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_full_sync', ?)", [
-    new Date().toISOString(),
-  ]);
+  runWithBusyRetry(() => {
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_full_sync', ?)", [
+      new Date().toISOString(),
+    ]);
+  });
 }
 
 /**
@@ -390,28 +435,30 @@ export function cacheIssue(
   issue: Issue & { linear_state_id?: string; sync_status?: "synced" | "pending" | "failed" }
 ): void {
   const db = getDatabase();
-  db.run(
-    `
+  runWithBusyRetry(() => {
+    db.run(
+      `
     INSERT OR REPLACE INTO issues 
     (id, identifier, title, description, status, priority, issue_type, sync_status, created_at, updated_at, closed_at, assignee, linear_state_id, cached_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `,
-    [
-      issue.id,
-      issue.id, // identifier same as id for now
-      issue.title,
-      issue.description || null,
-      issue.status,
-      issue.priority,
-      issue.issue_type || null,
-      issue.sync_status || "synced",
-      issue.created_at,
-      issue.updated_at,
-      issue.closed_at || null,
-      issue.assignee || null,
-      issue.linear_state_id || null,
-    ]
-  );
+      [
+        issue.id,
+        issue.id, // identifier same as id for now
+        issue.title,
+        issue.description || null,
+        issue.status,
+        issue.priority,
+        issue.issue_type || null,
+        issue.sync_status || "synced",
+        issue.created_at,
+        issue.updated_at,
+        issue.closed_at || null,
+        issue.assignee || null,
+        issue.linear_state_id || null,
+      ]
+    );
+  });
   requestJsonlExport();
 }
 
@@ -446,7 +493,9 @@ export function cacheIssues(issues: Array<Issue & { linear_state_id?: string }>)
     }
   });
 
-  transaction();
+  runWithBusyRetry(() => {
+    transaction();
+  });
   requestJsonlExport();
 }
 
@@ -518,14 +567,16 @@ export function getCachedIssues(): Issue[] {
  */
 export function cacheDependency(dep: Dependency): void {
   const db = getDatabase();
-  db.run(
-    `
+  runWithBusyRetry(() => {
+    db.run(
+      `
     INSERT OR REPLACE INTO dependencies 
     (issue_id, depends_on_id, type, created_at, created_by)
     VALUES (?, ?, ?, ?, ?)
   `,
-    [dep.issue_id, dep.depends_on_id, dep.type, dep.created_at, dep.created_by]
-  );
+      [dep.issue_id, dep.depends_on_id, dep.type, dep.created_at, dep.created_by]
+    );
+  });
   requestJsonlExport();
 }
 
@@ -535,7 +586,9 @@ export function cacheDependency(dep: Dependency): void {
 export function clearIssueDependencies(issueId: string): void {
   const db = getDatabase();
   const resolvedId = resolveIssueId(issueId);
-  db.run("DELETE FROM dependencies WHERE issue_id = ?", [resolvedId]);
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM dependencies WHERE issue_id = ?", [resolvedId]);
+  });
   requestJsonlExport();
 }
 
@@ -546,15 +599,17 @@ export function deleteDependency(issueId: string, dependsOnId: string): void {
   const db = getDatabase();
   const resolvedIssueId = resolveIssueId(issueId);
   const resolvedDependsOnId = resolveIssueId(dependsOnId);
-  db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [
-    resolvedIssueId,
-    resolvedDependsOnId,
-  ]);
-  // Also try the reverse direction
-  db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [
-    resolvedDependsOnId,
-    resolvedIssueId,
-  ]);
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [
+      resolvedIssueId,
+      resolvedDependsOnId,
+    ]);
+    // Also try the reverse direction
+    db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [
+      resolvedDependsOnId,
+      resolvedIssueId,
+    ]);
+  });
   requestJsonlExport();
 }
 
@@ -692,13 +747,15 @@ export function queueOutboxItem(
   localId?: string
 ): number {
   const db = getDatabase();
-  db.run(
-    `
+  runWithBusyRetry(() => {
+    db.run(
+      `
     INSERT INTO outbox (operation, payload, local_id)
     VALUES (?, ?, ?)
   `,
-    [operation, JSON.stringify(payload), localId || null]
-  );
+      [operation, JSON.stringify(payload), localId || null]
+    );
+  });
 
   // Get last insert rowid
   const result = db.query("SELECT last_insert_rowid() as id").get() as { id: number };
@@ -730,7 +787,9 @@ export function getPendingOutboxItems(): OutboxItem[] {
  */
 export function removeOutboxItem(id: number): void {
   const db = getDatabase();
-  db.run("DELETE FROM outbox WHERE id = ?", [id]);
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM outbox WHERE id = ?", [id]);
+  });
 }
 
 /**
@@ -738,14 +797,16 @@ export function removeOutboxItem(id: number): void {
  */
 export function updateOutboxItemError(id: number, error: string): void {
   const db = getDatabase();
-  db.run(
-    `
+  runWithBusyRetry(() => {
+    db.run(
+      `
     UPDATE outbox 
     SET retry_count = retry_count + 1, last_error = ?
     WHERE id = ?
   `,
-    [error, id]
-  );
+      [error, id]
+    );
+  });
 }
 
 /**
@@ -754,13 +815,15 @@ export function updateOutboxItemError(id: number, error: string): void {
  */
 export function clearCache(): void {
   const db = getDatabase();
-  db.exec(`
+  runWithBusyRetry(() => {
+    db.exec(`
     DELETE FROM issues;
     DELETE FROM dependencies WHERE type = 'parent-child';
     DELETE FROM labels;
     DELETE FROM projects;
     DELETE FROM metadata;
   `);
+  });
   requestJsonlExport();
 }
 
@@ -769,10 +832,12 @@ export function clearCache(): void {
  */
 export function clearIssuesCache(): void {
   const db = getDatabase();
-  db.exec(`
+  runWithBusyRetry(() => {
+    db.exec(`
     DELETE FROM issues;
     DELETE FROM dependencies WHERE type = 'parent-child';
   `);
+  });
   requestJsonlExport();
 }
 
@@ -782,11 +847,13 @@ export function clearIssuesCache(): void {
 export function deleteCachedIssue(issueId: string): void {
   const db = getDatabase();
   const resolvedId = resolveIssueId(issueId);
-  db.run("DELETE FROM issues WHERE id = ?", [resolvedId]);
-  db.run("DELETE FROM dependencies WHERE issue_id = ? OR depends_on_id = ?", [
-    resolvedId,
-    resolvedId,
-  ]);
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM issues WHERE id = ?", [resolvedId]);
+    db.run("DELETE FROM dependencies WHERE issue_id = ? OR depends_on_id = ?", [
+      resolvedId,
+      resolvedId,
+    ]);
+  });
   requestJsonlExport();
 }
 
@@ -795,13 +862,15 @@ export function deleteCachedIssue(issueId: string): void {
  */
 export function cacheLabel(id: string, name: string, teamId?: string): void {
   const db = getDatabase();
-  db.run(
-    `
+  runWithBusyRetry(() => {
+    db.run(
+      `
     INSERT OR REPLACE INTO labels (id, name, team_id)
     VALUES (?, ?, ?)
   `,
-    [id, name, teamId || null]
-  );
+      [id, name, teamId || null]
+    );
+  });
 }
 
 /**
@@ -818,13 +887,15 @@ export function getLabelIdByName(name: string): string | null {
  */
 export function cacheProject(id: string, name: string, teamId?: string): void {
   const db = getDatabase();
-  db.run(
-    `
+  runWithBusyRetry(() => {
+    db.run(
+      `
     INSERT OR REPLACE INTO projects (id, name, team_id)
     VALUES (?, ?, ?)
   `,
-    [id, name, teamId || null]
-  );
+      [id, name, teamId || null]
+    );
+  });
 }
 
 /**
@@ -856,13 +927,15 @@ export function pruneStaleIssues(validIds: Set<string>): number {
   const allIds = getAllCachedIssueIds();
   let pruned = 0;
 
-  for (const id of allIds) {
-    if (!validIds.has(id)) {
-      db.run("DELETE FROM issues WHERE id = ?", [id]);
-      db.run("DELETE FROM dependencies WHERE issue_id = ? OR depends_on_id = ?", [id, id]);
-      pruned++;
+  runWithBusyRetry(() => {
+    for (const id of allIds) {
+      if (!validIds.has(id)) {
+        db.run("DELETE FROM issues WHERE id = ?", [id]);
+        db.run("DELETE FROM dependencies WHERE issue_id = ? OR depends_on_id = ?", [id, id]);
+        pruned++;
+      }
     }
-  }
+  });
 
   if (pruned > 0) {
     requestJsonlExport();
@@ -876,13 +949,15 @@ export function pruneStaleIssues(validIds: Set<string>): number {
  */
 export function setIssueIdMapping(localId: string, linearId: string): void {
   const db = getDatabase();
-  db.run(
-    `
+  runWithBusyRetry(() => {
+    db.run(
+      `
     INSERT OR REPLACE INTO issue_id_map (local_id, linear_id, created_at)
     VALUES (?, ?, ?)
   `,
-    [localId, linearId, new Date().toISOString()]
-  );
+      [localId, linearId, new Date().toISOString()]
+    );
+  });
 }
 
 /**
@@ -937,21 +1012,23 @@ export function replaceIssueId(localId: string, linearId: string): void {
     id: string;
   } | null;
 
-  if (existing) {
-    db.run("DELETE FROM issues WHERE id = ?", [localId]);
-  } else {
-    db.run(
-      `
+  runWithBusyRetry(() => {
+    if (existing) {
+      db.run("DELETE FROM issues WHERE id = ?", [localId]);
+    } else {
+      db.run(
+        `
       UPDATE issues
       SET id = ?, identifier = ?, sync_status = 'synced'
       WHERE id = ?
     `,
-      [linearId, linearId, localId]
-    );
-  }
+        [linearId, linearId, localId]
+      );
+    }
 
-  db.run("UPDATE dependencies SET issue_id = ? WHERE issue_id = ?", [linearId, localId]);
-  db.run("UPDATE dependencies SET depends_on_id = ? WHERE depends_on_id = ?", [linearId, localId]);
+    db.run("UPDATE dependencies SET issue_id = ? WHERE issue_id = ?", [linearId, localId]);
+    db.run("UPDATE dependencies SET depends_on_id = ? WHERE depends_on_id = ?", [linearId, localId]);
+  });
 
   requestJsonlExport();
 }
@@ -961,9 +1038,11 @@ export function replaceIssueId(localId: string, linearId: string): void {
  */
 export function cacheViewer(viewer: { id: string; email: string; name: string }): void {
   const db = getDatabase();
-  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('viewer', ?)", [
-    JSON.stringify(viewer),
-  ]);
+  runWithBusyRetry(() => {
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('viewer', ?)", [
+      JSON.stringify(viewer),
+    ]);
+  });
 }
 
 /**
