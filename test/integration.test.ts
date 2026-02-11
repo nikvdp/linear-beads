@@ -176,11 +176,13 @@ describe("lb CLI Integration Tests", () => {
         Array<{
           id: string;
           title: string;
+          sync_status: string;
         }>
       >("create", title, "-p", "1");
 
-      expect(result[0].id).toBe("pending");
+      expect(result[0].id).toMatch(/^LOCAL-\d+$/);
       expect(result[0].title).toBe(title);
+      expect(result[0].sync_status).toBe("pending");
 
       // Push it immediately so we can track it
       await lb("sync");
@@ -455,11 +457,15 @@ describe("lb CLI Integration Tests", () => {
     test("should queue and auto-sync in background", async () => {
       // Create without --sync flag (queues and spawns worker)
       const title = `${TEST_PREFIX} Background sync test`;
-      const createResult = await lbJson<Array<{ id: string; title: string }>>("create", title);
+      const createResult = await lbJson<Array<{ id: string; title: string; sync_status: string }>>(
+        "create",
+        title
+      );
 
-      // Should return immediately with pending ID
-      expect(createResult[0].id).toBe("pending");
+      // Should return immediately with local ID and pending sync status
+      expect(createResult[0].id).toMatch(/^LOCAL-\d+$/);
       expect(createResult[0].title).toBe(title);
+      expect(createResult[0].sync_status).toBe("pending");
 
       // Wait for worker to process queue (give it a few seconds)
       await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -815,6 +821,35 @@ describe("Local-only Mode", () => {
       const result = await lbLocalJson<Array<{ priority: number }>>("create", "Urgent", "-p", "0");
 
       expect(result[0].priority).toBe(0);
+    });
+
+    test("should handle many concurrent creates without database lock errors", async () => {
+      const total = 30;
+      const jobs = Array.from({ length: total }, (_, idx) =>
+        Bun.spawn(["bun", "run", import.meta.dir + "/../src/cli.ts", "create", `Concurrent ${idx + 1}`], {
+          cwd: testDir,
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+      );
+
+      const results = await Promise.all(
+        jobs.map(async (proc) => {
+          const stdout = await new Response(proc.stdout).text();
+          const stderr = await new Response(proc.stderr).text();
+          const exitCode = await proc.exited;
+          return { stdout, stderr, exitCode };
+        })
+      );
+
+      for (const result of results) {
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr.toLowerCase()).not.toContain("database is locked");
+      }
+
+      const listed = await lbLocalJson<Array<{ title: string }>>("list", "--all");
+      const createdCount = listed.filter((issue) => issue.title.startsWith("Concurrent ")).length;
+      expect(createdCount).toBe(total);
     });
   });
 
