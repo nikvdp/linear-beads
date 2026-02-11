@@ -259,19 +259,21 @@ function initSchema(db: Database): void {
 export function generateLocalId(): string {
   const db = getDatabase();
 
-  // Get current counter
-  const row = db.query("SELECT value FROM metadata WHERE key = 'local_id_counter'").get() as {
-    value: string;
-  } | null;
-
-  const nextNum = row ? parseInt(row.value) + 1 : 1;
-
-  // Update counter
-  runWithBusyRetry(() => {
-    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('local_id_counter', ?)", [
-      nextNum.toString(),
-    ]);
-  });
+  // Increment counter atomically to avoid duplicate LOCAL IDs under parallel writes.
+  const row = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+        INSERT INTO metadata (key, value)
+        VALUES ('local_id_counter', '1')
+        ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1
+        RETURNING value
+      `
+        )
+        .get() as { value: string }
+  );
+  const nextNum = parseInt(row.value, 10);
 
   return `LOCAL-${nextNum.toString().padStart(3, "0")}`;
 }
