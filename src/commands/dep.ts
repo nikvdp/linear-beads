@@ -404,13 +404,13 @@ const listCommand = new Command("list")
   .option("-j, --json", "Output as JSON")
   .action(async (issueId: string, options) => {
     try {
-      const issue = getCachedIssue(issueId);
+      const resolvedId = resolveIssueId(issueId);
+      const issue = getCachedIssue(resolvedId);
       if (!issue) {
         outputError(`Issue not found: ${issueId}`);
         process.exit(1);
       }
 
-      const resolvedId = resolveIssueId(issueId);
       const { outgoing, incoming } = getAllDependencies(resolvedId);
 
       // Group dependencies by type
@@ -540,14 +540,15 @@ const treeCommand = new Command("tree")
   .argument("<issue>", "Issue ID")
   .action(async (issueId: string) => {
     try {
-      const issue = getCachedIssue(issueId);
+      const resolvedId = resolveIssueId(issueId);
+      const issue = getCachedIssue(resolvedId);
       if (!issue) {
         outputError(`Issue not found: ${issueId}`);
         process.exit(1);
       }
 
-      output(`\n🌲 Dependency tree for ${issueId}:\n`);
-      printTree(issueId);
+      output(`\n🌲 Dependency tree for ${getDisplayId(resolvedId)}:\n`);
+      printTree(resolvedId);
       output("");
     } catch (error) {
       outputError(error instanceof Error ? error.message : String(error));

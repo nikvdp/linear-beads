@@ -6,7 +6,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
-import { getDbPath } from "./config.js";
+import { getDbPath, getTeamKey } from "./config.js";
 import { requestJsonlExport } from "./jsonl-scheduler.js";
 import type { Issue, Dependency, OutboxItem } from "../types.js";
 
@@ -15,6 +15,9 @@ const LOCAL_ID_PREFIX = "LOCAL-";
 const SQLITE_BUSY_TIMEOUT_MS = 10000;
 const SQLITE_MAX_LOCK_RETRIES = 20;
 const SQLITE_RETRY_BASE_DELAY_MS = 50;
+const LINEAR_ID_WITH_DASH_RE = /^([A-Za-z]+)-(\d+)$/;
+const LINEAR_ID_NO_DASH_RE = /^([A-Za-z]+)(\d+)$/;
+const NUMERIC_ISSUE_ID_RE = /^\d+$/;
 
 function isDatabaseLockedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -983,12 +986,115 @@ export function isLocalId(id: string): boolean {
   return id.startsWith(LOCAL_ID_PREFIX);
 }
 
+function normalizeIssueNumber(raw: string): string {
+  const noLeadingZeros = raw.replace(/^0+(?=\d)/, "");
+  return noLeadingZeros.length > 0 ? noLeadingZeros : "0";
+}
+
+function inferTeamPrefixForIssueNumber(issueNumber: string): string {
+  const configuredTeamKey = getTeamKey()?.trim().toUpperCase();
+  const db = getDatabase();
+  const suffixNumber = parseInt(issueNumber, 10);
+
+  const exactMatchPrefixes = runWithBusyRetry(
+    () =>
+      db.query(
+        `
+        SELECT DISTINCT UPPER(substr(id, 1, instr(id, '-') - 1)) AS prefix
+        FROM issues
+        WHERE instr(id, '-') > 1
+          AND CAST(substr(id, instr(id, '-') + 1) AS INTEGER) = ?
+        UNION
+        SELECT DISTINCT UPPER(substr(linear_id, 1, instr(linear_id, '-') - 1)) AS prefix
+        FROM issue_id_map
+        WHERE instr(linear_id, '-') > 1
+          AND CAST(substr(linear_id, instr(linear_id, '-') + 1) AS INTEGER) = ?
+      `
+      ).all(suffixNumber, suffixNumber) as Array<{ prefix: string }>
+  );
+
+  const cachedPrefixes = runWithBusyRetry(
+    () =>
+      db.query(
+        `
+        SELECT DISTINCT UPPER(substr(id, 1, instr(id, '-') - 1)) AS prefix
+        FROM issues
+        WHERE instr(id, '-') > 1
+        UNION
+        SELECT DISTINCT UPPER(substr(linear_id, 1, instr(linear_id, '-') - 1)) AS prefix
+        FROM issue_id_map
+        WHERE instr(linear_id, '-') > 1
+      `
+      ).all() as Array<{ prefix: string }>
+  );
+
+  const candidates = new Set<string>();
+  if (configuredTeamKey) {
+    candidates.add(configuredTeamKey);
+  }
+  for (const row of exactMatchPrefixes) {
+    if (row.prefix) {
+      candidates.add(row.prefix);
+    }
+  }
+
+  if (!configuredTeamKey && candidates.size === 0) {
+    for (const row of cachedPrefixes) {
+      if (row.prefix) {
+        candidates.add(row.prefix);
+      }
+    }
+  }
+
+  if (candidates.size === 1) {
+    return [...candidates][0];
+  }
+
+  const choices = [...candidates].sort();
+  if (choices.length > 1) {
+    throw new Error(
+      `Issue reference '${issueNumber}' is ambiguous. Use one of: ${choices.map((p) => `${p}-${normalizeIssueNumber(issueNumber)}`).join(", ")}`
+    );
+  }
+
+  throw new Error(
+    `Cannot infer team prefix for '${issueNumber}'. Set LB_TEAM_KEY or provide a full issue ID like TEAM-${normalizeIssueNumber(issueNumber)}.`
+  );
+}
+
+function normalizeIssueInputId(id: string): string {
+  const trimmed = id.trim();
+  if (!trimmed) return trimmed;
+
+  if (isLocalId(trimmed)) {
+    return trimmed;
+  }
+
+  const dashedMatch = trimmed.match(LINEAR_ID_WITH_DASH_RE);
+  if (dashedMatch) {
+    return `${dashedMatch[1].toUpperCase()}-${normalizeIssueNumber(dashedMatch[2])}`;
+  }
+
+  const compactMatch = trimmed.match(LINEAR_ID_NO_DASH_RE);
+  if (compactMatch) {
+    return `${compactMatch[1].toUpperCase()}-${normalizeIssueNumber(compactMatch[2])}`;
+  }
+
+  if (NUMERIC_ISSUE_ID_RE.test(trimmed)) {
+    const prefix = inferTeamPrefixForIssueNumber(trimmed);
+    return `${prefix}-${normalizeIssueNumber(trimmed)}`;
+  }
+
+  return trimmed;
+}
+
 /**
  * Resolve input ID to Linear ID if mapping exists
  */
 export function resolveIssueId(id: string): string {
-  if (!isLocalId(id)) return id;
-  return getIssueIdMapping(id) || id;
+  const normalizedId = normalizeIssueInputId(id);
+  if (!isLocalId(normalizedId)) return normalizedId;
+  return getIssueIdMapping(normalizedId) || normalizedId;
 }
 
 /**
