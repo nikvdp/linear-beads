@@ -61,10 +61,16 @@ export function getDatabase(): Database {
     }
 
     db = new Database(dbPath);
-    db.exec("PRAGMA journal_mode = WAL");
-    db.exec("PRAGMA synchronous = NORMAL");
     db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     runWithBusyRetry(() => {
+      const journalModeRow = db!
+        .query("PRAGMA journal_mode")
+        .get() as { journal_mode?: string } | null;
+      const journalMode = journalModeRow?.journal_mode?.toLowerCase();
+      if (journalMode !== "wal") {
+        db!.exec("PRAGMA journal_mode = WAL");
+      }
+      db!.exec("PRAGMA synchronous = NORMAL");
       initSchema(db!);
     });
   }
@@ -1068,12 +1074,6 @@ export function getCachedViewer(): { id: string; email: string; name: string } |
  */
 export function closeDatabase(): void {
   if (db) {
-    // Checkpoint WAL before closing to ensure all writes are in main DB
-    try {
-      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    } catch {
-      // Ignore checkpoint errors on close
-    }
     db.close();
     db = null;
   }
