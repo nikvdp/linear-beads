@@ -750,6 +750,24 @@ describe("Local-only Mode", () => {
     return { stdout, stderr, exitCode };
   }
 
+  async function evalLocal(
+    script: string,
+    args: string[] = []
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const proc = Bun.spawn(["bun", "--eval", script, ...args], {
+      cwd: testDir,
+      env: { ...process.env, LB_TEAM_KEY: "" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    return { stdout, stderr, exitCode };
+  }
+
   // Helper to run lb and parse JSON output
   async function lbLocalJson<T>(...args: string[]): Promise<T> {
     const result = await lbLocal(...args, "--json");
@@ -1118,6 +1136,61 @@ describe("Local-only Mode", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(parent[0].id);
+    });
+  });
+
+  describe("outbox locking", () => {
+    test("should allow only one claimant per outbox item", async () => {
+      const queueScript = `
+        import { queueOutboxItem } from '${import.meta.dir}/../src/utils/database.ts';
+        console.log(queueOutboxItem('update', { issueId: 'LIN-TEST-LOCK', title: 'lock' }));
+      `;
+      const queued = await evalLocal(queueScript);
+      expect(queued.exitCode).toBe(0);
+      const itemId = queued.stdout.trim();
+      expect(itemId).toMatch(/^\\d+$/);
+
+      const claimScript = `
+        import { claimOutboxItem } from '${import.meta.dir}/../src/utils/database.ts';
+        const id = Number(process.argv[1]);
+        console.log(claimOutboxItem(id) ? 'claimed' : 'skipped');
+      `;
+
+      const procA = Bun.spawn(["bun", "--eval", claimScript, itemId], {
+        cwd: testDir,
+        env: { ...process.env, LB_TEAM_KEY: "" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const procB = Bun.spawn(["bun", "--eval", claimScript, itemId], {
+        cwd: testDir,
+        env: { ...process.env, LB_TEAM_KEY: "" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      const [outA, outB, codeA, codeB] = await Promise.all([
+        new Response(procA.stdout).text(),
+        new Response(procB.stdout).text(),
+        procA.exited,
+        procB.exited,
+      ]);
+
+      expect(codeA).toBe(0);
+      expect(codeB).toBe(0);
+
+      const results = [outA.trim(), outB.trim()].sort();
+      expect(results).toEqual(["claimed", "skipped"]);
+
+      await evalLocal(
+        `
+        import { removeOutboxItem, releaseOutboxItemClaim } from '${import.meta.dir}/../src/utils/database.ts';
+        const id = Number(process.argv[1]);
+        releaseOutboxItemClaim(id);
+        removeOutboxItem(id);
+      `,
+        [itemId]
+      );
     });
   });
 });
