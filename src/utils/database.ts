@@ -15,6 +15,7 @@ const LOCAL_ID_PREFIX = "LOCAL-";
 const SQLITE_BUSY_TIMEOUT_MS = 10000;
 const SQLITE_MAX_LOCK_RETRIES = 20;
 const SQLITE_RETRY_BASE_DELAY_MS = 50;
+const OUTBOX_CLAIM_TIMEOUT_MS = 60000;
 const LINEAR_ID_WITH_DASH_RE = /^([A-Za-z]+)-(\d+)$/;
 const LINEAR_ID_NO_DASH_RE = /^([A-Za-z]+)(\d+)$/;
 const NUMERIC_ISSUE_ID_RE = /^\d+$/;
@@ -227,6 +228,8 @@ function initSchema(db: Database): void {
       payload TEXT NOT NULL,
       local_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      processing INTEGER NOT NULL DEFAULT 0,
+      processing_started_at TEXT,
       retry_count INTEGER NOT NULL DEFAULT 0,
       last_error TEXT
     );
@@ -259,6 +262,20 @@ function initSchema(db: Database): void {
     `);
 
     db.exec("PRAGMA user_version = 2");
+  }
+
+  if (currentVersion < 3) {
+    const outboxCols = db.query("PRAGMA table_info(outbox)").all() as Array<{ name: string }>;
+
+    if (!outboxCols.some((c) => c.name === "processing")) {
+      db.exec("ALTER TABLE outbox ADD COLUMN processing INTEGER NOT NULL DEFAULT 0");
+    }
+
+    if (!outboxCols.some((c) => c.name === "processing_started_at")) {
+      db.exec("ALTER TABLE outbox ADD COLUMN processing_started_at TEXT");
+    }
+
+    db.exec("PRAGMA user_version = 3");
   }
 }
 
@@ -804,6 +821,52 @@ export function removeOutboxItem(id: number): void {
 }
 
 /**
+ * Attempt to claim an outbox item for processing.
+ * Returns true if claimed, false if another worker already holds the claim.
+ */
+export function claimOutboxItem(id: number): boolean {
+  const db = getDatabase();
+  const nowIso = new Date().toISOString();
+  const staleBeforeIso = new Date(Date.now() - OUTBOX_CLAIM_TIMEOUT_MS).toISOString();
+
+  return runWithBusyRetry(() => {
+    db.run(
+      `
+      UPDATE outbox
+      SET processing = 1, processing_started_at = ?
+      WHERE id = ?
+        AND (
+          processing = 0
+          OR processing_started_at IS NULL
+          OR processing_started_at < ?
+        )
+    `,
+      [nowIso, id, staleBeforeIso]
+    );
+
+    const result = db.query("SELECT changes() as count").get() as { count: number };
+    return result.count > 0;
+  });
+}
+
+/**
+ * Release processing claim without recording an error.
+ */
+export function releaseOutboxItemClaim(id: number): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run(
+      `
+      UPDATE outbox
+      SET processing = 0, processing_started_at = NULL
+      WHERE id = ?
+    `,
+      [id]
+    );
+  });
+}
+
+/**
  * Update outbox item with error
  */
 export function updateOutboxItemError(id: number, error: string): void {
@@ -812,7 +875,10 @@ export function updateOutboxItemError(id: number, error: string): void {
     db.run(
       `
     UPDATE outbox 
-    SET retry_count = retry_count + 1, last_error = ?
+    SET retry_count = retry_count + 1,
+        last_error = ?,
+        processing = 0,
+        processing_started_at = NULL
     WHERE id = ?
   `,
       [error, id]
