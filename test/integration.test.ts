@@ -18,6 +18,7 @@ import {
   afterEach,
   setDefaultTimeout,
 } from "bun:test";
+import { Database } from "bun:sqlite";
 import { GraphQLClient } from "graphql-request";
 import { mkdirSync, rmSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -737,6 +738,7 @@ describe("Local-only Mode", () => {
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const proc = Bun.spawn(["bun", "run", import.meta.dir + "/../src/cli.ts", ...args], {
       cwd: testDir,
+      env: { ...process.env, LB_TEAM_KEY: "" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -755,6 +757,37 @@ describe("Local-only Mode", () => {
       throw new Error(`lb ${args.join(" ")} failed: ${result.stderr}\n${result.stdout}`);
     }
     return JSON.parse(result.stdout);
+  }
+
+  function seedCachedIssue(id: string, title: string): void {
+    const db = new Database(join(testDir, ".lb", "cache.db"));
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS issues (
+        id TEXT PRIMARY KEY,
+        identifier TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL,
+        priority INTEGER NOT NULL,
+        issue_type TEXT,
+        sync_status TEXT NOT NULL DEFAULT 'synced',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        closed_at TEXT,
+        assignee TEXT,
+        linear_state_id TEXT,
+        cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+
+    const now = new Date().toISOString();
+    db.run(
+      `INSERT OR REPLACE INTO issues
+      (id, identifier, title, status, priority, sync_status, created_at, updated_at)
+      VALUES (?, ?, ?, 'open', 2, 'synced', ?, ?)`,
+      [id, id, title, now, now]
+    );
+    db.close();
   }
 
   beforeAll(() => {
@@ -912,6 +945,31 @@ describe("Local-only Mode", () => {
       );
 
       expect(result[0].children).toContain(child[0].id);
+    });
+
+    test("should resolve compact IDs without dash", async () => {
+      seedCachedIssue("LIN-4321", "Compact ID test");
+      const result = await lbLocalJson<Array<{ id: string; title: string }>>("show", "LIN4321");
+      expect(result[0].id).toBe("LIN-4321");
+      expect(result[0].title).toBe("Compact ID test");
+    });
+
+    test("should resolve numeric IDs when prefix is unambiguous", async () => {
+      seedCachedIssue("LIN-9876", "Numeric inference test");
+      const result = await lbLocalJson<Array<{ id: string; title: string }>>("show", "9876");
+      expect(result[0].id).toBe("LIN-9876");
+      expect(result[0].title).toBe("Numeric inference test");
+    });
+
+    test("should hard-fail with choices when numeric ID is ambiguous", async () => {
+      seedCachedIssue("AAA-7777", "Ambiguous A");
+      seedCachedIssue("BBB-7777", "Ambiguous B");
+
+      const result = await lbLocal("show", "7777");
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Issue reference '7777' is ambiguous");
+      expect(result.stderr).toContain("AAA-7777");
+      expect(result.stderr).toContain("BBB-7777");
     });
   });
 
