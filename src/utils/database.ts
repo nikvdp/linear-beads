@@ -811,6 +811,22 @@ export function getPendingOutboxItems(): OutboxItem[] {
 }
 
 /**
+ * Get current outbox queue stats, including number of claimed in-flight items.
+ */
+export function getOutboxStats(): { total: number; processing: number } {
+  const db = getDatabase();
+  const totalRow = db.query("SELECT COUNT(*) as count FROM outbox").get() as { count: number };
+  const processingRow = db
+    .query("SELECT COUNT(*) as count FROM outbox WHERE processing = 1")
+    .get() as { count: number };
+
+  return {
+    total: totalRow.count,
+    processing: processingRow.count,
+  };
+}
+
+/**
  * Remove item from outbox (after successful sync)
  */
 export function removeOutboxItem(id: number): void {
