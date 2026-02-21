@@ -1192,5 +1192,25 @@ describe("Local-only Mode", () => {
         [itemId]
       );
     });
+
+    test("should defer failed outbox items until next attempt window", async () => {
+      const script = `
+        import {
+          queueOutboxItem,
+          updateOutboxItemError,
+          getPendingOutboxItems,
+          removeOutboxItem,
+        } from '${import.meta.dir}/../src/utils/database.ts';
+        const id = queueOutboxItem('update', { issueId: 'LIN-TEST-BACKOFF', title: 'backoff' });
+        updateOutboxItemError(id, 'Rate limit exceeded retry-after":"3600"');
+        const pendingIds = getPendingOutboxItems().map((item) => item.id);
+        console.log(pendingIds.includes(id) ? 'pending' : 'deferred');
+        removeOutboxItem(id);
+      `;
+
+      const result = await evalLocal(script);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe("deferred");
+    });
   });
 });
