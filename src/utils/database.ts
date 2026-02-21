@@ -16,6 +16,8 @@ const SQLITE_BUSY_TIMEOUT_MS = 10000;
 const SQLITE_MAX_LOCK_RETRIES = 20;
 const SQLITE_RETRY_BASE_DELAY_MS = 50;
 const OUTBOX_CLAIM_TIMEOUT_MS = 60000;
+const OUTBOX_RETRY_BASE_DELAY_MS = 1000;
+const OUTBOX_RETRY_MAX_DELAY_MS = 300000;
 const LINEAR_ID_WITH_DASH_RE = /^([A-Za-z]+)-(\d+)$/;
 const LINEAR_ID_NO_DASH_RE = /^([A-Za-z]+)(\d+)$/;
 const NUMERIC_ISSUE_ID_RE = /^\d+$/;
@@ -228,6 +230,7 @@ function initSchema(db: Database): void {
       payload TEXT NOT NULL,
       local_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      next_attempt_at TEXT,
       processing INTEGER NOT NULL DEFAULT 0,
       processing_started_at TEXT,
       retry_count INTEGER NOT NULL DEFAULT 0,
@@ -276,6 +279,16 @@ function initSchema(db: Database): void {
     }
 
     db.exec("PRAGMA user_version = 3");
+  }
+
+  if (currentVersion < 4) {
+    const outboxCols = db.query("PRAGMA table_info(outbox)").all() as Array<{ name: string }>;
+
+    if (!outboxCols.some((c) => c.name === "next_attempt_at")) {
+      db.exec("ALTER TABLE outbox ADD COLUMN next_attempt_at TEXT");
+    }
+
+    db.exec("PRAGMA user_version = 4");
   }
 }
 
@@ -795,9 +808,16 @@ export function queueOutboxItem(
  */
 export function getPendingOutboxItems(): OutboxItem[] {
   const db = getDatabase();
-  const rows = db.query("SELECT * FROM outbox ORDER BY id ASC").all() as Array<
-    Record<string, unknown>
-  >;
+  const nowIso = new Date().toISOString();
+  const rows = db
+    .query(
+      `
+      SELECT * FROM outbox
+      WHERE next_attempt_at IS NULL OR next_attempt_at <= ?
+      ORDER BY id ASC
+    `
+    )
+    .all(nowIso) as Array<Record<string, unknown>>;
 
   return rows.map((row) => ({
     id: row.id as number,
@@ -849,7 +869,9 @@ export function claimOutboxItem(id: number): boolean {
     db.run(
       `
       UPDATE outbox
-      SET processing = 1, processing_started_at = ?
+      SET processing = 1,
+          processing_started_at = ?,
+          next_attempt_at = NULL
       WHERE id = ?
         AND (
           processing = 0
@@ -887,17 +909,40 @@ export function releaseOutboxItemClaim(id: number): void {
  */
 export function updateOutboxItemError(id: number, error: string): void {
   const db = getDatabase();
+  const row = runWithBusyRetry(
+    () => db.query("SELECT retry_count FROM outbox WHERE id = ?").get(id) as { retry_count: number } | null
+  );
+
+  if (!row) {
+    return;
+  }
+
+  const nextRetryCount = row.retry_count + 1;
+  const retryAfterSecondsMatch = error.match(/retry-?after"?\s*[:=]\s*"?(\d{1,6})/i);
+  const retryAfterSeconds = retryAfterSecondsMatch ? parseInt(retryAfterSecondsMatch[1], 10) : null;
+  const isRateLimited = error.toLowerCase().includes("rate limit");
+  const backoffMs = retryAfterSeconds
+    ? Math.min(retryAfterSeconds * 1000, OUTBOX_RETRY_MAX_DELAY_MS)
+    : isRateLimited
+      ? 60000
+      : Math.min(
+          OUTBOX_RETRY_BASE_DELAY_MS * 2 ** Math.min(nextRetryCount - 1, 8),
+          OUTBOX_RETRY_MAX_DELAY_MS
+        );
+  const nextAttemptAt = new Date(Date.now() + backoffMs).toISOString();
+
   runWithBusyRetry(() => {
     db.run(
       `
     UPDATE outbox 
-    SET retry_count = retry_count + 1,
+    SET retry_count = ?,
         last_error = ?,
+        next_attempt_at = ?,
         processing = 0,
         processing_started_at = NULL
     WHERE id = ?
   `,
-      [error, id]
+      [nextRetryCount, error, nextAttemptAt, id]
     );
   });
 }
