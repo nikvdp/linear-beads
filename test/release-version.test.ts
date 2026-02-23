@@ -3,6 +3,7 @@ import {
   formatReleaseVersion,
   parseReleaseTag,
   parseReleaseVersion,
+  normalizeReleaseTag,
   releaseTag,
 } from "../src/utils/release-version.js";
 
@@ -30,5 +31,11 @@ describe("release version helpers", () => {
 
   test("formats release tags", () => {
     expect(releaseTag(15)).toBe("v15");
+  });
+
+  test("normalizes legacy 0.0.x versions", () => {
+    expect(normalizeReleaseTag("0.0.14")).toBe("v14");
+    expect(normalizeReleaseTag("v0.0.14")).toBe("v14");
+    expect(normalizeReleaseTag("15")).toBe("v15");
   });
 });

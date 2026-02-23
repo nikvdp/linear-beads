@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { getBinaryVersion, runSelfUpdate } from "../src/utils/self-update.js";
 import packageJson from "../package.json";
+import { normalizeReleaseTag } from "../src/utils/release-version.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -94,8 +95,8 @@ describe("self-update", () => {
     });
 
     expect(result.alreadyUpdated).toBe(true);
-    expect(result.localVersion).toBe(`v${version}`);
-    expect(result.remoteVersion).toBe(`v${version}`);
+    expect(result.localVersion).toBe(normalizeReleaseTag(`v${version}`));
+    expect(result.remoteVersion).toBe(normalizeReleaseTag(`v${version}`));
     expect(result.updatedPath).toBeUndefined();
     expect(readFileSync(binaryPath, "utf8")).toBe("old-binary");
   });
@@ -119,7 +120,7 @@ describe("self-update", () => {
     expect(result.updatedPath).toBe(binaryPath);
     expect(result.remoteVersion).toBe(`v${version}`);
     expect(readFileSync(binaryPath, "utf8")).toBe(`replacement-${platformAssetName()}`);
-    expect(getBinaryVersion(binaryPath)).toBe(`v${version}`);
+    expect(getBinaryVersion(binaryPath)).toBe(normalizeReleaseTag(`v${version}`));
 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       return makeReleaseResponse(String(input), version, binaryBytes);
@@ -133,7 +134,11 @@ describe("self-update", () => {
     });
 
     expect(checkResult.alreadyUpdated).toBe(true);
-    expect(checkResult.localVersion).toBe(`v${version}`);
+    expect(checkResult.localVersion).toBe(normalizeReleaseTag(`v${version}`));
+  });
+
+  test("normalizes package.json version for user-facing binary version", () => {
+    expect(getBinaryVersion()).toBe(normalizeReleaseTag(`v${packageJson.version}`));
   });
 
   test("throws on checksum mismatch", async () => {
