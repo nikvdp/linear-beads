@@ -118,8 +118,8 @@ function main(): void {
   console.log("Release prepared.");
   console.log(`package.json: ${formatReleaseVersion(parsed)} -> ${nextVersion}`);
   console.log(`tag created: ${nextTag}`);
-  console.log(`Next: git push origin ${branch}`);
-  console.log(`Next: git push origin ${nextTag}`);
+  console.log(`  git push origin ${branch}`);
+  console.log(`  git push origin ${nextTag}`);
 }
 
 main();
