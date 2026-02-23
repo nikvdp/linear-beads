@@ -29,6 +29,7 @@ type GitHubRelease = {
 const GITHUB_REPO = "nikvdp/linear-beads";
 const GITHUB_API_BASE = `https://api.github.com/repos/${GITHUB_REPO}`;
 const GITHUB_RELEASES_PAGE = `https://github.com/${GITHUB_REPO}/releases`;
+const BUNFS_VIRTUAL_ROOT = "/$bunfs/root";
 
 const ASSET_BY_PLATFORM: Record<string, string> = {
   "linux-x64": "lb-linux-x64",
@@ -57,6 +58,10 @@ function normalizeTag(tag: string): string {
 }
 
 function isExecutablePath(candidate: string): boolean {
+  if (candidate === BUNFS_VIRTUAL_ROOT || candidate.startsWith(`${BUNFS_VIRTUAL_ROOT}/`)) {
+    return false;
+  }
+
   const fileName = basename(candidate);
   if (fileName === "bun" || fileName === "bun.exe") {
     return false;
@@ -153,6 +158,18 @@ export function resolveBinaryPath(target?: string): string {
   throw new Error(
     "Unable to resolve current lb binary path automatically. Re-run with --path /path/to/lb to target the executable explicitly."
   );
+}
+
+function ensureWritableBinaryDirectory(binaryPath: string): void {
+  const directory = dirname(binaryPath);
+  try {
+    accessSync(directory, constants.W_OK);
+  } catch {
+    throw new Error(
+      `Cannot update binary path ${binaryPath}. The directory is not writable: ${directory}. ` +
+        "Re-run with --path /path/to/lb and ensure the target path is writable."
+    );
+  }
 }
 
 function versionFilePath(binaryPath: string): string {
@@ -265,6 +282,7 @@ export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpd
   const release = await fetchJson<GitHubRelease>(getReleaseApiUrl(options.version));
   const remoteVersion = normalizeTag(release.tag_name);
   const binaryPath = resolveBinaryPath(options.path);
+  ensureWritableBinaryDirectory(binaryPath);
   const local = currentVersion(binaryPath);
   const localClean = normalizeTag(local);
   const binaryName = artifactNameForPlatform();
