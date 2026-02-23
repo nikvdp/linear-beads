@@ -1151,7 +1151,7 @@ describe("Local-only Mode", () => {
       const queued = await evalLocal(queueScript);
       expect(queued.exitCode).toBe(0);
       const itemId = queued.stdout.trim();
-      expect(itemId).toMatch(/^\\d+$/);
+      expect(itemId).toMatch(/^\d+$/);
 
       const claimScript = `
         import { claimOutboxItem } from '${import.meta.dir}/../src/utils/database.ts';
