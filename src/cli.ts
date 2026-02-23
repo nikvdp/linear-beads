@@ -20,17 +20,32 @@ import { syncCommand } from "./commands/sync.js";
 import { onboardCommand } from "./commands/onboard.js";
 import { migrateCommand } from "./commands/migrate.js";
 import { exportCommand } from "./commands/export.js";
+import { selfUpdateCommand } from "./commands/self-update.js";
 import { verifyConnection } from "./utils/linear.js";
 import { closeDatabase } from "./utils/database.js";
+import { getBinaryVersion, resolveBinaryPath } from "./utils/self-update.js";
 import { exportToJsonl } from "./utils/jsonl.js";
 import { processOutbox } from "./utils/background-sync-worker.js";
+
+function currentCliVersion(): string {
+  try {
+    return getBinaryVersion(resolveBinaryPath());
+  } catch {
+    const binaryPath = process.argv[1];
+    if (binaryPath) {
+      return getBinaryVersion(binaryPath);
+    }
+  }
+
+  return "v0.0.0";
+}
 
 const program = new Command();
 
 program
   .name("lb")
   .description("Linear-native beads-style issue tracker")
-  .version("0.1.0")
+  .version(currentCliVersion())
   .option("--worker", "Internal: run background sync worker")
   .option("--export-worker", "Internal: run JSONL export worker")
   .configureHelp({
@@ -76,6 +91,7 @@ if (process.argv.includes("--worker")) {
   program.addCommand(syncCommand);
   program.addCommand(importCommand);
   program.addCommand(exportCommand);
+  program.addCommand(selfUpdateCommand);
   program.addCommand(migrateCommand);
 
   // Add whoami command for testing connection
