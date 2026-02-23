@@ -877,11 +877,14 @@ describe("Local-only Mode", () => {
     test("should handle many concurrent creates without database lock errors", async () => {
       const total = 30;
       const jobs = Array.from({ length: total }, (_, idx) =>
-        Bun.spawn(["bun", "run", import.meta.dir + "/../src/cli.ts", "create", `Concurrent ${idx + 1}`], {
-          cwd: testDir,
-          stdout: "pipe",
-          stderr: "pipe",
-        })
+        Bun.spawn(
+          ["bun", "run", import.meta.dir + "/../src/cli.ts", "create", `Concurrent ${idx + 1}`],
+          {
+            cwd: testDir,
+            stdout: "pipe",
+            stderr: "pipe",
+          }
+        )
       );
 
       const results = await Promise.all(

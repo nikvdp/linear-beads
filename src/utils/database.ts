@@ -69,9 +69,9 @@ export function getDatabase(): Database {
     db = new Database(dbPath);
     db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     runWithBusyRetry(() => {
-      const journalModeRow = db!
-        .query("PRAGMA journal_mode")
-        .get() as { journal_mode?: string } | null;
+      const journalModeRow = db!.query("PRAGMA journal_mode").get() as {
+        journal_mode?: string;
+      } | null;
       const journalMode = journalModeRow?.journal_mode?.toLowerCase();
       if (journalMode !== "wal") {
         db!.exec("PRAGMA journal_mode = WAL");
@@ -910,7 +910,10 @@ export function releaseOutboxItemClaim(id: number): void {
 export function updateOutboxItemError(id: number, error: string): void {
   const db = getDatabase();
   const row = runWithBusyRetry(
-    () => db.query("SELECT retry_count FROM outbox WHERE id = ?").get(id) as { retry_count: number } | null
+    () =>
+      db.query("SELECT retry_count FROM outbox WHERE id = ?").get(id) as {
+        retry_count: number;
+      } | null
   );
 
   if (!row) {
@@ -1125,8 +1128,9 @@ function inferTeamPrefixForIssueNumber(issueNumber: string): string {
 
   const exactMatchPrefixes = runWithBusyRetry(
     () =>
-      db.query(
-        `
+      db
+        .query(
+          `
         SELECT DISTINCT UPPER(substr(id, 1, instr(id, '-') - 1)) AS prefix
         FROM issues
         WHERE instr(id, '-') > 1
@@ -1137,13 +1141,15 @@ function inferTeamPrefixForIssueNumber(issueNumber: string): string {
         WHERE instr(linear_id, '-') > 1
           AND CAST(substr(linear_id, instr(linear_id, '-') + 1) AS INTEGER) = ?
       `
-      ).all(suffixNumber, suffixNumber) as Array<{ prefix: string }>
+        )
+        .all(suffixNumber, suffixNumber) as Array<{ prefix: string }>
   );
 
   const cachedPrefixes = runWithBusyRetry(
     () =>
-      db.query(
-        `
+      db
+        .query(
+          `
         SELECT DISTINCT UPPER(substr(id, 1, instr(id, '-') - 1)) AS prefix
         FROM issues
         WHERE instr(id, '-') > 1
@@ -1152,7 +1158,8 @@ function inferTeamPrefixForIssueNumber(issueNumber: string): string {
         FROM issue_id_map
         WHERE instr(linear_id, '-') > 1
       `
-      ).all() as Array<{ prefix: string }>
+        )
+        .all() as Array<{ prefix: string }>
   );
 
   const candidates = new Set<string>();
@@ -1268,7 +1275,10 @@ export function replaceIssueId(localId: string, linearId: string): void {
     }
 
     db.run("UPDATE dependencies SET issue_id = ? WHERE issue_id = ?", [linearId, localId]);
-    db.run("UPDATE dependencies SET depends_on_id = ? WHERE depends_on_id = ?", [linearId, localId]);
+    db.run("UPDATE dependencies SET depends_on_id = ? WHERE depends_on_id = ?", [
+      linearId,
+      localId,
+    ]);
   });
 
   requestJsonlExport();
