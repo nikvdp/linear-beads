@@ -30,7 +30,7 @@ type GitHubRelease = {
 const GITHUB_REPO = "nikvdp/linear-beads";
 const GITHUB_API_BASE = `https://api.github.com/repos/${GITHUB_REPO}`;
 const GITHUB_RELEASES_PAGE = `https://github.com/${GITHUB_REPO}/releases`;
-const BUNFS_VIRTUAL_ROOT = "/$bunfs/root";
+const BUNFS_VIRTUAL_SEGMENT = "/$bunfs/";
 
 const ASSET_BY_PLATFORM: Record<string, string> = {
   "linux-x64": "lb-linux-x64",
@@ -58,8 +58,13 @@ function normalizeTag(tag: string): string {
   return tag.startsWith("v") ? tag : `v${tag}`;
 }
 
+function isBunVirtualPath(candidate: string): boolean {
+  const normalized = candidate.replaceAll("\\", "/");
+  return normalized.includes(BUNFS_VIRTUAL_SEGMENT);
+}
+
 function isExecutablePath(candidate: string): boolean {
-  if (candidate === BUNFS_VIRTUAL_ROOT || candidate.startsWith(`${BUNFS_VIRTUAL_ROOT}/`)) {
+  if (isBunVirtualPath(candidate)) {
     return false;
   }
 
@@ -80,6 +85,53 @@ function isExecutablePath(candidate: string): boolean {
   } catch {
     return false;
   }
+}
+
+function pathDirectories(): string[] {
+  const rawPath = process.env.PATH;
+  if (!rawPath) {
+    return [];
+  }
+  return rawPath.split(process.platform === "win32" ? ";" : ":").filter(Boolean);
+}
+
+function commandNameCandidates(commandName: string): string[] {
+  if (process.platform !== "win32") {
+    return [commandName];
+  }
+
+  const lower = commandName.toLowerCase();
+  if (lower.endsWith(".exe") || lower.endsWith(".cmd") || lower.endsWith(".bat")) {
+    return [commandName];
+  }
+
+  const pathext = (process.env.PATHEXT || ".EXE;.CMD;.BAT")
+    .split(";")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+
+  const candidates = [commandName];
+  for (const ext of pathext) {
+    candidates.push(`${commandName}${ext}`);
+  }
+
+  return candidates;
+}
+
+function findExecutableOnPath(commandName: string): string | undefined {
+  const directories = pathDirectories();
+  const names = commandNameCandidates(commandName);
+
+  for (const directory of directories) {
+    for (const name of names) {
+      const candidate = resolve(directory, name);
+      if (isExecutablePath(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return undefined;
 }
 
 function parseChecksumFile(text: string): Map<string, string> {
@@ -133,6 +185,11 @@ function artifactNameForPlatform(): string {
 export function resolveBinaryPath(target?: string): string {
   if (target) {
     const absolute = resolve(target);
+    if (isBunVirtualPath(absolute)) {
+      throw new Error(
+        `Cannot update Bun virtual path: ${absolute}. Re-run with --path /path/to/lb to target the installed executable.`
+      );
+    }
     try {
       accessSync(absolute, constants.F_OK);
       const stats = statSync(absolute);
@@ -154,6 +211,19 @@ export function resolveBinaryPath(target?: string): string {
       continue;
     }
     return candidate;
+  }
+
+  const fallbackCommands = new Set<string>();
+  if (process.argv0) {
+    fallbackCommands.add(basename(process.argv0));
+  }
+  fallbackCommands.add("lb");
+
+  for (const commandName of fallbackCommands) {
+    const candidate = findExecutableOnPath(commandName);
+    if (candidate) {
+      return candidate;
+    }
   }
 
   throw new Error(
@@ -283,7 +353,6 @@ export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpd
   const release = await fetchJson<GitHubRelease>(getReleaseApiUrl(options.version));
   const remoteVersion = normalizeReleaseTag(release.tag_name);
   const binaryPath = resolveBinaryPath(options.path);
-  ensureWritableBinaryDirectory(binaryPath);
   const local = normalizeReleaseTag(currentVersion(binaryPath));
   const localClean = normalizeTag(local);
   const binaryName = artifactNameForPlatform();
@@ -302,6 +371,8 @@ export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpd
       releaseUrl: releaseUrl(remoteVersion),
     };
   }
+
+  ensureWritableBinaryDirectory(binaryPath);
 
   const checksumAsset = release.assets.find((item) => item.name === "checksums.txt");
   const checksumText = checksumAsset ? await fetchText(checksumAsset.browser_download_url) : "";
