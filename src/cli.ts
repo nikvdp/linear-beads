@@ -23,14 +23,18 @@ import { exportCommand } from "./commands/export.js";
 import { selfUpdateCommand } from "./commands/self-update.js";
 import { verifyConnection } from "./utils/linear.js";
 import { closeDatabase } from "./utils/database.js";
-import { getBinaryVersion } from "./utils/self-update.js";
+import { getBinaryVersion, resolveBinaryPath } from "./utils/self-update.js";
 import { exportToJsonl } from "./utils/jsonl.js";
 import { processOutbox } from "./utils/background-sync-worker.js";
 
 function currentCliVersion(): string {
-  const binaryPath = process.argv[1];
-  if (binaryPath) {
-    return getBinaryVersion(binaryPath);
+  try {
+    return getBinaryVersion(resolveBinaryPath());
+  } catch {
+    const binaryPath = process.argv[1];
+    if (binaryPath) {
+      return getBinaryVersion(binaryPath);
+    }
   }
 
   return "v0.0.0";

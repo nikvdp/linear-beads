@@ -56,6 +56,26 @@ function normalizeTag(tag: string): string {
   return tag.startsWith("v") ? tag : `v${tag}`;
 }
 
+function isExecutablePath(candidate: string): boolean {
+  const fileName = basename(candidate);
+  if (fileName === "bun" || fileName === "bun.exe") {
+    return false;
+  }
+
+  // Avoid accidentally treating source files as the executable when running
+  // `bun run src/cli.ts` during development.
+  if (fileName.endsWith(".ts") || fileName.endsWith(".js") || fileName.endsWith(".mjs")) {
+    return false;
+  }
+
+  try {
+    const stats = statSync(candidate);
+    return stats.isFile();
+  } catch {
+    return false;
+  }
+}
+
 function parseChecksumFile(text: string): Map<string, string> {
   const checksums = new Map<string, string>();
   for (const line of text.split(/\r?\n/)) {
@@ -104,7 +124,7 @@ function artifactNameForPlatform(): string {
   return asset;
 }
 
-function resolveBinaryPath(target?: string): string {
+export function resolveBinaryPath(target?: string): string {
   if (target) {
     const absolute = resolve(target);
     try {
@@ -119,29 +139,15 @@ function resolveBinaryPath(target?: string): string {
     }
   }
 
-  const candidates = [process.argv[1], process.execPath]
+  const candidates = [process.argv0, process.argv[1], process.execPath]
     .filter((value): value is string => Boolean(value))
     .map((value) => resolve(value));
 
   for (const candidate of candidates) {
-    const fileName = basename(candidate);
-    if (fileName === "bun" || fileName === "bun.exe") {
+    if (!isExecutablePath(candidate)) {
       continue;
     }
-    if (fileName !== "lb" && fileName !== "lb.exe") {
-      continue;
-    }
-
-    try {
-      accessSync(candidate, constants.F_OK);
-      const stats = statSync(candidate);
-      if (!stats.isFile()) {
-        continue;
-      }
-      return candidate;
-    } catch {
-      continue;
-    }
+    return candidate;
   }
 
   throw new Error(
