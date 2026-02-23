@@ -7,8 +7,10 @@ import {
   chmodSync,
   constants,
   copyFileSync,
+  readFileSync,
   renameSync,
   statSync,
+  writeFileSync,
   unlinkSync,
 } from "fs";
 import { basename, dirname, resolve } from "path";
@@ -147,8 +149,33 @@ function resolveBinaryPath(target?: string): string {
   );
 }
 
-function currentVersion(): string {
-  return packageJson.version ? `v${packageJson.version}` : "unknown";
+function versionFilePath(binaryPath: string): string {
+  return `${binaryPath}.version`;
+}
+
+function readStoredVersion(binaryPath: string): string | undefined {
+  try {
+    const data = readFileSync(versionFilePath(binaryPath), "utf8").trim();
+    if (!data) {
+      return undefined;
+    }
+    return normalizeTag(data);
+  } catch {
+    return undefined;
+  }
+}
+
+function currentVersion(binaryPath: string): string {
+  return (
+    readStoredVersion(binaryPath) || (packageJson.version ? `v${packageJson.version}` : "unknown")
+  );
+}
+
+export function getBinaryVersion(binaryPath?: string): string {
+  if (!binaryPath) {
+    return packageJson.version ? `v${packageJson.version}` : "unknown";
+  }
+  return currentVersion(binaryPath);
 }
 
 function releaseUrl(version: string): string {
@@ -231,10 +258,9 @@ export type SelfUpdateOptions = {
 export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpdateResult> {
   const release = await fetchJson<GitHubRelease>(getReleaseApiUrl(options.version));
   const remoteVersion = normalizeTag(release.tag_name);
-  const local = currentVersion();
-  const localClean = normalizeTag(local);
-
   const binaryPath = resolveBinaryPath(options.path);
+  const local = currentVersion(binaryPath);
+  const localClean = normalizeTag(local);
   const binaryName = artifactNameForPlatform();
   const asset = release.assets.find((item) => item.name === binaryName);
 
@@ -274,6 +300,7 @@ export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpd
     await Bun.write(stagedPath, bytes);
     installDownloadedBinary(stagedPath, binaryPath);
     chmodSync(binaryPath, 0o755);
+    writeFileSync(versionFilePath(binaryPath), `${remoteVersion}\n`, "utf8");
   } finally {
     try {
       unlinkSync(stagedPath);

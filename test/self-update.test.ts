@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { createHash } from "crypto";
 import { tmpdir } from "os";
 import { join } from "path";
-import { runSelfUpdate } from "../src/utils/self-update.js";
+import { getBinaryVersion, runSelfUpdate } from "../src/utils/self-update.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -115,6 +115,21 @@ describe("self-update", () => {
     expect(result.updatedPath).toBe(binaryPath);
     expect(result.remoteVersion).toBe(`v${version}`);
     expect(readFileSync(binaryPath, "utf8")).toBe(`replacement-${platformAssetName()}`);
+    expect(getBinaryVersion(binaryPath)).toBe(`v${version}`);
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      return makeReleaseResponse(String(input), version, binaryBytes);
+    }) as typeof fetch;
+
+    const checkResult = await runSelfUpdate({
+      version: undefined,
+      force: false,
+      check: true,
+      path: binaryPath,
+    });
+
+    expect(checkResult.alreadyUpdated).toBe(true);
+    expect(checkResult.localVersion).toBe(`v${version}`);
   });
 
   test("throws on checksum mismatch", async () => {
