@@ -166,7 +166,12 @@ export const updateCommand = new Command("update")
         process.exit(1);
       }
 
-      if (Object.keys(updates).length === 0 && allDeps.length === 0 && !options.parent && !options.unparent) {
+      if (
+        Object.keys(updates).length === 0 &&
+        allDeps.length === 0 &&
+        !options.parent &&
+        !options.unparent
+      ) {
         outputError("No updates specified");
         process.exit(1);
       }
@@ -197,9 +202,9 @@ export const updateCommand = new Command("update")
         // Handle unparent
         if (options.unparent) {
           const db = getDatabase();
-          const parentDep = db.query(
-            "SELECT * FROM dependencies WHERE issue_id = ? AND type = 'parent-child'"
-          ).get(resolvedId) as { depends_on_id: string } | null;
+          const parentDep = db
+            .query("SELECT * FROM dependencies WHERE issue_id = ? AND type = 'parent-child'")
+            .get(resolvedId) as { depends_on_id: string } | null;
           if (parentDep) {
             deleteDependency(resolvedId, parentDep.depends_on_id);
           }
@@ -272,9 +277,9 @@ export const updateCommand = new Command("update")
             await updateIssueParent(resolvedId, null);
             // Also remove from local cache
             const db = getDatabase();
-            const parentDep = db.query(
-              "SELECT * FROM dependencies WHERE issue_id = ? AND type = 'parent-child'"
-            ).get(resolvedId) as { depends_on_id: string } | null;
+            const parentDep = db
+              .query("SELECT * FROM dependencies WHERE issue_id = ? AND type = 'parent-child'")
+              .get(resolvedId) as { depends_on_id: string } | null;
             if (parentDep) {
               deleteDependency(resolvedId, parentDep.depends_on_id);
             }
@@ -373,9 +378,9 @@ export const updateCommand = new Command("update")
 
           if (options.unparent) {
             const db = getDatabase();
-            const parentDep = db.query(
-              "SELECT * FROM dependencies WHERE issue_id = ? AND type = 'parent-child'"
-            ).get(resolvedId) as { depends_on_id: string } | null;
+            const parentDep = db
+              .query("SELECT * FROM dependencies WHERE issue_id = ? AND type = 'parent-child'")
+              .get(resolvedId) as { depends_on_id: string } | null;
             if (parentDep) {
               deleteDependency(resolvedId, parentDep.depends_on_id);
             }

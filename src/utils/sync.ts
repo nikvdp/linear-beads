@@ -9,6 +9,7 @@ import {
   incrementSyncRunCount,
   needsFullSync,
   getLastSync,
+  getOutboxStats,
 } from "./database.js";
 import {
   fetchIssues,
@@ -24,9 +25,45 @@ import { processOutboxQueue } from "./outbox-processor.js";
 /**
  * Process outbox queue - push pending mutations to Linear
  */
+const OUTBOX_INFLIGHT_WAIT_MS = 1200;
+const OUTBOX_INFLIGHT_POLL_MS = 100;
+
 export async function pushOutbox(teamId: string): Promise<{ success: number; failed: number }> {
-  const result = await processOutboxQueue(teamId);
-  return { success: result.success, failed: result.failed };
+  let success = 0;
+  let failed = 0;
+  let waitedMs = 0;
+
+  while (true) {
+    const result = await processOutboxQueue(teamId);
+    success += result.success;
+    failed += result.failed;
+
+    if (result.deferred === 0) {
+      break;
+    }
+
+    if (result.success > 0 || result.failed > 0) {
+      continue;
+    }
+
+    const stats = getOutboxStats();
+    if (stats.total === 0 || stats.processing === 0) {
+      break;
+    }
+
+    if (waitedMs >= OUTBOX_INFLIGHT_WAIT_MS) {
+      break;
+    }
+
+    await sleep(OUTBOX_INFLIGHT_POLL_MS);
+    waitedMs += OUTBOX_INFLIGHT_POLL_MS;
+  }
+
+  return { success, failed };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**

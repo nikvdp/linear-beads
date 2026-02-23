@@ -18,6 +18,7 @@ import {
   afterEach,
   setDefaultTimeout,
 } from "bun:test";
+import { Database } from "bun:sqlite";
 import { GraphQLClient } from "graphql-request";
 import { mkdirSync, rmSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -176,11 +177,13 @@ describe("lb CLI Integration Tests", () => {
         Array<{
           id: string;
           title: string;
+          sync_status: string;
         }>
       >("create", title, "-p", "1");
 
-      expect(result[0].id).toBe("pending");
+      expect(result[0].id).toMatch(/^LOCAL-\d+$/);
       expect(result[0].title).toBe(title);
+      expect(result[0].sync_status).toBe("pending");
 
       // Push it immediately so we can track it
       await lb("sync");
@@ -455,11 +458,15 @@ describe("lb CLI Integration Tests", () => {
     test("should queue and auto-sync in background", async () => {
       // Create without --sync flag (queues and spawns worker)
       const title = `${TEST_PREFIX} Background sync test`;
-      const createResult = await lbJson<Array<{ id: string; title: string }>>("create", title);
+      const createResult = await lbJson<Array<{ id: string; title: string; sync_status: string }>>(
+        "create",
+        title
+      );
 
-      // Should return immediately with pending ID
-      expect(createResult[0].id).toBe("pending");
+      // Should return immediately with local ID and pending sync status
+      expect(createResult[0].id).toMatch(/^LOCAL-\d+$/);
       expect(createResult[0].title).toBe(title);
+      expect(createResult[0].sync_status).toBe("pending");
 
       // Wait for worker to process queue (give it a few seconds)
       await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -731,6 +738,25 @@ describe("Local-only Mode", () => {
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const proc = Bun.spawn(["bun", "run", import.meta.dir + "/../src/cli.ts", ...args], {
       cwd: testDir,
+      env: { ...process.env, LB_TEAM_KEY: "" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    return { stdout, stderr, exitCode };
+  }
+
+  async function evalLocal(
+    script: string,
+    args: string[] = []
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const proc = Bun.spawn(["bun", "--eval", script, ...args], {
+      cwd: testDir,
+      env: { ...process.env, LB_TEAM_KEY: "" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -749,6 +775,37 @@ describe("Local-only Mode", () => {
       throw new Error(`lb ${args.join(" ")} failed: ${result.stderr}\n${result.stdout}`);
     }
     return JSON.parse(result.stdout);
+  }
+
+  function seedCachedIssue(id: string, title: string): void {
+    const db = new Database(join(testDir, ".lb", "cache.db"));
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS issues (
+        id TEXT PRIMARY KEY,
+        identifier TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL,
+        priority INTEGER NOT NULL,
+        issue_type TEXT,
+        sync_status TEXT NOT NULL DEFAULT 'synced',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        closed_at TEXT,
+        assignee TEXT,
+        linear_state_id TEXT,
+        cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+
+    const now = new Date().toISOString();
+    db.run(
+      `INSERT OR REPLACE INTO issues
+      (id, identifier, title, status, priority, sync_status, created_at, updated_at)
+      VALUES (?, ?, ?, 'open', 2, 'synced', ?, ?)`,
+      [id, id, title, now, now]
+    );
+    db.close();
   }
 
   beforeAll(() => {
@@ -816,6 +873,38 @@ describe("Local-only Mode", () => {
 
       expect(result[0].priority).toBe(0);
     });
+
+    test("should handle many concurrent creates without database lock errors", async () => {
+      const total = 30;
+      const jobs = Array.from({ length: total }, (_, idx) =>
+        Bun.spawn(
+          ["bun", "run", import.meta.dir + "/../src/cli.ts", "create", `Concurrent ${idx + 1}`],
+          {
+            cwd: testDir,
+            stdout: "pipe",
+            stderr: "pipe",
+          }
+        )
+      );
+
+      const results = await Promise.all(
+        jobs.map(async (proc) => {
+          const stdout = await new Response(proc.stdout).text();
+          const stderr = await new Response(proc.stderr).text();
+          const exitCode = await proc.exited;
+          return { stdout, stderr, exitCode };
+        })
+      );
+
+      for (const result of results) {
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr.toLowerCase()).not.toContain("database is locked");
+      }
+
+      const listed = await lbLocalJson<Array<{ title: string }>>("list", "--all");
+      const createdCount = listed.filter((issue) => issue.title.startsWith("Concurrent ")).length;
+      expect(createdCount).toBe(total);
+    });
   });
 
   describe("list", () => {
@@ -877,6 +966,31 @@ describe("Local-only Mode", () => {
       );
 
       expect(result[0].children).toContain(child[0].id);
+    });
+
+    test("should resolve compact IDs without dash", async () => {
+      seedCachedIssue("LIN-4321", "Compact ID test");
+      const result = await lbLocalJson<Array<{ id: string; title: string }>>("show", "LIN4321");
+      expect(result[0].id).toBe("LIN-4321");
+      expect(result[0].title).toBe("Compact ID test");
+    });
+
+    test("should resolve numeric IDs when prefix is unambiguous", async () => {
+      seedCachedIssue("LIN-9876", "Numeric inference test");
+      const result = await lbLocalJson<Array<{ id: string; title: string }>>("show", "9876");
+      expect(result[0].id).toBe("LIN-9876");
+      expect(result[0].title).toBe("Numeric inference test");
+    });
+
+    test("should hard-fail with choices when numeric ID is ambiguous", async () => {
+      seedCachedIssue("AAA-7777", "Ambiguous A");
+      seedCachedIssue("BBB-7777", "Ambiguous B");
+
+      const result = await lbLocal("show", "7777");
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Issue reference '7777' is ambiguous");
+      expect(result.stderr).toContain("AAA-7777");
+      expect(result.stderr).toContain("BBB-7777");
     });
   });
 
@@ -1025,6 +1139,81 @@ describe("Local-only Mode", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(parent[0].id);
+    });
+  });
+
+  describe("outbox locking", () => {
+    test("should allow only one claimant per outbox item", async () => {
+      const queueScript = `
+        import { queueOutboxItem } from '${import.meta.dir}/../src/utils/database.ts';
+        console.log(queueOutboxItem('update', { issueId: 'LIN-TEST-LOCK', title: 'lock' }));
+      `;
+      const queued = await evalLocal(queueScript);
+      expect(queued.exitCode).toBe(0);
+      const itemId = queued.stdout.trim();
+      expect(itemId).toMatch(/^\d+$/);
+
+      const claimScript = `
+        import { claimOutboxItem } from '${import.meta.dir}/../src/utils/database.ts';
+        const id = Number(process.argv[1]);
+        console.log(claimOutboxItem(id) ? 'claimed' : 'skipped');
+      `;
+
+      const procA = Bun.spawn(["bun", "--eval", claimScript, itemId], {
+        cwd: testDir,
+        env: { ...process.env, LB_TEAM_KEY: "" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const procB = Bun.spawn(["bun", "--eval", claimScript, itemId], {
+        cwd: testDir,
+        env: { ...process.env, LB_TEAM_KEY: "" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      const [outA, outB, codeA, codeB] = await Promise.all([
+        new Response(procA.stdout).text(),
+        new Response(procB.stdout).text(),
+        procA.exited,
+        procB.exited,
+      ]);
+
+      expect(codeA).toBe(0);
+      expect(codeB).toBe(0);
+
+      const results = [outA.trim(), outB.trim()].sort();
+      expect(results).toEqual(["claimed", "skipped"]);
+
+      await evalLocal(
+        `
+        import { removeOutboxItem, releaseOutboxItemClaim } from '${import.meta.dir}/../src/utils/database.ts';
+        const id = Number(process.argv[1]);
+        releaseOutboxItemClaim(id);
+        removeOutboxItem(id);
+      `,
+        [itemId]
+      );
+    });
+
+    test("should defer failed outbox items until next attempt window", async () => {
+      const script = `
+        import {
+          queueOutboxItem,
+          updateOutboxItemError,
+          getPendingOutboxItems,
+          removeOutboxItem,
+        } from '${import.meta.dir}/../src/utils/database.ts';
+        const id = queueOutboxItem('update', { issueId: 'LIN-TEST-BACKOFF', title: 'backoff' });
+        updateOutboxItemError(id, 'Rate limit exceeded retry-after":"3600"');
+        const pendingIds = getPendingOutboxItems().map((item) => item.id);
+        console.log(pendingIds.includes(id) ? 'pending' : 'deferred');
+        removeOutboxItem(id);
+      `;
+
+      const result = await evalLocal(script);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe("deferred");
     });
   });
 });

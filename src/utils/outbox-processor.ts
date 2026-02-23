@@ -6,6 +6,8 @@ import type { Issue, IssueType, OutboxItem, Priority } from "../types.js";
 import {
   getPendingOutboxItems,
   removeOutboxItem,
+  claimOutboxItem,
+  releaseOutboxItemClaim,
   updateOutboxItemError,
   getIssueIdMapping,
   setIssueIdMapping,
@@ -358,11 +360,18 @@ export async function processOutboxQueue(
       continue;
     }
 
-    if (!resolution.canProcess || !resolution.resolvedPayload) {
-      if (resolution.primaryId) {
-        addBlockedId(resolution.primaryId);
+    if (!claimOutboxItem(item.id)) {
+      deferred++;
+      continue;
+    }
+
+    const claimedResolution = resolveOutboxItem(item);
+    if (!claimedResolution.canProcess || !claimedResolution.resolvedPayload) {
+      releaseOutboxItemClaim(item.id);
+      if (claimedResolution.primaryId) {
+        addBlockedId(claimedResolution.primaryId);
       }
-      for (const id of resolution.referencedIds) {
+      for (const id of claimedResolution.referencedIds) {
         addBlockedId(id);
       }
       deferred++;
@@ -370,7 +379,7 @@ export async function processOutboxQueue(
     }
 
     try {
-      await processResolvedItem(item, resolution.resolvedPayload, teamId, propagateParent);
+      await processResolvedItem(item, claimedResolution.resolvedPayload, teamId, propagateParent);
       removeOutboxItem(item.id);
       success++;
     } catch (error) {

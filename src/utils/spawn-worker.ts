@@ -3,12 +3,14 @@
  */
 
 import { spawn } from "child_process";
-import { openSync, closeSync } from "fs";
+import { openSync, closeSync, statSync, unlinkSync } from "fs";
 import { join, dirname } from "path";
 import { isWorkerRunning, touchPidFile } from "./pid-manager.js";
 import { getDbPath } from "./config.js";
 import { queueOutboxItem } from "./database.js";
 import type { OutboxItem } from "../types.js";
+
+const SPAWN_LOCK_TTL_MS = 5000;
 
 /**
  * Get the command and args to run the worker
@@ -30,12 +32,52 @@ function getLogFilePath(): string {
   return join(dirname(getDbPath()), "sync.log");
 }
 
+function getSpawnLockPath(): string {
+  return join(dirname(getDbPath()), "sync.spawn.lock");
+}
+
+function withSpawnLock<T>(operation: () => T): T | null {
+  const lockPath = getSpawnLockPath();
+
+  try {
+    const stat = statSync(lockPath);
+    if (Date.now() - stat.mtimeMs > SPAWN_LOCK_TTL_MS) {
+      unlinkSync(lockPath);
+    }
+  } catch {
+    // No lock file
+  }
+
+  let lockFd: number;
+  try {
+    lockFd = openSync(lockPath, "wx");
+  } catch {
+    // Another process is spawning the worker right now.
+    return null;
+  }
+
+  try {
+    return operation();
+  } finally {
+    closeSync(lockFd);
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // If lock was already removed, ignore.
+    }
+  }
+}
+
 /**
  * Spawn background sync worker if needed
  * Returns true if spawned, false if already running
  */
 function spawnWorker(): boolean {
-  try {
+  const spawned = withSpawnLock(() => {
+    if (isWorkerRunning()) {
+      return false;
+    }
+
     const { cmd, args } = getWorkerCommand();
 
     // Log to file for debugging spawn failures
@@ -51,10 +93,13 @@ function spawnWorker(): boolean {
     closeSync(logFd);
 
     return true;
-  } catch (error) {
-    console.error("Warning: Failed to spawn background sync worker:", error);
+  });
+
+  if (spawned === null) {
     return false;
   }
+
+  return spawned;
 }
 
 /**
