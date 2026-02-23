@@ -1,0 +1,293 @@
+/**
+ * Self-update utility for lb.
+ */
+
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  copyFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+} from "fs";
+import { basename, dirname, resolve } from "path";
+import { tmpdir } from "os";
+import { createHash } from "crypto";
+import packageJson from "../../package.json";
+
+type GitHubRelease = {
+  tag_name: string;
+  assets: Array<{
+    name: string;
+    browser_download_url: string;
+  }>;
+};
+
+const GITHUB_REPO = "nikvdp/linear-beads";
+const GITHUB_API_BASE = `https://api.github.com/repos/${GITHUB_REPO}`;
+const GITHUB_RELEASES_PAGE = `https://github.com/${GITHUB_REPO}/releases`;
+
+const ASSET_BY_PLATFORM: Record<string, string> = {
+  "linux-x64": "lb-linux-x64",
+  "linux-arm64": "lb-linux-arm64",
+  "darwin-x64": "lb-darwin-x64",
+  "darwin-arm64": "lb-darwin-arm64",
+  "win32-x64": "lb-windows-x64.exe",
+};
+
+function githubHeaders(): HeadersInit {
+  const headers: HeadersInit = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "lb-self-update",
+  };
+
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  return headers;
+}
+
+function normalizeTag(tag: string): string {
+  return tag.startsWith("v") ? tag : `v${tag}`;
+}
+
+function parseChecksumFile(text: string): Map<string, string> {
+  const checksums = new Map<string, string>();
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(/^([a-f0-9]{64})\s+\*?(.*)$/i);
+    if (!match) continue;
+    checksums.set(match[2].trim(), match[1].toLowerCase());
+  }
+  return checksums;
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, { headers: githubHeaders() });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(
+      `GitHub API request failed (${response.status}): ${body || response.statusText}`
+    );
+  }
+  return (await response.json()) as T;
+}
+
+async function fetchText(url: string): Promise<string> {
+  const response = await fetch(url, { headers: githubHeaders() });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Failed to download file (${response.status}): ${body || response.statusText}`);
+  }
+  return response.text();
+}
+
+function getReleaseApiUrl(version?: string): string {
+  if (!version) {
+    return `${GITHUB_API_BASE}/releases/latest`;
+  }
+  return `${GITHUB_API_BASE}/releases/tags/${encodeURIComponent(normalizeTag(version))}`;
+}
+
+function artifactNameForPlatform(): string {
+  const key = `${process.platform}-${process.arch}`;
+  const asset = ASSET_BY_PLATFORM[key];
+  if (!asset) {
+    throw new Error(`Unsupported platform/arch: ${process.platform}/${process.arch}`);
+  }
+  return asset;
+}
+
+function resolveBinaryPath(target?: string): string {
+  if (target) {
+    const absolute = resolve(target);
+    try {
+      accessSync(absolute, constants.F_OK);
+      const stats = statSync(absolute);
+      if (!stats.isFile()) {
+        throw new Error(`Target is not a regular file: ${absolute}`);
+      }
+      return absolute;
+    } catch {
+      throw new Error(`Cannot access --path target binary: ${absolute}`);
+    }
+  }
+
+  const candidates = [process.argv[1], process.execPath]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => resolve(value));
+
+  for (const candidate of candidates) {
+    const fileName = basename(candidate);
+    if (fileName === "bun" || fileName === "bun.exe") {
+      continue;
+    }
+    if (fileName !== "lb" && fileName !== "lb.exe") {
+      continue;
+    }
+
+    try {
+      accessSync(candidate, constants.F_OK);
+      const stats = statSync(candidate);
+      if (!stats.isFile()) {
+        continue;
+      }
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+
+  throw new Error(
+    "Unable to resolve current lb binary path automatically. Re-run with --path /path/to/lb to target the executable explicitly."
+  );
+}
+
+function currentVersion(): string {
+  return packageJson.version ? `v${packageJson.version}` : "unknown";
+}
+
+function releaseUrl(version: string): string {
+  return `${GITHUB_RELEASES_PAGE}/tag/${version}`;
+}
+
+async function downloadReleaseBytes(url: string): Promise<Uint8Array> {
+  const response = await fetch(url, { headers: githubHeaders() });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(
+      `Failed to download release asset: ${response.status} ${body || response.statusText}`
+    );
+  }
+
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+function hasFile(path: string): boolean {
+  try {
+    accessSync(path, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function installDownloadedBinary(downloadPath: string, targetPath: string): void {
+  if (process.platform !== "win32") {
+    const backupPath = `${targetPath}.lb-update-backup`;
+    let hadBackup = false;
+
+    accessSync(dirname(targetPath), constants.W_OK);
+
+    if (hasFile(targetPath)) {
+      renameSync(targetPath, backupPath);
+      hadBackup = true;
+    }
+
+    try {
+      renameSync(downloadPath, targetPath);
+    } catch (error) {
+      if (hadBackup) {
+        renameSync(backupPath, targetPath);
+      }
+      throw error;
+    }
+
+    if (hadBackup) {
+      try {
+        unlinkSync(backupPath);
+      } catch {
+        // Ignore backup cleanup failures.
+      }
+    }
+
+    return;
+  }
+
+  // On Windows, in-place rename while running is unreliable. Copy is best-effort.
+  copyFileSync(downloadPath, targetPath);
+}
+
+export type SelfUpdateResult = {
+  localVersion: string;
+  remoteVersion: string;
+  alreadyUpdated: boolean;
+  binaryPath: string;
+  releaseUrl: string;
+  updatedPath?: string;
+};
+
+export type SelfUpdateOptions = {
+  version?: string;
+  check: boolean;
+  force: boolean;
+  path?: string;
+};
+
+export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpdateResult> {
+  const release = await fetchJson<GitHubRelease>(getReleaseApiUrl(options.version));
+  const remoteVersion = normalizeTag(release.tag_name);
+  const local = currentVersion();
+  const localClean = normalizeTag(local);
+
+  const binaryPath = resolveBinaryPath(options.path);
+  const binaryName = artifactNameForPlatform();
+  const asset = release.assets.find((item) => item.name === binaryName);
+
+  if (!asset) {
+    throw new Error(`No release asset found for your platform: ${binaryName}`);
+  }
+
+  if (options.check || (remoteVersion === localClean && !options.force)) {
+    return {
+      localVersion: local,
+      remoteVersion,
+      alreadyUpdated: remoteVersion === localClean,
+      binaryPath,
+      releaseUrl: releaseUrl(remoteVersion),
+    };
+  }
+
+  const checksumAsset = release.assets.find((item) => item.name === "checksums.txt");
+  const checksumText = checksumAsset ? await fetchText(checksumAsset.browser_download_url) : "";
+
+  const bytes = await downloadReleaseBytes(asset.browser_download_url);
+
+  if (checksumText) {
+    const expectedHash = parseChecksumFile(checksumText).get(binaryName);
+    if (!expectedHash) {
+      throw new Error(`Release checksums missing entry for ${binaryName}`);
+    }
+
+    const actualHash = createHash("sha256").update(bytes).digest("hex");
+    if (actualHash !== expectedHash.toLowerCase()) {
+      throw new Error(`Checksum mismatch for ${binaryName}`);
+    }
+  }
+
+  const stagedPath = `${tmpdir()}/${Date.now()}-${binaryName}`;
+  try {
+    await Bun.write(stagedPath, bytes);
+    installDownloadedBinary(stagedPath, binaryPath);
+    chmodSync(binaryPath, 0o755);
+  } finally {
+    try {
+      unlinkSync(stagedPath);
+    } catch {
+      // Ignore cleanup failures.
+    }
+  }
+
+  return {
+    localVersion: local,
+    remoteVersion,
+    alreadyUpdated: false,
+    binaryPath,
+    updatedPath: binaryPath,
+    releaseUrl: releaseUrl(remoteVersion),
+  };
+}

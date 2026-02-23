@@ -20,6 +20,7 @@ import { syncCommand } from "./commands/sync.js";
 import { onboardCommand } from "./commands/onboard.js";
 import { migrateCommand } from "./commands/migrate.js";
 import { exportCommand } from "./commands/export.js";
+import { selfUpdateCommand } from "./commands/self-update.js";
 import { verifyConnection } from "./utils/linear.js";
 import { closeDatabase } from "./utils/database.js";
 import { exportToJsonl } from "./utils/jsonl.js";
@@ -76,6 +77,7 @@ if (process.argv.includes("--worker")) {
   program.addCommand(syncCommand);
   program.addCommand(importCommand);
   program.addCommand(exportCommand);
+  program.addCommand(selfUpdateCommand);
   program.addCommand(migrateCommand);
 
   // Add whoami command for testing connection
