@@ -17,6 +17,7 @@ import { basename, dirname, resolve } from "path";
 import { tmpdir } from "os";
 import { createHash } from "crypto";
 import packageJson from "../../package.json";
+import { normalizeReleaseTag } from "./release-version";
 
 type GitHubRelease = {
   tag_name: string;
@@ -280,10 +281,10 @@ export type SelfUpdateOptions = {
 
 export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpdateResult> {
   const release = await fetchJson<GitHubRelease>(getReleaseApiUrl(options.version));
-  const remoteVersion = normalizeTag(release.tag_name);
+  const remoteVersion = normalizeReleaseTag(release.tag_name);
   const binaryPath = resolveBinaryPath(options.path);
   ensureWritableBinaryDirectory(binaryPath);
-  const local = currentVersion(binaryPath);
+  const local = normalizeReleaseTag(currentVersion(binaryPath));
   const localClean = normalizeTag(local);
   const binaryName = artifactNameForPlatform();
   const asset = release.assets.find((item) => item.name === binaryName);

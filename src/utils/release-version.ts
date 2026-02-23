@@ -44,6 +44,25 @@ export function parseReleaseTag(tag: string): number | undefined {
   return Number(match[1]);
 }
 
+export function normalizeReleaseTag(tag: string): string {
+  const normalized = normalizeReleaseInput(tag);
+  const legacyMatch = /^v0\.0\.(\d+)$/.exec(normalized);
+  if (legacyMatch) {
+    return `v${legacyMatch[1]}`;
+  }
+  return normalized;
+}
+
+export function normalizeReleaseInput(tag: string): string {
+  if (tag.startsWith("v")) {
+    return tag;
+  }
+  if (/^\d+$/.test(tag)) {
+    return `v${tag}`;
+  }
+  return tag.startsWith("v") ? tag : `v${tag}`;
+}
+
 export function releaseTag(patch: number): string {
   return `v${patch}`;
 }
