@@ -118,7 +118,7 @@ function getReleaseApiUrl(version?: string): string {
   if (!version) {
     return `${GITHUB_API_BASE}/releases/latest`;
   }
-  return `${GITHUB_API_BASE}/releases/tags/${encodeURIComponent(normalizeTag(version))}`;
+  return `${GITHUB_API_BASE}/releases/tags/${encodeURIComponent(normalizeReleaseTag(version))}`;
 }
 
 function artifactNameForPlatform(): string {
@@ -197,9 +197,9 @@ function currentVersion(binaryPath: string): string {
 
 export function getBinaryVersion(binaryPath?: string): string {
   if (!binaryPath) {
-    return packageJson.version ? `v${packageJson.version}` : "unknown";
+    return packageJson.version ? normalizeReleaseTag(`v${packageJson.version}`) : "v0.0.0";
   }
-  return currentVersion(binaryPath);
+  return normalizeReleaseTag(currentVersion(binaryPath));
 }
 
 function releaseUrl(version: string): string {
