@@ -4,6 +4,7 @@ import { createHash } from "crypto";
 import { tmpdir } from "os";
 import { join } from "path";
 import { getBinaryVersion, runSelfUpdate } from "../src/utils/self-update.js";
+import packageJson from "../package.json";
 
 const originalFetch = globalThis.fetch;
 
@@ -75,7 +76,10 @@ describe("self-update", () => {
 
   test("reports up to date when remote matches local", async () => {
     const assetName = platformAssetName();
-    const version = "0.1.0";
+    const version = packageJson.version?.replace(/^v/, "");
+    if (!version) {
+      throw new Error("package.json is missing a version");
+    }
     const binaryBytes = new TextEncoder().encode(`replacement-${assetName}`);
 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
