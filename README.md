@@ -94,6 +94,52 @@ In local-only mode:
 - All commands work from local SQLite only
 - Great for AI-only workflows or trying out lb without Linear
 
+## Local Agent Mail (Phase 1)
+
+`lb` now includes local-only agent identity and mailbox commands:
+
+- `lb agent register --handle <name>`
+- `lb agent whoami`
+- `lb agent list`
+- `lb mail send --from <handle> --to <handle[,handle]> --subject <s> --body <md>`
+- `lb mail inbox --agent <handle> [--unread]`
+- `lb mail read --agent <handle> --message <id>`
+- `lb mail ack --agent <handle> --message <id>`
+- `lb mail reply --agent <handle> --message <id> --body <md>`
+- `lb mail thread --thread <id>`
+
+### Local mail smoke runbook (in-repo)
+
+Use this exact sequence from the repo root to validate local mail behavior with the development CLI:
+
+```bash
+bun run src/cli.ts agent register --handle Alpha
+bun run src/cli.ts agent register --handle Beta
+
+bun run src/cli.ts mail send \
+  --from Alpha \
+  --to Beta \
+  --subject "Smoke thread" \
+  --body "Hello from Alpha" \
+  --json
+
+MID=$(bun run src/cli.ts mail inbox --agent Beta --unread --json | jq -r '.[0].message.id')
+bun run src/cli.ts mail read --agent Beta --message "$MID"
+bun run src/cli.ts mail reply --agent Beta --message "$MID" --body "Ack from Beta"
+
+RID=$(bun run src/cli.ts mail inbox --agent Alpha --json | jq -r '.[0].message.id')
+bun run src/cli.ts mail ack --agent Alpha --message "$RID"
+
+TID=$(bun run src/cli.ts mail inbox --agent Alpha --json | jq -r '.[0].message.thread_id')
+bun run src/cli.ts mail thread --thread "$TID" --json
+```
+
+### Current limitations
+
+- Phase 1 mail is local-first/local-only; no backend projection is required.
+- Message delivery/read/ack state is persisted in local SQLite (`.lb/cache.db`).
+- Remote synchronization of mail content is planned for the adapter/Linear phase.
+
 ## License
 
 MIT
