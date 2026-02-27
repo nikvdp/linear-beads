@@ -117,12 +117,61 @@ export interface LinearIssue {
  */
 export interface OutboxItem {
   id: number;
-  operation: "create" | "update" | "close" | "delete" | "create_relation" | "delete_relation";
+  operation:
+    | "create"
+    | "update"
+    | "close"
+    | "delete"
+    | "create_relation"
+    | "delete_relation"
+    | "mail_send"
+    | "mail_mark_read"
+    | "mail_ack"
+    | "mail_reply";
   payload: Record<string, unknown>;
   local_id?: string;
   created_at: string;
   retry_count: number;
   last_error?: string;
+}
+
+export type MailRecipientKind = "to" | "cc" | "bcc";
+
+export interface AgentIdentity {
+  id: string;
+  handle: string;
+  display_name?: string;
+  pubkey?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MailThread {
+  id: string;
+  work_item_ref?: string;
+  subject?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MailMessage {
+  id: string;
+  thread_id: string;
+  sender_agent_id: string;
+  subject: string;
+  body_md: string;
+  created_at: string;
+  reply_to_message_id?: string;
+  sync_status?: "synced" | "pending" | "failed";
+}
+
+export interface MailRecipient {
+  message_id: string;
+  recipient_agent_id: string;
+  kind: MailRecipientKind;
+  delivered_at?: string;
+  read_at?: string;
+  ack_at?: string;
 }
 
 /**

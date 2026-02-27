@@ -290,6 +290,81 @@ function initSchema(db: Database): void {
 
     db.exec("PRAGMA user_version = 4");
   }
+
+  if (currentVersion < 5) {
+    db.exec(`
+      -- Agent identity registry (local-first)
+      CREATE TABLE IF NOT EXISTS agents (
+        id TEXT PRIMARY KEY,
+        handle TEXT NOT NULL UNIQUE,
+        display_name TEXT,
+        pubkey TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_agents_handle ON agents(handle);
+
+      -- Mail thread registry
+      CREATE TABLE IF NOT EXISTS mail_threads (
+        id TEXT PRIMARY KEY,
+        work_item_ref TEXT,
+        subject TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_mail_threads_work_item_ref ON mail_threads(work_item_ref);
+
+      -- Mail messages (canonical local log)
+      CREATE TABLE IF NOT EXISTS mail_messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        sender_agent_id TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        body_md TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        reply_to_message_id TEXT,
+        sync_status TEXT NOT NULL DEFAULT 'synced'
+      );
+      CREATE INDEX IF NOT EXISTS idx_mail_messages_thread_created_at
+        ON mail_messages(thread_id, created_at);
+
+      -- Per-recipient mailbox/read/ack state
+      CREATE TABLE IF NOT EXISTS mail_recipients (
+        message_id TEXT NOT NULL,
+        recipient_agent_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        delivered_at TEXT,
+        read_at TEXT,
+        ack_at TEXT,
+        UNIQUE(message_id, recipient_agent_id, kind)
+      );
+      CREATE INDEX IF NOT EXISTS idx_mail_recipients_inbox
+        ON mail_recipients(recipient_agent_id, read_at, delivered_at);
+      CREATE INDEX IF NOT EXISTS idx_mail_recipients_message_id ON mail_recipients(message_id);
+
+      -- Optional separate outbox for future adapter-specific mail sync pipelines
+      CREATE TABLE IF NOT EXISTS mail_outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        operation TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        next_attempt_at TEXT,
+        processing INTEGER NOT NULL DEFAULT 0,
+        processing_started_at TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
+      );
+
+      -- Mail adapter sync cursor/checkpoint state
+      CREATE TABLE IF NOT EXISTS mail_sync_state (
+        backend TEXT PRIMARY KEY,
+        cursor TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
+    db.exec("PRAGMA user_version = 5");
+  }
 }
 
 /**
