@@ -185,7 +185,7 @@ export async function createImportedIssues(
   issues: BeadsIssue[],
   teamId: string
 ): Promise<Map<string, string>> {
-  const { createIssue, addComment, getViewer } = await import("./linear.js");
+  const { createIssue, addComment, getViewer } = await import("./issue-backend.js");
   const mapping = new Map<string, string>();
 
   // Get current user to assign all imported issues
@@ -231,7 +231,7 @@ export async function createImportedDependencies(
   mapping: Map<string, string>,
   teamId: string
 ): Promise<void> {
-  const { createRelation, updateIssueParent } = await import("./linear.js");
+  const { createRelation, updateIssueParent } = await import("./issue-backend.js");
   let created = 0;
   let parents = 0;
 

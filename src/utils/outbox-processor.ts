@@ -26,7 +26,7 @@ import {
   deleteIssue,
   createRelation,
   deleteRelation,
-} from "./linear.js";
+} from "./issue-backend.js";
 
 function resolveDepsString(
   deps: string,

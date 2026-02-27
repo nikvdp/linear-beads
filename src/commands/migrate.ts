@@ -4,10 +4,10 @@
 
 import { Command } from "commander";
 import { getGraphQLClient } from "../utils/graphql.js";
-import { getTeamId, fetchIssues } from "../utils/linear.js";
+import { getTeamId, fetchIssues } from "../utils/issue-backend.js";
 import { getRepoLabel, getRepoName, getRepoScope } from "../utils/config.js";
 import { output } from "../utils/output.js";
-import { ensureRepoProject } from "../utils/linear.js";
+import { ensureRepoProject } from "../utils/issue-backend.js";
 
 /**
  * Remove type labels from all issues in this repo

@@ -14,7 +14,7 @@ import {
   useLabelScope,
   useProjectScope,
 } from "../utils/config.js";
-import { getTeamId, ensureRepoLabel, ensureRepoProject } from "../utils/linear.js";
+import { getTeamId, ensureRepoLabel, ensureRepoProject } from "../utils/issue-backend.js";
 import { fullSync } from "../utils/sync.js";
 import { output } from "../utils/output.js";
 

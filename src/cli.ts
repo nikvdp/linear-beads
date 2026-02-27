@@ -23,7 +23,7 @@ import { exportCommand } from "./commands/export.js";
 import { selfUpdateCommand } from "./commands/self-update.js";
 import { agentCommand } from "./commands/agent.js";
 import { mailCommand } from "./commands/mail.js";
-import { verifyConnection } from "./utils/linear.js";
+import { verifyConnection } from "./utils/issue-backend.js";
 import { closeDatabase } from "./utils/database.js";
 import { getBinaryVersion, resolveBinaryPath } from "./utils/self-update.js";
 import { exportToJsonl } from "./utils/jsonl.js";

@@ -6,7 +6,7 @@ import { Command } from "commander";
 import { writeFileSync, mkdirSync, existsSync, chmodSync, readFileSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
 import { getGlobalConfigPath, getConfig } from "../utils/config.js";
-import { verifyConnection } from "../utils/linear.js";
+import { verifyConnection } from "../utils/issue-backend.js";
 import { output } from "../utils/output.js";
 
 export const authCommand = new Command("auth")

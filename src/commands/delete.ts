@@ -3,7 +3,7 @@
  */
 
 import { Command } from "commander";
-import { deleteIssue } from "../utils/linear.js";
+import { deleteIssue } from "../utils/issue-backend.js";
 import {
   deleteCachedIssue,
   getCachedIssue,

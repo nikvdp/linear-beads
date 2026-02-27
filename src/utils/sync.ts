@@ -16,7 +16,7 @@ import {
   fetchAllIssuesPaginated,
   fetchAllUpdatedIssues,
   getTeamId,
-} from "./linear.js";
+} from "./issue-backend.js";
 import { exportToJsonl } from "./jsonl.js";
 import { isWorkerRunning } from "./pid-manager.js";
 import { ensureOutboxProcessed } from "./spawn-worker.js";

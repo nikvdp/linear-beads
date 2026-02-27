@@ -6,7 +6,7 @@ import { Command } from "commander";
 import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { getDbPath } from "../utils/config.js";
-import { getTeamId } from "../utils/linear.js";
+import { getTeamId } from "../utils/issue-backend.js";
 import { output } from "../utils/output.js";
 import {
   parseBeadsJsonl,

@@ -167,6 +167,8 @@ export const DEFAULT_CONFIG: LoadedConfig = {
   cache_ttl_seconds: 120,
   local_only: false,
   repo_scope: "label", // Default to label for backward compatibility
+  issue_backend: "linear",
+  mail_backend: "local",
 };
 
 /**
@@ -356,6 +358,16 @@ export function useProjectScope(): boolean {
 export function useLabelScope(): boolean {
   const scope = getRepoScope();
   return scope === "label" || scope === "both";
+}
+
+export function getIssueBackendKind(): "linear" | "local" {
+  const value = getOption("issue_backend") as string | undefined;
+  return value === "local" ? "local" : "linear";
+}
+
+export function getMailBackendKind(): "linear" | "local" {
+  const value = getOption("mail_backend") as string | undefined;
+  return value === "linear" ? "linear" : "local";
 }
 
 /**

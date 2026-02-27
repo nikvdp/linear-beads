@@ -20,7 +20,7 @@ import {
   getViewer,
   getUserByEmail,
   createRelation,
-} from "../utils/linear.js";
+} from "../utils/issue-backend.js";
 import { formatIssueJson, formatIssueHuman, output } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Issue, IssueType } from "../types.js";

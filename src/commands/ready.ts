@@ -13,7 +13,7 @@ import {
   getDisplayId,
 } from "../utils/database.js";
 import { formatReadyJson, output } from "../utils/output.js";
-import { getViewer } from "../utils/linear.js";
+import { getViewer } from "../utils/issue-backend.js";
 import { isLocalOnly } from "../utils/config.js";
 
 export const readyCommand = new Command("ready")

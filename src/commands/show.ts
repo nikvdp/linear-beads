@@ -12,7 +12,7 @@ import {
   resolveIssueId,
   isLocalId,
 } from "../utils/database.js";
-import { fetchIssue } from "../utils/linear.js";
+import { fetchIssue } from "../utils/issue-backend.js";
 import { formatShowJson, formatIssueHuman, output, outputError } from "../utils/output.js";
 import { isLocalOnly } from "../utils/config.js";
 

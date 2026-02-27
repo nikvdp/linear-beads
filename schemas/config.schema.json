@@ -32,6 +32,18 @@
       "enum": ["label", "project", "both"],
       "default": "label",
       "description": "How to scope issues to this repo in Linear. 'label' uses repo:name labels (default, backward compatible). 'project' uses Linear Projects. 'both' uses both for filtering/assignment."
+    },
+    "issue_backend": {
+      "type": "string",
+      "enum": ["linear", "local"],
+      "default": "linear",
+      "description": "Issue backend adapter. 'linear' uses Linear GraphQL. 'local' keeps issue operations local-only."
+    },
+    "mail_backend": {
+      "type": "string",
+      "enum": ["local", "linear"],
+      "default": "local",
+      "description": "Mail backend adapter. 'local' keeps mail in local SQLite. 'linear' projects mail through Linear comments."
     }
   },
   "additionalProperties": false

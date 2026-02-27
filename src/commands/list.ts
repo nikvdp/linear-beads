@@ -12,7 +12,7 @@ import {
   getDisplayId,
 } from "../utils/database.js";
 import { formatIssuesListJson, formatIssuesListHuman, output } from "../utils/output.js";
-import { getViewer } from "../utils/linear.js";
+import { getViewer } from "../utils/issue-backend.js";
 import type { IssueStatus } from "../types.js";
 import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
 import { useTypes, isLocalOnly } from "../utils/config.js";

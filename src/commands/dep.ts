@@ -3,7 +3,7 @@
  */
 
 import { Command } from "commander";
-import { createRelation, deleteRelation, updateIssueParent } from "../utils/linear.js";
+import { createRelation, deleteRelation, updateIssueParent } from "../utils/issue-backend.js";
 import {
   getDependencies,
   getCachedIssue,

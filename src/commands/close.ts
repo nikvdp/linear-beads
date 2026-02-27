@@ -11,7 +11,7 @@ import {
   resolveIssueId,
   isLocalId,
 } from "../utils/database.js";
-import { closeIssue, getTeamId, fetchIssue } from "../utils/linear.js";
+import { closeIssue, getTeamId, fetchIssue } from "../utils/issue-backend.js";
 import { formatIssueJson, formatIssueHuman, output, outputError } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import { isLocalOnly } from "../utils/config.js";

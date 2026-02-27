@@ -30,4 +30,12 @@ export interface HttpsLbCliDevConfigSchemaJson {
    * How to scope issues to this repo in Linear. 'label' uses repo:name labels (default, backward compatible). 'project' uses Linear Projects. 'both' uses both for filtering/assignment.
    */
   repo_scope?: "label" | "project" | "both";
+  /**
+   * Issue backend adapter. 'linear' uses Linear GraphQL. 'local' keeps issue operations local-only.
+   */
+  issue_backend?: "linear" | "local";
+  /**
+   * Mail backend adapter. 'local' keeps mail in local SQLite. 'linear' projects mail through Linear comments.
+   */
+  mail_backend?: "local" | "linear";
 }
