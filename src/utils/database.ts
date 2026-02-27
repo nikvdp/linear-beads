@@ -8,7 +8,16 @@ import { existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { getDbPath, getTeamKey } from "./config.js";
 import { requestJsonlExport } from "./jsonl-scheduler.js";
-import type { Issue, Dependency, OutboxItem } from "../types.js";
+import type {
+  AgentIdentity,
+  Dependency,
+  Issue,
+  MailMessage,
+  MailRecipient,
+  MailRecipientKind,
+  MailThread,
+  OutboxItem,
+} from "../types.js";
 
 let db: Database | null = null;
 const LOCAL_ID_PREFIX = "LOCAL-";
@@ -21,6 +30,47 @@ const OUTBOX_RETRY_MAX_DELAY_MS = 300000;
 const LINEAR_ID_WITH_DASH_RE = /^([A-Za-z]+)-(\d+)$/;
 const LINEAR_ID_NO_DASH_RE = /^([A-Za-z]+)(\d+)$/;
 const NUMERIC_ISSUE_ID_RE = /^\d+$/;
+const MAIL_RECIPIENT_KINDS: readonly MailRecipientKind[] = ["to", "cc", "bcc"];
+const AGENT_ADJECTIVES = [
+  "Amber",
+  "Blue",
+  "Cinder",
+  "Crimson",
+  "Emerald",
+  "Golden",
+  "Indigo",
+  "Ivory",
+  "Jade",
+  "Nova",
+  "Onyx",
+  "Quartz",
+  "Ruby",
+  "Silver",
+  "Solar",
+  "Swift",
+  "Violet",
+  "Zen",
+];
+const AGENT_NOUNS = [
+  "Aster",
+  "Bridge",
+  "Castle",
+  "Comet",
+  "Delta",
+  "Falcon",
+  "Forest",
+  "Forge",
+  "Harbor",
+  "Lake",
+  "Meadow",
+  "River",
+  "Summit",
+  "Tower",
+  "Vale",
+  "Vertex",
+  "Willow",
+];
+const HANDLE_SANITIZE_RE = /[^a-zA-Z0-9_-]/g;
 
 function isDatabaseLockedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -1385,6 +1435,628 @@ export function getCachedViewer(): { id: string; email: string; name: string } |
   } catch {
     return null;
   }
+}
+
+function sanitizePreferredHandle(handle?: string): string | null {
+  if (!handle) return null;
+  const cleaned = handle.replace(HANDLE_SANITIZE_RE, "");
+  if (!cleaned) return null;
+  return cleaned.slice(0, 64);
+}
+
+function randomInt(maxExclusive: number): number {
+  return Math.floor(Math.random() * maxExclusive);
+}
+
+function randomHandleBase(): string {
+  const adjective = AGENT_ADJECTIVES[randomInt(AGENT_ADJECTIVES.length)];
+  const noun = AGENT_NOUNS[randomInt(AGENT_NOUNS.length)];
+  return `${adjective}${noun}`;
+}
+
+function handleExists(handle: string): boolean {
+  const db = getDatabase();
+  const row = runWithBusyRetry(
+    () => db.query("SELECT 1 as hit FROM agents WHERE handle = ? LIMIT 1").get(handle) as { hit: 1 } | null
+  );
+  return !!row;
+}
+
+function nextUniqueHandle(preferredHandle?: string): string {
+  const preferred = sanitizePreferredHandle(preferredHandle);
+  if (preferred && !handleExists(preferred)) {
+    return preferred;
+  }
+
+  // Try random adjective+noun first for readability.
+  for (let i = 0; i < 50; i++) {
+    const candidate = randomHandleBase();
+    if (!handleExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Fall back to deterministic numeric suffixes if random attempts collide.
+  const fallbackBase = preferred || randomHandleBase();
+  for (let suffix = 2; suffix < 10000; suffix++) {
+    const candidate = `${fallbackBase}${suffix}`;
+    if (!handleExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error("Unable to allocate unique agent handle");
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function toMailRecipientKind(raw: string): MailRecipientKind {
+  if ((MAIL_RECIPIENT_KINDS as readonly string[]).includes(raw)) {
+    return raw as MailRecipientKind;
+  }
+  throw new Error(`Invalid mail recipient kind: ${raw}`);
+}
+
+export function registerAgent(options: {
+  preferredHandle?: string;
+  displayName?: string;
+  pubkey?: string;
+} = {}): AgentIdentity {
+  const db = getDatabase();
+  const id = crypto.randomUUID();
+  const handle = nextUniqueHandle(options.preferredHandle);
+  const createdAt = nowIso();
+  const displayName = options.displayName?.trim() || null;
+  const pubkey = options.pubkey?.trim() || null;
+
+  runWithBusyRetry(() => {
+    db.run(
+      `
+      INSERT INTO agents (id, handle, display_name, pubkey, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      `,
+      [id, handle, displayName, pubkey, createdAt, createdAt]
+    );
+  });
+
+  return {
+    id,
+    handle,
+    display_name: displayName || undefined,
+    pubkey: pubkey || undefined,
+    created_at: createdAt,
+    updated_at: createdAt,
+  };
+}
+
+export function getAgentByHandle(handle: string): AgentIdentity | null {
+  const db = getDatabase();
+  const row = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT id, handle, display_name, pubkey, created_at, updated_at
+          FROM agents
+          WHERE handle = ?
+          LIMIT 1
+          `
+        )
+        .get(handle) as
+        | {
+            id: string;
+            handle: string;
+            display_name: string | null;
+            pubkey: string | null;
+            created_at: string;
+            updated_at: string;
+          }
+        | null
+  );
+
+  if (!row) return null;
+  return {
+    id: row.id,
+    handle: row.handle,
+    display_name: row.display_name || undefined,
+    pubkey: row.pubkey || undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+export function listAgents(): AgentIdentity[] {
+  const db = getDatabase();
+  const rows = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT id, handle, display_name, pubkey, created_at, updated_at
+          FROM agents
+          ORDER BY created_at ASC
+          `
+        )
+        .all() as Array<{
+        id: string;
+        handle: string;
+        display_name: string | null;
+        pubkey: string | null;
+        created_at: string;
+        updated_at: string;
+      }>
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    handle: row.handle,
+    display_name: row.display_name || undefined,
+    pubkey: row.pubkey || undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+}
+
+export function createThreadIfNeeded(input: {
+  threadId?: string;
+  subject?: string;
+  workItemRef?: string;
+}): MailThread {
+  const db = getDatabase();
+  const now = nowIso();
+  const subject = input.subject?.trim() || null;
+  const workItemRef = input.workItemRef?.trim() || null;
+  const threadId = (input.threadId?.trim() || crypto.randomUUID()).slice(0, 128);
+
+  runWithBusyRetry(() => {
+    db.run(
+      `
+      INSERT INTO mail_threads (id, work_item_ref, subject, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        work_item_ref = COALESCE(excluded.work_item_ref, mail_threads.work_item_ref),
+        subject = COALESCE(excluded.subject, mail_threads.subject),
+        updated_at = excluded.updated_at
+      `,
+      [threadId, workItemRef, subject, now, now]
+    );
+  });
+
+  const row = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT id, work_item_ref, subject, created_at, updated_at
+          FROM mail_threads
+          WHERE id = ?
+          `
+        )
+        .get(threadId) as {
+        id: string;
+        work_item_ref: string | null;
+        subject: string | null;
+        created_at: string;
+        updated_at: string;
+      }
+  );
+
+  return {
+    id: row.id,
+    work_item_ref: row.work_item_ref || undefined,
+    subject: row.subject || undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+export function addRecipients(
+  messageId: string,
+  recipients: Array<{ recipientAgentId: string; kind: MailRecipientKind }>
+): MailRecipient[] {
+  if (recipients.length === 0) return [];
+  const db = getDatabase();
+  const deliveredAt = nowIso();
+
+  runWithBusyRetry(() => {
+    const tx = db.transaction(() => {
+      for (const recipient of recipients) {
+        db.run(
+          `
+          INSERT INTO mail_recipients (message_id, recipient_agent_id, kind, delivered_at, read_at, ack_at)
+          VALUES (?, ?, ?, ?, NULL, NULL)
+          ON CONFLICT(message_id, recipient_agent_id, kind) DO UPDATE SET
+            delivered_at = COALESCE(mail_recipients.delivered_at, excluded.delivered_at)
+          `,
+          [messageId, recipient.recipientAgentId, recipient.kind, deliveredAt]
+        );
+      }
+    });
+    tx();
+  });
+
+  const placeholders = recipients.map(() => "(?, ?, ?)").join(",");
+  const params: string[] = [];
+  for (const recipient of recipients) {
+    params.push(messageId, recipient.recipientAgentId, recipient.kind);
+  }
+  const rows = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT message_id, recipient_agent_id, kind, delivered_at, read_at, ack_at
+          FROM mail_recipients
+          WHERE (message_id, recipient_agent_id, kind) IN (${placeholders})
+          `
+        )
+        .all(...params) as Array<{
+        message_id: string;
+        recipient_agent_id: string;
+        kind: string;
+        delivered_at: string | null;
+        read_at: string | null;
+        ack_at: string | null;
+      }>
+  );
+
+  return rows.map((row) => ({
+    message_id: row.message_id,
+    recipient_agent_id: row.recipient_agent_id,
+    kind: toMailRecipientKind(row.kind),
+    delivered_at: row.delivered_at || undefined,
+    read_at: row.read_at || undefined,
+    ack_at: row.ack_at || undefined,
+  }));
+}
+
+export function storeMessage(input: {
+  threadId?: string;
+  senderAgentId: string;
+  subject: string;
+  bodyMd: string;
+  replyToMessageId?: string;
+  syncStatus?: "synced" | "pending" | "failed";
+  workItemRef?: string;
+  recipients: Array<{ recipientAgentId: string; kind: MailRecipientKind }>;
+}): { thread: MailThread; message: MailMessage; recipients: MailRecipient[] } {
+  const db = getDatabase();
+  const now = nowIso();
+  const messageId = crypto.randomUUID();
+  const syncStatus = input.syncStatus || "synced";
+  const thread = createThreadIfNeeded({
+    threadId: input.threadId,
+    subject: input.subject,
+    workItemRef: input.workItemRef,
+  });
+
+  runWithBusyRetry(() => {
+    const tx = db.transaction(() => {
+      db.run(
+        `
+        INSERT INTO mail_messages
+          (id, thread_id, sender_agent_id, subject, body_md, created_at, reply_to_message_id, sync_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          messageId,
+          thread.id,
+          input.senderAgentId,
+          input.subject,
+          input.bodyMd,
+          now,
+          input.replyToMessageId || null,
+          syncStatus,
+        ]
+      );
+
+      for (const recipient of input.recipients) {
+        db.run(
+          `
+          INSERT INTO mail_recipients (message_id, recipient_agent_id, kind, delivered_at, read_at, ack_at)
+          VALUES (?, ?, ?, ?, NULL, NULL)
+          `,
+          [messageId, recipient.recipientAgentId, recipient.kind, now]
+        );
+      }
+    });
+    tx();
+  });
+
+  const recipients = input.recipients.map((recipient) => ({
+    message_id: messageId,
+    recipient_agent_id: recipient.recipientAgentId,
+    kind: recipient.kind,
+    delivered_at: now,
+    read_at: undefined,
+    ack_at: undefined,
+  }));
+
+  const message: MailMessage = {
+    id: messageId,
+    thread_id: thread.id,
+    sender_agent_id: input.senderAgentId,
+    subject: input.subject,
+    body_md: input.bodyMd,
+    created_at: now,
+    reply_to_message_id: input.replyToMessageId,
+    sync_status: syncStatus,
+  };
+
+  return { thread, message, recipients };
+}
+
+export function fetchInbox(
+  agentId: string,
+  options: { since?: string; unreadOnly?: boolean; limit?: number } = {}
+): Array<{
+  message: MailMessage;
+  recipient: MailRecipient;
+  thread?: MailThread;
+}> {
+  const db = getDatabase();
+  const limit = Math.max(1, Math.min(500, options.limit ?? 50));
+  const conditions = ["r.recipient_agent_id = ?"];
+  const params: Array<string | number> = [agentId];
+
+  if (options.unreadOnly) {
+    conditions.push("r.read_at IS NULL");
+  }
+  if (options.since) {
+    conditions.push("m.created_at > ?");
+    params.push(options.since);
+  }
+  params.push(limit);
+
+  const rows = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT
+            m.id AS message_id,
+            m.thread_id,
+            m.sender_agent_id,
+            m.subject,
+            m.body_md,
+            m.created_at AS message_created_at,
+            m.reply_to_message_id,
+            m.sync_status,
+            r.kind,
+            r.delivered_at,
+            r.read_at,
+            r.ack_at,
+            t.work_item_ref,
+            t.subject AS thread_subject,
+            t.created_at AS thread_created_at,
+            t.updated_at AS thread_updated_at
+          FROM mail_recipients r
+          JOIN mail_messages m ON m.id = r.message_id
+          LEFT JOIN mail_threads t ON t.id = m.thread_id
+          WHERE ${conditions.join(" AND ")}
+          ORDER BY m.created_at DESC
+          LIMIT ?
+          `
+        )
+        .all(...params) as Array<{
+        message_id: string;
+        thread_id: string;
+        sender_agent_id: string;
+        subject: string;
+        body_md: string;
+        message_created_at: string;
+        reply_to_message_id: string | null;
+        sync_status: "synced" | "pending" | "failed";
+        kind: string;
+        delivered_at: string | null;
+        read_at: string | null;
+        ack_at: string | null;
+        work_item_ref: string | null;
+        thread_subject: string | null;
+        thread_created_at: string | null;
+        thread_updated_at: string | null;
+      }>
+  );
+
+  return rows.map((row) => ({
+    message: {
+      id: row.message_id,
+      thread_id: row.thread_id,
+      sender_agent_id: row.sender_agent_id,
+      subject: row.subject,
+      body_md: row.body_md,
+      created_at: row.message_created_at,
+      reply_to_message_id: row.reply_to_message_id || undefined,
+      sync_status: row.sync_status,
+    },
+    recipient: {
+      message_id: row.message_id,
+      recipient_agent_id: agentId,
+      kind: toMailRecipientKind(row.kind),
+      delivered_at: row.delivered_at || undefined,
+      read_at: row.read_at || undefined,
+      ack_at: row.ack_at || undefined,
+    },
+    thread:
+      row.thread_created_at && row.thread_updated_at
+        ? {
+            id: row.thread_id,
+            work_item_ref: row.work_item_ref || undefined,
+            subject: row.thread_subject || undefined,
+            created_at: row.thread_created_at,
+            updated_at: row.thread_updated_at,
+          }
+        : undefined,
+  }));
+}
+
+export function markMessageRead(agentId: string, messageId: string): {
+  messageId: string;
+  readAt: string;
+  updated: number;
+} {
+  const db = getDatabase();
+  const readAt = nowIso();
+
+  const updated = runWithBusyRetry(() => {
+    db.run(
+      `
+      UPDATE mail_recipients
+      SET read_at = COALESCE(read_at, ?)
+      WHERE recipient_agent_id = ? AND message_id = ?
+      `,
+      [readAt, agentId, messageId]
+    );
+    const row = db.query("SELECT changes() as count").get() as { count: number };
+    return row.count;
+  });
+
+  return { messageId, readAt, updated };
+}
+
+export function ackMessage(agentId: string, messageId: string): {
+  messageId: string;
+  readAt: string;
+  ackAt: string;
+  updated: number;
+} {
+  const db = getDatabase();
+  const now = nowIso();
+
+  const updated = runWithBusyRetry(() => {
+    db.run(
+      `
+      UPDATE mail_recipients
+      SET
+        read_at = COALESCE(read_at, ?),
+        ack_at = COALESCE(ack_at, ?)
+      WHERE recipient_agent_id = ? AND message_id = ?
+      `,
+      [now, now, agentId, messageId]
+    );
+    const row = db.query("SELECT changes() as count").get() as { count: number };
+    return row.count;
+  });
+
+  return { messageId, readAt: now, ackAt: now, updated };
+}
+
+export function fetchThread(threadId: string): {
+  thread: MailThread | null;
+  messages: Array<MailMessage & { recipients: MailRecipient[] }>;
+} {
+  const db = getDatabase();
+  const threadRow = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT id, work_item_ref, subject, created_at, updated_at
+          FROM mail_threads
+          WHERE id = ?
+          `
+        )
+        .get(threadId) as
+        | {
+            id: string;
+            work_item_ref: string | null;
+            subject: string | null;
+            created_at: string;
+            updated_at: string;
+          }
+        | null
+  );
+
+  if (!threadRow) {
+    return { thread: null, messages: [] };
+  }
+
+  const messageRows = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT id, thread_id, sender_agent_id, subject, body_md, created_at, reply_to_message_id, sync_status
+          FROM mail_messages
+          WHERE thread_id = ?
+          ORDER BY created_at ASC
+          `
+        )
+        .all(threadId) as Array<{
+        id: string;
+        thread_id: string;
+        sender_agent_id: string;
+        subject: string;
+        body_md: string;
+        created_at: string;
+        reply_to_message_id: string | null;
+        sync_status: "synced" | "pending" | "failed";
+      }>
+  );
+
+  const recipientsByMessage = new Map<string, MailRecipient[]>();
+  const messageIds = messageRows.map((row) => row.id);
+  if (messageIds.length > 0) {
+    const placeholders = messageIds.map(() => "?").join(",");
+    const recipientRows = runWithBusyRetry(
+      () =>
+        db
+          .query(
+            `
+            SELECT message_id, recipient_agent_id, kind, delivered_at, read_at, ack_at
+            FROM mail_recipients
+            WHERE message_id IN (${placeholders})
+            ORDER BY message_id ASC
+            `
+          )
+          .all(...messageIds) as Array<{
+          message_id: string;
+          recipient_agent_id: string;
+          kind: string;
+          delivered_at: string | null;
+          read_at: string | null;
+          ack_at: string | null;
+        }>
+    );
+
+    for (const row of recipientRows) {
+      const recipients = recipientsByMessage.get(row.message_id) || [];
+      recipients.push({
+        message_id: row.message_id,
+        recipient_agent_id: row.recipient_agent_id,
+        kind: toMailRecipientKind(row.kind),
+        delivered_at: row.delivered_at || undefined,
+        read_at: row.read_at || undefined,
+        ack_at: row.ack_at || undefined,
+      });
+      recipientsByMessage.set(row.message_id, recipients);
+    }
+  }
+
+  const messages = messageRows.map((row) => ({
+    id: row.id,
+    thread_id: row.thread_id,
+    sender_agent_id: row.sender_agent_id,
+    subject: row.subject,
+    body_md: row.body_md,
+    created_at: row.created_at,
+    reply_to_message_id: row.reply_to_message_id || undefined,
+    sync_status: row.sync_status,
+    recipients: recipientsByMessage.get(row.id) || [],
+  }));
+
+  return {
+    thread: {
+      id: threadRow.id,
+      work_item_ref: threadRow.work_item_ref || undefined,
+      subject: threadRow.subject || undefined,
+      created_at: threadRow.created_at,
+      updated_at: threadRow.updated_at,
+    },
+    messages,
+  };
 }
 
 /**
