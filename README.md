@@ -78,6 +78,7 @@ lb migrate to-project --keep-label
 ### Rebinding Repo Name/Scope
 
 When renaming a repo or changing scope mode, use `lb rebind`.
+By default, source matching uses `both` scope so rebinding still works after partial migrations (for example project-only issues in a label-configured repo).
 
 ```bash
 # Preview move from current binding to new name (same scope)
@@ -94,6 +95,14 @@ lb rebind --from-scope project --to-name legacy-repo-name --to-scope label
 
 # Rare opt-out: update local config only, do not migrate issues
 lb rebind --to-name new-repo-name --to-scope project --config-only
+```
+
+### Repo Binding Smoke Test
+
+Run this end-to-end smoke script to validate init defaults plus migrate/rebind behavior against Linear:
+
+```bash
+bun run scripts/smoke-repo-binding.ts
 ```
 
 ## Offline & Local-Only Modes
