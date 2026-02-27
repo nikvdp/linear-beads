@@ -21,6 +21,8 @@ import { onboardCommand } from "./commands/onboard.js";
 import { migrateCommand } from "./commands/migrate.js";
 import { exportCommand } from "./commands/export.js";
 import { selfUpdateCommand } from "./commands/self-update.js";
+import { agentCommand } from "./commands/agent.js";
+import { mailCommand } from "./commands/mail.js";
 import { verifyConnection } from "./utils/linear.js";
 import { closeDatabase } from "./utils/database.js";
 import { getBinaryVersion, resolveBinaryPath } from "./utils/self-update.js";
@@ -93,6 +95,8 @@ if (process.argv.includes("--worker")) {
   program.addCommand(exportCommand);
   program.addCommand(selfUpdateCommand);
   program.addCommand(migrateCommand);
+  program.addCommand(agentCommand);
+  program.addCommand(mailCommand);
 
   // Add whoami command for testing connection
   program

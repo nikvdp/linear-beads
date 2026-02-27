@@ -1567,6 +1567,42 @@ export function getAgentByHandle(handle: string): AgentIdentity | null {
   };
 }
 
+export function getAgentById(id: string): AgentIdentity | null {
+  const db = getDatabase();
+  const row = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT id, handle, display_name, pubkey, created_at, updated_at
+          FROM agents
+          WHERE id = ?
+          LIMIT 1
+          `
+        )
+        .get(id) as
+        | {
+            id: string;
+            handle: string;
+            display_name: string | null;
+            pubkey: string | null;
+            created_at: string;
+            updated_at: string;
+          }
+        | null
+  );
+
+  if (!row) return null;
+  return {
+    id: row.id,
+    handle: row.handle,
+    display_name: row.display_name || undefined,
+    pubkey: row.pubkey || undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
 export function listAgents(): AgentIdentity[] {
   const db = getDatabase();
   const rows = runWithBusyRetry(
@@ -1597,6 +1633,26 @@ export function listAgents(): AgentIdentity[] {
     created_at: row.created_at,
     updated_at: row.updated_at,
   }));
+}
+
+export function setCurrentAgentHandle(handle: string): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('current_agent_handle', ?)", [
+      handle,
+    ]);
+  });
+}
+
+export function getCurrentAgentHandle(): string | null {
+  const db = getDatabase();
+  const row = runWithBusyRetry(
+    () =>
+      db.query("SELECT value FROM metadata WHERE key = 'current_agent_handle'").get() as
+        | { value: string }
+        | null
+  );
+  return row?.value || null;
 }
 
 export function createThreadIfNeeded(input: {
@@ -2056,6 +2112,75 @@ export function fetchThread(threadId: string): {
       updated_at: threadRow.updated_at,
     },
     messages,
+  };
+}
+
+export function getMailMessageById(messageId: string): (MailMessage & { recipients: MailRecipient[] }) | null {
+  const db = getDatabase();
+  const row = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT id, thread_id, sender_agent_id, subject, body_md, created_at, reply_to_message_id, sync_status
+          FROM mail_messages
+          WHERE id = ?
+          LIMIT 1
+          `
+        )
+        .get(messageId) as
+        | {
+            id: string;
+            thread_id: string;
+            sender_agent_id: string;
+            subject: string;
+            body_md: string;
+            created_at: string;
+            reply_to_message_id: string | null;
+            sync_status: "synced" | "pending" | "failed";
+          }
+        | null
+  );
+  if (!row) return null;
+
+  const recipients = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT message_id, recipient_agent_id, kind, delivered_at, read_at, ack_at
+          FROM mail_recipients
+          WHERE message_id = ?
+          ORDER BY kind, recipient_agent_id
+          `
+        )
+        .all(messageId) as Array<{
+        message_id: string;
+        recipient_agent_id: string;
+        kind: string;
+        delivered_at: string | null;
+        read_at: string | null;
+        ack_at: string | null;
+      }>
+  ).map((recipient) => ({
+    message_id: recipient.message_id,
+    recipient_agent_id: recipient.recipient_agent_id,
+    kind: toMailRecipientKind(recipient.kind),
+    delivered_at: recipient.delivered_at || undefined,
+    read_at: recipient.read_at || undefined,
+    ack_at: recipient.ack_at || undefined,
+  }));
+
+  return {
+    id: row.id,
+    thread_id: row.thread_id,
+    sender_agent_id: row.sender_agent_id,
+    subject: row.subject,
+    body_md: row.body_md,
+    created_at: row.created_at,
+    reply_to_message_id: row.reply_to_message_id || undefined,
+    sync_status: row.sync_status,
+    recipients,
   };
 }
 
