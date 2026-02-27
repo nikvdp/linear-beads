@@ -2184,6 +2184,18 @@ export function getMailMessageById(messageId: string): (MailMessage & { recipien
   };
 }
 
+export function updateMailMessageSyncStatus(
+  messageId: string,
+  syncStatus: "synced" | "pending" | "failed"
+): number {
+  const db = getDatabase();
+  return runWithBusyRetry(() => {
+    db.run("UPDATE mail_messages SET sync_status = ? WHERE id = ?", [syncStatus, messageId]);
+    const row = db.query("SELECT changes() as count").get() as { count: number };
+    return row.count;
+  });
+}
+
 /**
  * Close database, ensuring WAL is checkpointed
  */

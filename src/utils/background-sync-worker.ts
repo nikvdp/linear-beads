@@ -11,7 +11,8 @@ import { writePidFile, removePidFile, getPidFileMtime } from "./pid-manager.js";
 import { getPendingOutboxItems, needsFullSync, incrementSyncRunCount } from "./database.js";
 import { getTeamId, fetchIssues, fetchAllIssuesPaginated } from "./linear.js";
 import { exportToJsonl } from "./jsonl.js";
-import { processOutboxQueue } from "./outbox-processor.js";
+import { operationRequiresTeamId, processOutboxQueue } from "./outbox-processor.js";
+import { isLocalOnly } from "./config.js";
 
 const IDLE_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 500;
@@ -27,23 +28,29 @@ async function processOutbox(): Promise<void> {
   let lastPidMtime = getPidFileMtime();
   let teamId: string | null = null;
   let didWork = false;
+  let didRemoteWork = false;
 
   try {
     while (true) {
       const items = getPendingOutboxItems();
 
       if (items.length > 0) {
-        // Get team ID once (cache it)
-        if (!teamId) {
+        const needsTeamId = items.some((item) => operationRequiresTeamId(item.operation));
+
+        // Get team ID once (cache it) only if any queued operation needs remote backend calls
+        if (needsTeamId && !teamId) {
           teamId = await getTeamId();
         }
 
-        const result = await processOutboxQueue(teamId, { propagateParent: true });
+        const result = await processOutboxQueue(teamId || "", { propagateParent: true });
         if (result.success > 0 || result.failed > 0) {
           lastActivityTime = Date.now();
         }
         if (result.success > 0) {
           didWork = true;
+        }
+        if (result.remoteProcessed > 0) {
+          didRemoteWork = true;
         }
       } else {
         // No items - check if we should stay alive
@@ -66,7 +73,7 @@ async function processOutbox(): Promise<void> {
     }
 
     // Sync if we did work
-    if (didWork) {
+    if (didWork && didRemoteWork) {
       if (!teamId) {
         teamId = await getTeamId();
       }
@@ -75,7 +82,7 @@ async function processOutbox(): Promise<void> {
     }
 
     // Check if we should run a full sync (every 3rd run or >24h since last)
-    if (needsFullSync()) {
+    if (!isLocalOnly() && needsFullSync()) {
       if (!teamId) {
         teamId = await getTeamId();
       }

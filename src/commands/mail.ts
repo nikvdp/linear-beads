@@ -8,8 +8,10 @@ import {
   getMailMessageById,
   listAgents,
   markMessageRead,
+  queueOutboxItem,
   storeMessage,
 } from "../utils/database.js";
+import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import { output, outputError } from "../utils/output.js";
 import type { MailRecipientKind } from "../types.js";
 
@@ -93,7 +95,14 @@ mailCommand
       bodyMd: options.body,
       recipients,
       workItemRef: options.workItem,
+      syncStatus: "pending",
     });
+    queueOutboxItem("mail_send", {
+      messageId: result.message.id,
+      threadId: result.thread.id,
+      senderAgentId: sender.id,
+    });
+    ensureOutboxProcessed();
 
     if (options.json) {
       output(JSON.stringify(result, null, 2));
@@ -163,6 +172,11 @@ mailCommand
       outputError("Message not found for this recipient.");
       process.exit(1);
     }
+    queueOutboxItem("mail_mark_read", {
+      messageId: options.message,
+      recipientAgentId: agent.id,
+    });
+    ensureOutboxProcessed();
 
     if (options.json) {
       output(JSON.stringify(result, null, 2));
@@ -184,6 +198,11 @@ mailCommand
       outputError("Message not found for this recipient.");
       process.exit(1);
     }
+    queueOutboxItem("mail_ack", {
+      messageId: options.message,
+      recipientAgentId: agent.id,
+    });
+    ensureOutboxProcessed();
 
     if (options.json) {
       output(JSON.stringify(result, null, 2));
@@ -226,8 +245,16 @@ mailCommand
       subject,
       bodyMd: options.body,
       replyToMessageId: parent.id,
+      syncStatus: "pending",
       recipients: [...recipientIds].map((id) => ({ recipientAgentId: id, kind: "to" as const })),
     });
+    queueOutboxItem("mail_reply", {
+      messageId: result.message.id,
+      replyToMessageId: parent.id,
+      threadId: result.thread.id,
+      senderAgentId: sender.id,
+    });
+    ensureOutboxProcessed();
 
     if (options.json) {
       output(JSON.stringify(result, null, 2));

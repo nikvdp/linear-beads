@@ -16,6 +16,7 @@ import {
   getChildIds,
   getCachedIssue,
   isLocalId,
+  updateMailMessageSyncStatus,
 } from "./database.js";
 import {
   createIssue,
@@ -120,6 +121,14 @@ function resolveOutboxItem(item: OutboxItem): {
       resolveField("issueB");
       break;
     }
+    case "mail_send":
+    case "mail_mark_read":
+    case "mail_ack":
+    case "mail_reply": {
+      resolveField("messageId");
+      resolveField("replyToMessageId");
+      break;
+    }
   }
 
   if (unresolvedLocalIds.size > 0) {
@@ -180,7 +189,7 @@ async function processResolvedItem(
   payload: Record<string, unknown>,
   teamId: string,
   propagateParent: boolean
-): Promise<void> {
+): Promise<{ usedRemoteBackend: boolean }> {
   switch (item.operation) {
     case "create": {
       const localId = item.local_id;
@@ -225,7 +234,7 @@ async function processResolvedItem(
           }
         }
       }
-      break;
+      return { usedRemoteBackend: true };
     }
     case "update": {
       const updatePayload = payload as {
@@ -274,7 +283,7 @@ async function processResolvedItem(
           }
         }
       }
-      break;
+      return { usedRemoteBackend: true };
     }
     case "close": {
       const closePayload = payload as {
@@ -285,7 +294,7 @@ async function processResolvedItem(
       if (propagateParent) {
         await propagateStatusToParent(closePayload.issueId, "closed", teamId);
       }
-      break;
+      return { usedRemoteBackend: true };
     }
     case "create_relation": {
       const relPayload = payload as {
@@ -294,14 +303,14 @@ async function processResolvedItem(
         type: "blocks" | "related";
       };
       await createRelation(relPayload.issueId, relPayload.relatedIssueId, relPayload.type);
-      break;
+      return { usedRemoteBackend: true };
     }
     case "delete": {
       const deletePayload = payload as {
         issueId: string;
       };
       await deleteIssue(deletePayload.issueId);
-      break;
+      return { usedRemoteBackend: true };
     }
     case "delete_relation": {
       const relPayload = payload as {
@@ -309,21 +318,54 @@ async function processResolvedItem(
         issueB: string;
       };
       await deleteRelation(relPayload.issueA, relPayload.issueB);
-      break;
+      return { usedRemoteBackend: true };
+    }
+    case "mail_send":
+    case "mail_reply": {
+      const messageId = typeof payload.messageId === "string" ? payload.messageId : "";
+      if (!messageId) {
+        throw new Error(`Missing messageId for ${item.operation}`);
+      }
+      updateMailMessageSyncStatus(messageId, "synced");
+      return { usedRemoteBackend: false };
+    }
+    case "mail_mark_read":
+    case "mail_ack": {
+      // In phase 1 these are local-first only. We keep them in outbox so phase 2 can
+      // project to remote backends without changing write paths.
+      return { usedRemoteBackend: false };
     }
     default:
       throw new Error(`Unknown operation: ${item.operation}`);
   }
 }
 
+export function operationRequiresTeamId(operation: OutboxItem["operation"]): boolean {
+  switch (operation) {
+    case "create":
+    case "update":
+    case "close":
+    case "delete":
+    case "create_relation":
+    case "delete_relation":
+      return true;
+    case "mail_send":
+    case "mail_mark_read":
+    case "mail_ack":
+    case "mail_reply":
+      return false;
+  }
+}
+
 export async function processOutboxQueue(
   teamId: string,
   options: { propagateParent?: boolean } = {}
-): Promise<{ success: number; failed: number; deferred: number }> {
+): Promise<{ success: number; failed: number; deferred: number; remoteProcessed: number }> {
   const items = getPendingOutboxItems();
   let success = 0;
   let failed = 0;
   let deferred = 0;
+  let remoteProcessed = 0;
   const blockedIssueIds = new Set<string>();
   const propagateParent = options.propagateParent === true;
 
@@ -379,7 +421,13 @@ export async function processOutboxQueue(
     }
 
     try {
-      await processResolvedItem(item, claimedResolution.resolvedPayload, teamId, propagateParent);
+      if (operationRequiresTeamId(item.operation) && !teamId) {
+        throw new Error(`Missing teamId for operation: ${item.operation}`);
+      }
+      const result = await processResolvedItem(item, claimedResolution.resolvedPayload, teamId, propagateParent);
+      if (result.usedRemoteBackend) {
+        remoteProcessed++;
+      }
       removeOutboxItem(item.id);
       success++;
     } catch (error) {
@@ -389,5 +437,5 @@ export async function processOutboxQueue(
     }
   }
 
-  return { success, failed, deferred };
+  return { success, failed, deferred, remoteProcessed };
 }
