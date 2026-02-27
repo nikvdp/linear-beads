@@ -404,7 +404,7 @@ export const rebindCommand = new Command("rebind")
   .option("--from-name <name>", "Source repo binding name (default: current repo_name)")
   .option(
     "--from-scope <scope>",
-    "Source repo scope: label, project, or both (default: current scope)",
+    "Source repo scope: label, project, or both (default: both)",
     parseRepoScope
   )
   .option("--dry-run", "Show what would change without making updates")
@@ -418,7 +418,7 @@ export const rebindCommand = new Command("rebind")
       const currentScope = getRepoScope();
 
       const sourceName = options.fromName || currentRepoName;
-      const sourceScope = (options.fromScope as RepoScopeMode | undefined) || currentScope;
+      const sourceScope = (options.fromScope as RepoScopeMode | undefined) || "both";
       const targetName = options.toName as string;
       const targetScope = (options.toScope as RepoScopeMode | undefined) || currentScope;
       const keepLabel = options.keepLabel === true;
