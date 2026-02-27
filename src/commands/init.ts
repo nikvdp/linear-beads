@@ -11,8 +11,10 @@ import {
   getRepoLabel,
   getRepoName,
   getRepoScope,
+  hasRepoConfig,
   useLabelScope,
   useProjectScope,
+  writeRepoConfig,
 } from "../utils/config.js";
 import { getTeamId, ensureRepoLabel, ensureRepoProject } from "../utils/issue-backend.js";
 import { fullSync } from "../utils/sync.js";
@@ -28,8 +30,9 @@ export const initCommand = new Command("init")
       // Check if already initialized
       const dbPath = getDbPath();
       const lbDir = dirname(dbPath);
+      const isFirstInit = !existsSync(lbDir);
 
-      if (existsSync(lbDir) && !options.force) {
+      if (!isFirstInit && !options.force) {
         output("✓ Already initialized (.lb/ exists)");
         output("\nUse --force to re-initialize");
         return;
@@ -54,6 +57,18 @@ export const initCommand = new Command("init")
       // Create .lb/ directory
       if (!existsSync(lbDir)) {
         mkdirSync(lbDir, { recursive: true });
+      }
+
+      // First init in a repo defaults to project-based scoping.
+      // Existing repos keep their previous behavior unless explicitly migrated/rebound.
+      if (isFirstInit && !hasRepoConfig()) {
+        const repoName = getRepoName() || "unknown";
+        const configPath = writeRepoConfig({
+          repo_name: repoName,
+          repo_scope: "project",
+        });
+        output(`✓ Created repo config: ${configPath}`);
+        output("✓ Defaulted repo scoping to project for new repo");
       }
 
       // Ensure repo scoping (label/project/both) based on config

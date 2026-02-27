@@ -13,7 +13,7 @@
 import type { HttpsLbCliDevConfigSchemaJson as ConfigTypes } from "../types/config.generated.js";
 import { join, dirname } from "path";
 import { homedir } from "os";
-import { existsSync, readFileSync, statSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { parse as parseJsonc } from "jsonc-parser";
 
 // Combined config type that includes both schema-defined options and legacy env var options
@@ -88,6 +88,32 @@ export function getRepoConfigPath(): string {
   const gitRoot = findGitRootDir();
   const baseDir = gitRoot || process.cwd();
   return join(baseDir, ".lb", "config.jsonc");
+}
+
+/**
+ * Get the best existing repo config path for writes.
+ * Prefers existing .jsonc, falls back to existing .json, otherwise .jsonc.
+ */
+function getRepoConfigWritePath(): string {
+  const jsoncPath = getRepoConfigPath();
+  const jsonPath = jsoncPath.replace(/\.jsonc$/, ".json");
+
+  if (existsSync(jsoncPath)) {
+    return jsoncPath;
+  }
+  if (existsSync(jsonPath)) {
+    return jsonPath;
+  }
+  return jsoncPath;
+}
+
+/**
+ * Check whether repo config exists (.jsonc or .json).
+ */
+export function hasRepoConfig(): boolean {
+  const jsoncPath = getRepoConfigPath();
+  const jsonPath = jsoncPath.replace(/\.jsonc$/, ".json");
+  return existsSync(jsoncPath) || existsSync(jsonPath);
 }
 
 /**
@@ -289,6 +315,13 @@ export function getConfig(): LoadedConfig {
 }
 
 /**
+ * Reload config from disk/environment.
+ */
+export function reloadConfig(): void {
+  loadedConfig = loadConfig();
+}
+
+/**
  * Get API key (required for most operations)
  */
 export function getApiKey(): string {
@@ -377,4 +410,19 @@ export function getDbPath(): string {
   const gitRoot = findGitRootDir();
   const baseDir = gitRoot || process.cwd();
   return join(baseDir, ".lb", "cache.db");
+}
+
+/**
+ * Update per-repo config values and persist them to disk.
+ */
+export function writeRepoConfig(updates: Partial<LoadedConfig>): string {
+  const configPath = getRepoConfigWritePath();
+  const existing = loadConfigLayer(configPath) as Partial<LoadedConfig> | null;
+  const merged = deepMerge((existing || {}) as LoadedConfig, updates);
+
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, `${JSON.stringify(merged, null, 2)}\n`);
+  reloadConfig();
+
+  return configPath;
 }
