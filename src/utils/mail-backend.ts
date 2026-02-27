@@ -1,12 +1,24 @@
 import type { MailBackendAdapter } from "../adapters/types.js";
+import { linearMailBackend } from "../adapters/linear-mail.js";
 import { getMailBackendKind, isLocalOnly } from "./config.js";
 
 const localMailBackend: MailBackendAdapter = {
   name: "local",
-};
-
-const linearMailBackend: MailBackendAdapter = {
-  name: "linear",
+  async send(): Promise<void> {
+    // Local mode keeps mail canonical in SQLite only.
+  },
+  async reply(): Promise<void> {
+    // Local mode keeps mail canonical in SQLite only.
+  },
+  async markRead(): Promise<void> {
+    // Local mode keeps mail canonical in SQLite only.
+  },
+  async ack(): Promise<void> {
+    // Local mode keeps mail canonical in SQLite only.
+  },
+  async ingest(): Promise<{ inserted: number; skipped: number; cursor: string | null }> {
+    return { inserted: 0, skipped: 0, cursor: null };
+  },
 };
 
 export function getMailBackendAdapter(): MailBackendAdapter {

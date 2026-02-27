@@ -47,4 +47,9 @@ export interface IssueBackendAdapter {
 
 export interface MailBackendAdapter {
   readonly name: string;
+  send(messageId: string): Promise<void>;
+  reply(messageId: string): Promise<void>;
+  markRead(messageId: string, recipientAgentId: string): Promise<void>;
+  ack(messageId: string, recipientAgentId: string): Promise<void>;
+  ingest(options?: { limit?: number }): Promise<{ inserted: number; skipped: number; cursor: string | null }>;
 }

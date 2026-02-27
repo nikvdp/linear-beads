@@ -1708,6 +1708,40 @@ export function createThreadIfNeeded(input: {
   };
 }
 
+export function getMailThreadById(threadId: string): MailThread | null {
+  const db = getDatabase();
+  const row = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT id, work_item_ref, subject, created_at, updated_at
+          FROM mail_threads
+          WHERE id = ?
+          LIMIT 1
+          `
+        )
+        .get(threadId) as
+        | {
+            id: string;
+            work_item_ref: string | null;
+            subject: string | null;
+            created_at: string;
+            updated_at: string;
+          }
+        | null
+  );
+
+  if (!row) return null;
+  return {
+    id: row.id,
+    work_item_ref: row.work_item_ref || undefined,
+    subject: row.subject || undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
 export function addRecipients(
   messageId: string,
   recipients: Array<{ recipientAgentId: string; kind: MailRecipientKind }>
@@ -2194,6 +2228,117 @@ export function updateMailMessageSyncStatus(
     const row = db.query("SELECT changes() as count").get() as { count: number };
     return row.count;
   });
+}
+
+export function getMailSyncCursor(backend: string): string | null {
+  const db = getDatabase();
+  const row = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT cursor
+          FROM mail_sync_state
+          WHERE backend = ?
+          LIMIT 1
+          `
+        )
+        .get(backend) as { cursor: string | null } | null
+  );
+  return row?.cursor || null;
+}
+
+export function setMailSyncCursor(backend: string, cursor: string | null): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run(
+      `
+      INSERT INTO mail_sync_state (backend, cursor, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(backend) DO UPDATE SET
+        cursor = excluded.cursor,
+        updated_at = excluded.updated_at
+      `,
+      [backend, cursor, nowIso()]
+    );
+  });
+}
+
+export function upsertMailMessageFromSync(input: {
+  messageId: string;
+  threadId: string;
+  senderAgentId: string;
+  subject: string;
+  bodyMd: string;
+  createdAt: string;
+  replyToMessageId?: string;
+  workItemRef?: string;
+  recipients: Array<{ recipientAgentId: string; kind: MailRecipientKind }>;
+}): { inserted: boolean; message: MailMessage; recipients: MailRecipient[] } {
+  const db = getDatabase();
+
+  const existing = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT id
+          FROM mail_messages
+          WHERE id = ?
+          LIMIT 1
+          `
+        )
+        .get(input.messageId) as { id: string } | null
+  );
+
+  createThreadIfNeeded({
+    threadId: input.threadId,
+    subject: input.subject,
+    workItemRef: input.workItemRef,
+  });
+
+  runWithBusyRetry(() => {
+    db.run(
+      `
+      INSERT INTO mail_messages
+        (id, thread_id, sender_agent_id, subject, body_md, created_at, reply_to_message_id, sync_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'synced')
+      ON CONFLICT(id) DO UPDATE SET
+        thread_id = excluded.thread_id,
+        sender_agent_id = excluded.sender_agent_id,
+        subject = excluded.subject,
+        body_md = excluded.body_md,
+        created_at = excluded.created_at,
+        reply_to_message_id = excluded.reply_to_message_id,
+        sync_status = 'synced'
+      `,
+      [
+        input.messageId,
+        input.threadId,
+        input.senderAgentId,
+        input.subject,
+        input.bodyMd,
+        input.createdAt,
+        input.replyToMessageId || null,
+      ]
+    );
+  });
+
+  const recipients = addRecipients(input.messageId, input.recipients);
+  return {
+    inserted: !existing,
+    message: {
+      id: input.messageId,
+      thread_id: input.threadId,
+      sender_agent_id: input.senderAgentId,
+      subject: input.subject,
+      body_md: input.bodyMd,
+      created_at: input.createdAt,
+      reply_to_message_id: input.replyToMessageId,
+      sync_status: "synced",
+    },
+    recipients,
+  };
 }
 
 /**
