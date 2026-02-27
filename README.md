@@ -34,7 +34,13 @@ After onboarding, your agent uses `lb` instead of its built-in task tools. Issue
 
 ## Repo Scoping (Label vs Project)
 
-By default, `lb` uses Linear labels to scope issues to a repository (e.g., `repo:my-project`). You can also use Linear Projects for scoping, or both.
+`lb` supports three scoping modes:
+- `label`: scope by `repo:<name>` label
+- `project`: scope by Linear project name
+- `both`: include both scopes
+
+For backward compatibility, the runtime fallback remains `label` when no repo config exists.  
+For new repos, first-time `lb init` writes `.lb/config.jsonc` with `repo_scope: "project"` and the detected `repo_name`.
 
 ### Configuration
 
@@ -42,13 +48,13 @@ Add to `.lb/config.jsonc`:
 
 ```jsonc
 {
-  "repo_scope": "label"  // "label" (default), "project", or "both"
+  "repo_scope": "project"  // "label", "project", or "both"
 }
 ```
 
 | Mode | Description |
 |------|-------------|
-| `label` | Uses `repo:name` labels (default, backward compatible) |
+| `label` | Uses `repo:name` labels (backward-compatible fallback) |
 | `project` | Uses Linear Projects - one project per repo |
 | `both` | Uses both labels and projects |
 
