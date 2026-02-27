@@ -66,11 +66,34 @@ If you have existing label-scoped issues and want to switch to project scoping:
 # Preview what would change
 lb migrate to-project --dry-run
 
-# Migrate issues to project (keeps labels)
+# Migrate issues to project (default: move, removes old repo label)
 lb migrate to-project
 
-# Migrate and remove the repo label
-lb migrate to-project --remove-label
+# Keep the old repo label (copy behavior)
+lb migrate to-project --keep-label
+```
+
+`migrate to-project` always sources issues by `repo:<repo_name>` label and paginates through all matches.
+
+### Rebinding Repo Name/Scope
+
+When renaming a repo or changing scope mode, use `lb rebind`.
+
+```bash
+# Preview move from current binding to new name (same scope)
+lb rebind --to-name new-repo-name --dry-run
+
+# Move binding from current tuple to target project scope
+lb rebind --to-name new-repo-name --to-scope project
+
+# Move from label-only source to project-only target explicitly
+lb rebind --from-scope label --to-name new-repo-name --to-scope project
+
+# Move from project-only source to label-only target explicitly
+lb rebind --from-scope project --to-name legacy-repo-name --to-scope label
+
+# Rare opt-out: update local config only, do not migrate issues
+lb rebind --to-name new-repo-name --to-scope project --config-only
 ```
 
 ## Offline & Local-Only Modes
