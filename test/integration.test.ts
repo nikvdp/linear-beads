@@ -1216,4 +1216,113 @@ describe("Local-only Mode", () => {
       expect(result.stdout.trim()).toBe("deferred");
     });
   });
+
+  describe("mail storage primitives", () => {
+    test("should register agents with unique memorable handles", async () => {
+      const script = `
+        import { registerAgent } from '${import.meta.dir}/../src/utils/database.ts';
+        const a = registerAgent({ preferredHandle: 'MailAgent' });
+        const b = registerAgent({ preferredHandle: 'MailAgent' });
+        console.log(JSON.stringify({ a, b }));
+      `;
+      const result = await evalLocal(script);
+      expect(result.exitCode).toBe(0);
+      const parsed = JSON.parse(result.stdout) as {
+        a: { id: string; handle: string };
+        b: { id: string; handle: string };
+      };
+
+      expect(parsed.a.id).toBeDefined();
+      expect(parsed.b.id).toBeDefined();
+      expect(parsed.a.handle).toBe("MailAgent");
+      expect(parsed.b.handle).not.toBe("MailAgent");
+      expect(parsed.b.handle.length).toBeGreaterThan(0);
+    });
+
+    test("should store message, fetch inbox, and apply read/ack transitions", async () => {
+      const script = `
+        import {
+          registerAgent,
+          createThreadIfNeeded,
+          storeMessage,
+          addRecipients,
+          fetchInbox,
+          markMessageRead,
+          ackMessage,
+          fetchThread,
+          getAgentByHandle,
+          listAgents,
+        } from '${import.meta.dir}/../src/utils/database.ts';
+
+        const sender = registerAgent({ preferredHandle: 'Sender_' + Date.now() });
+        const recipient = registerAgent({ preferredHandle: 'Recipient_' + Date.now() });
+        const cc = registerAgent({ preferredHandle: 'Cc_' + Date.now() });
+
+        const thread = createThreadIfNeeded({
+          subject: 'Storage test thread',
+          workItemRef: 'local:MAIL-STORAGE-1',
+        });
+
+        const stored = storeMessage({
+          threadId: thread.id,
+          senderAgentId: sender.id,
+          subject: 'Hello recipient',
+          bodyMd: 'Body for inbox test',
+          recipients: [{ recipientAgentId: recipient.id, kind: 'to' }],
+        });
+
+        const extraRecipients = addRecipients(stored.message.id, [
+          { recipientAgentId: cc.id, kind: 'cc' },
+        ]);
+
+        const unreadBefore = fetchInbox(recipient.id, { unreadOnly: true, limit: 20 });
+        const mark = markMessageRead(recipient.id, stored.message.id);
+        const ack = ackMessage(recipient.id, stored.message.id);
+        const unreadAfter = fetchInbox(recipient.id, { unreadOnly: true, limit: 20 });
+        const threadView = fetchThread(stored.thread.id);
+        const byHandle = getAgentByHandle(sender.handle);
+        const allAgents = listAgents();
+
+        console.log(JSON.stringify({
+          sender,
+          recipient,
+          thread,
+          stored,
+          extraRecipients,
+          unreadBefore,
+          mark,
+          ack,
+          unreadAfter,
+          threadView,
+          byHandle,
+          allAgentsCount: allAgents.length
+        }));
+      `;
+
+      const result = await evalLocal(script);
+      expect(result.exitCode).toBe(0);
+      const parsed = JSON.parse(result.stdout) as {
+        stored: { message: { id: string; thread_id: string } };
+        extraRecipients: Array<{ kind: string }>;
+        unreadBefore: Array<{ message: { id: string } }>;
+        unreadAfter: Array<{ message: { id: string } }>;
+        mark: { updated: number };
+        ack: { updated: number };
+        threadView: { thread: { id: string }; messages: Array<{ id: string; recipients: unknown[] }> };
+        byHandle: { id: string; handle: string } | null;
+        allAgentsCount: number;
+      };
+
+      expect(parsed.stored.message.id).toBeDefined();
+      expect(parsed.extraRecipients.some((r) => r.kind === "cc")).toBe(true);
+      expect(parsed.unreadBefore.some((entry) => entry.message.id === parsed.stored.message.id)).toBe(true);
+      expect(parsed.mark.updated).toBeGreaterThanOrEqual(1);
+      expect(parsed.ack.updated).toBeGreaterThanOrEqual(1);
+      expect(parsed.unreadAfter.some((entry) => entry.message.id === parsed.stored.message.id)).toBe(false);
+      expect(parsed.threadView.thread.id).toBe(parsed.stored.message.thread_id);
+      expect(parsed.threadView.messages.some((m) => m.id === parsed.stored.message.id)).toBe(true);
+      expect(parsed.byHandle).not.toBeNull();
+      expect(parsed.allAgentsCount).toBeGreaterThan(0);
+    });
+  });
 });
