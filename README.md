@@ -94,9 +94,9 @@ In local-only mode:
 - All commands work from local SQLite only
 - Great for AI-only workflows or trying out lb without Linear
 
-## Local Agent Mail (Phase 1)
+## Agent Mail (Local + Linear)
 
-`lb` now includes local-only agent identity and mailbox commands:
+`lb` supports agent identity and mailbox commands with local-first persistence:
 
 - `lb agent register --handle <name>`
 - `lb agent whoami`
@@ -108,7 +108,62 @@ In local-only mode:
 - `lb mail reply --agent <handle> --message <id> --body <md>`
 - `lb mail thread --thread <id>`
 
-### Local mail smoke runbook (in-repo)
+### Mail backend config
+
+Add to `.lb/config.jsonc`:
+
+```jsonc
+{
+  "mail_backend": "local", // or "linear"
+  "issue_backend": "linear"
+}
+```
+
+- `mail_backend: "local"` keeps mail fully local in SQLite.
+- `mail_backend: "linear"` projects local mail operations to Linear comments and polls Linear comments back into local inbox.
+- `local_only: true` always forces local behavior, regardless of backend settings.
+
+### Adapter contract (mail)
+
+Mail backends implement a stable adapter contract so future backends do not require command rewrites:
+
+- `send(messageId)` / `reply(messageId)` for outbound projection
+- `markRead(messageId, recipientAgentId)` / `ack(messageId, recipientAgentId)` for receipt projection
+- `ingest({limit})` for pull-based inbox updates + cursor checkpointing
+
+`lb` remains local-first: writes always hit local SQLite first, then outbox/worker projection runs second.
+
+### Validation matrix
+
+The following phase-2 checks were run:
+
+1. Local-only mode regression:
+   - existing issue command tests pass
+   - local mail flow (`send/read/reply/ack/thread`) passes
+2. Linear mode projection:
+   - local mail send with `--work-item linear:<ISSUE-ID>` creates an envelope comment in Linear
+3. Linear mode ingest:
+   - remote envelope comment is pulled on `lb sync` and appears in local inbox
+4. Sync/issue regression:
+   - existing sync and issue integration tests still pass (known flaky sync test remains intermittently flaky and passes on immediate isolated rerun)
+
+### Smoke runbook (compiled binary)
+
+Use this from a repo that has `.lb/config.jsonc` and Linear auth configured:
+
+```bash
+lb agent register --handle Alpha
+lb agent register --handle Beta
+
+lb create "Mail smoke issue" --sync --json
+# then use returned issue id in --work-item linear:<ID>
+
+lb mail send --from Alpha --to Beta --subject "Smoke" --body "Hello" --work-item linear:LIN-123 --json
+lb sync --json
+lb mail inbox --agent Beta --json
+```
+
+### Smoke runbook (in-repo dev CLI)
 
 Use this exact sequence from the repo root to validate local mail behavior with the development CLI:
 
@@ -134,11 +189,7 @@ TID=$(bun run src/cli.ts mail inbox --agent Alpha --json | jq -r '.[0].message.t
 bun run src/cli.ts mail thread --thread "$TID" --json
 ```
 
-### Current limitations
-
-- Phase 1 mail is local-first/local-only; no backend projection is required.
-- Message delivery/read/ack state is persisted in local SQLite (`.lb/cache.db`).
-- Remote synchronization of mail content is planned for the adapter/Linear phase.
+For Linear projection/ingest validation, set `mail_backend: "linear"` and include a `--work-item linear:<ISSUE-ID>` when sending.
 
 ## License
 
