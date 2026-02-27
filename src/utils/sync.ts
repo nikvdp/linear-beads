@@ -21,6 +21,7 @@ import { exportToJsonl } from "./jsonl.js";
 import { isWorkerRunning } from "./pid-manager.js";
 import { ensureOutboxProcessed } from "./spawn-worker.js";
 import { processOutboxQueue } from "./outbox-processor.js";
+import { getMailBackendAdapter } from "./mail-backend.js";
 
 /**
  * Process outbox queue - push pending mutations to Linear
@@ -96,6 +97,7 @@ export async function incrementalSync(teamKey?: string): Promise<{
 
   // Pull only updated issues
   const issues = await fetchAllUpdatedIssues(teamId, since);
+  await getMailBackendAdapter().ingest();
 
   // Export to JSONL
   exportToJsonl();
@@ -126,6 +128,7 @@ export async function fullSyncPaginated(teamKey?: string): Promise<{
 
   // Pull all issues with pagination
   const { issues, pruned } = await fetchAllIssuesPaginated(teamId);
+  await getMailBackendAdapter().ingest();
 
   // Export to JSONL
   exportToJsonl();
@@ -155,6 +158,7 @@ export async function fullSync(teamKey?: string): Promise<{
 
   // Then pull
   const issues = await pullFromLinear(teamId);
+  await getMailBackendAdapter().ingest();
 
   // Export to JSONL
   exportToJsonl();

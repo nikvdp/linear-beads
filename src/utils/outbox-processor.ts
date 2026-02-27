@@ -27,6 +27,7 @@ import {
   createRelation,
   deleteRelation,
 } from "./issue-backend.js";
+import { getMailBackendAdapter } from "./mail-backend.js";
 
 function resolveDepsString(
   deps: string,
@@ -190,6 +191,8 @@ async function processResolvedItem(
   teamId: string,
   propagateParent: boolean
 ): Promise<{ usedRemoteBackend: boolean }> {
+  const mailBackend = getMailBackendAdapter();
+
   switch (item.operation) {
     case "create": {
       const localId = item.local_id;
@@ -326,14 +329,31 @@ async function processResolvedItem(
       if (!messageId) {
         throw new Error(`Missing messageId for ${item.operation}`);
       }
+
+      if (item.operation === "mail_send") {
+        await mailBackend.send(messageId);
+      } else {
+        await mailBackend.reply(messageId);
+      }
+
       updateMailMessageSyncStatus(messageId, "synced");
-      return { usedRemoteBackend: false };
+      return { usedRemoteBackend: mailBackend.name !== "local" };
     }
     case "mail_mark_read":
     case "mail_ack": {
-      // In phase 1 these are local-first only. We keep them in outbox so phase 2 can
-      // project to remote backends without changing write paths.
-      return { usedRemoteBackend: false };
+      const messageId = typeof payload.messageId === "string" ? payload.messageId : "";
+      const recipientAgentId =
+        typeof payload.recipientAgentId === "string" ? payload.recipientAgentId : "";
+      if (!messageId || !recipientAgentId) {
+        throw new Error(`Missing messageId or recipientAgentId for ${item.operation}`);
+      }
+
+      if (item.operation === "mail_mark_read") {
+        await mailBackend.markRead(messageId, recipientAgentId);
+      } else {
+        await mailBackend.ack(messageId, recipientAgentId);
+      }
+      return { usedRemoteBackend: mailBackend.name !== "local" };
     }
     default:
       throw new Error(`Unknown operation: ${item.operation}`);

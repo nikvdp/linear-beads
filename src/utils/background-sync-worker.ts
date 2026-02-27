@@ -13,6 +13,7 @@ import { getTeamId, fetchIssues, fetchAllIssuesPaginated } from "./issue-backend
 import { exportToJsonl } from "./jsonl.js";
 import { operationRequiresTeamId, processOutboxQueue } from "./outbox-processor.js";
 import { isLocalOnly } from "./config.js";
+import { getMailBackendAdapter } from "./mail-backend.js";
 
 const IDLE_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 500;
@@ -96,6 +97,14 @@ async function processOutbox(): Promise<void> {
       } catch (error) {
         console.error("Background full sync failed:", error);
         // Don't fail the worker, just log and continue
+      }
+    }
+
+    if (!isLocalOnly()) {
+      try {
+        await getMailBackendAdapter().ingest();
+      } catch (error) {
+        console.error("Background mail ingest failed:", error);
       }
     }
 
