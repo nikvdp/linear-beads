@@ -19,6 +19,7 @@ import { depCommand } from "./commands/dep.js";
 import { syncCommand } from "./commands/sync.js";
 import { onboardCommand } from "./commands/onboard.js";
 import { migrateCommand } from "./commands/migrate.js";
+import { rebindCommand } from "./commands/rebind.js";
 import { exportCommand } from "./commands/export.js";
 import { selfUpdateCommand } from "./commands/self-update.js";
 import { agentCommand } from "./commands/agent.js";
@@ -95,6 +96,7 @@ if (process.argv.includes("--worker")) {
   program.addCommand(exportCommand);
   program.addCommand(selfUpdateCommand);
   program.addCommand(migrateCommand);
+  program.addCommand(rebindCommand);
   program.addCommand(agentCommand);
   program.addCommand(mailCommand);
 
