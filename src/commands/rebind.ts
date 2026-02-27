@@ -408,7 +408,7 @@ export const rebindCommand = new Command("rebind")
     parseRepoScope
   )
   .option("--dry-run", "Show what would change without making updates")
-  .option("--config-only", "Only update local repo config (skip issue migration)")
+  .option("--config-only", "Only update local repo config (skip migrate-by-default issue moves)")
   .option("--keep-label", "Keep source repo label on migrated issues")
   .option("--keep-project", "Keep source project assignment on migrated issues")
   .option("--team <team>", "Team key (overrides config)")

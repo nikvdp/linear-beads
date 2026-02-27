@@ -298,7 +298,9 @@ export const migrateCommand = new Command("migrate")
   )
   .addCommand(
     new Command("to-project")
-      .description("Migrate label-scoped issues to project scoping")
+      .description(
+        "Migrate label-scoped issues to project scoping (move by default, removes old repo label)"
+      )
       .option("--dry-run", "Show what would be changed without making changes")
       .option("--keep-label", "Keep the repo:name label after adding to project")
       .option("--remove-label", "Deprecated alias for default behavior (remove the label)")
