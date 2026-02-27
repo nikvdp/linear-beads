@@ -215,6 +215,18 @@ type RepoLabelIssue = {
   labels: { nodes: Array<{ id: string; name: string }> };
 };
 
+type RepoLabelIssuesPage = {
+  team: {
+    issues: {
+      nodes: RepoLabelIssue[];
+      pageInfo: {
+        hasNextPage: boolean;
+        endCursor: string | null;
+      };
+    };
+  };
+};
+
 /**
  * Fetch all issues that currently have the repo label.
  * Uses pagination to avoid implicit result caps.
@@ -253,25 +265,15 @@ async function fetchIssuesByRepoLabel(teamId: string, repoLabel: string): Promis
   `;
 
   while (hasNextPage) {
-    const result = await client.request<{
-      team: {
-        issues: {
-          nodes: RepoLabelIssue[];
-          pageInfo: {
-            hasNextPage: boolean;
-            endCursor: string | null;
-          };
-        };
-      };
-    }>(query, {
+    const page: RepoLabelIssuesPage = await client.request(query, {
       teamId,
       labelName: repoLabel,
       after,
     });
 
-    issues.push(...result.team.issues.nodes);
-    hasNextPage = result.team.issues.pageInfo.hasNextPage;
-    after = result.team.issues.pageInfo.endCursor;
+    issues.push(...page.team.issues.nodes);
+    hasNextPage = page.team.issues.pageInfo.hasNextPage;
+    after = page.team.issues.pageInfo.endCursor;
   }
 
   return issues;
