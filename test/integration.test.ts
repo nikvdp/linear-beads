@@ -1325,4 +1325,94 @@ describe("Local-only Mode", () => {
       expect(parsed.allAgentsCount).toBeGreaterThan(0);
     });
   });
+
+  describe("mail CLI workflow", () => {
+    test("should support local A->B send/read/reply/ack flow", async () => {
+      const suffix = Date.now().toString();
+      const alpha = `Alpha${suffix}`;
+      const beta = `Beta${suffix}`;
+
+      const alphaReg = await lbLocalJson<{ handle: string }>("agent", "register", "--handle", alpha);
+      const betaReg = await lbLocalJson<{ handle: string }>("agent", "register", "--handle", beta);
+
+      expect(alphaReg.handle).toBe(alpha);
+      expect(betaReg.handle).toBe(beta);
+
+      const sent = await lbLocalJson<{
+        message: { id: string; thread_id: string };
+        recipients: Array<{ recipient_agent_id: string }>;
+      }>(
+        "mail",
+        "send",
+        "--from",
+        alpha,
+        "--to",
+        beta,
+        "--subject",
+        "Local mail workflow",
+        "--body",
+        "step-1"
+      );
+
+      expect(sent.message.id).toBeDefined();
+
+      const betaUnread = await lbLocalJson<Array<{ message: { id: string; subject: string } }>>(
+        "mail",
+        "inbox",
+        "--agent",
+        beta,
+        "--unread"
+      );
+      expect(betaUnread.some((entry) => entry.message.id === sent.message.id)).toBe(true);
+
+      const readResult = await lbLocalJson<{ updated: number }>(
+        "mail",
+        "read",
+        "--agent",
+        beta,
+        "--message",
+        sent.message.id
+      );
+      expect(readResult.updated).toBeGreaterThanOrEqual(1);
+
+      const replyResult = await lbLocalJson<{ message: { id: string; thread_id: string } }>(
+        "mail",
+        "reply",
+        "--agent",
+        beta,
+        "--message",
+        sent.message.id,
+        "--body",
+        "step-2"
+      );
+      expect(replyResult.message.thread_id).toBe(sent.message.thread_id);
+
+      const alphaInbox = await lbLocalJson<Array<{ message: { id: string } }>>(
+        "mail",
+        "inbox",
+        "--agent",
+        alpha
+      );
+      expect(alphaInbox.some((entry) => entry.message.id === replyResult.message.id)).toBe(true);
+
+      const alphaAck = await lbLocalJson<{ updated: number }>(
+        "mail",
+        "ack",
+        "--agent",
+        alpha,
+        "--message",
+        replyResult.message.id
+      );
+      expect(alphaAck.updated).toBeGreaterThanOrEqual(1);
+
+      const threadView = await lbLocalJson<{ messages: Array<{ id: string }> }>(
+        "mail",
+        "thread",
+        "--thread",
+        sent.message.thread_id
+      );
+      expect(threadView.messages.some((message) => message.id === sent.message.id)).toBe(true);
+      expect(threadView.messages.some((message) => message.id === replyResult.message.id)).toBe(true);
+    });
+  });
 });
