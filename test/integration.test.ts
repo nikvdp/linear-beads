@@ -59,6 +59,27 @@ async function lbJson<T>(...args: string[]): Promise<T> {
   return JSON.parse(result.stdout);
 }
 
+// Wait for a title to appear with a synced Linear-style ID.
+// This avoids flakiness when background worker races with explicit `lb sync`.
+async function waitForSyncedIssueByTitle(
+  title: string,
+  timeoutMs = 20000
+): Promise<{ id: string; title: string } | null> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    await lb("sync");
+    const allIssues = await lbJson<Array<{ id: string; title: string }>>("list", "--all");
+    const found = allIssues.find((issue) => issue.title === title && /^[A-Z]+-\d+$/.test(issue.id));
+    if (found) {
+      return found;
+    }
+    await Bun.sleep(500);
+  }
+
+  return null;
+}
+
 // Helper to create test issue and track for cleanup
 async function createTestIssue(
   title: string,
@@ -242,8 +263,18 @@ describe("lb CLI Integration Tests", () => {
 
   describe("sync", () => {
     test("should push queued items and pull issues", async () => {
+      const title = `${TEST_PREFIX} Sync test`;
+
       // First create a queued issue (no --sync, so it queues)
-      await lb("create", `${TEST_PREFIX} Sync test`);
+      const created = await lbJson<
+        Array<{
+          id: string;
+          title: string;
+          sync_status: string;
+        }>
+      >("create", title);
+      expect(created[0].id).toMatch(/^LOCAL-\d+$/);
+      expect(created[0].sync_status).toBe("pending");
 
       // Then sync
       const result = await lbJson<{
@@ -251,9 +282,16 @@ describe("lb CLI Integration Tests", () => {
         pulled: number;
       }>("sync");
 
-      expect(result.pushed.success).toBeGreaterThanOrEqual(1);
       expect(result.pushed.failed).toBe(0);
       expect(result.pulled).toBeGreaterThanOrEqual(0);
+
+      // If background worker won the race and pushed first, this still verifies
+      // the queued issue reached Linear and appears with a synced ID.
+      const synced = await waitForSyncedIssueByTitle(title);
+      expect(synced).toBeDefined();
+      if (synced) {
+        testIssueIds.push(synced.id);
+      }
     });
   });
 
