@@ -1172,6 +1172,59 @@ describe("Local-only Mode", () => {
       expect(show[0].blocks || []).not.toContain(b[0].id);
     });
 
+    test("should treat related edges as idempotent (same and reverse add)", async () => {
+      const a = await lbLocalJson<Array<{ id: string }>>("create", "Related A");
+      const b = await lbLocalJson<Array<{ id: string }>>("create", "Related B");
+
+      const first = await lbLocal("dep", "add", a[0].id, "--related", b[0].id);
+      const second = await lbLocal("dep", "add", a[0].id, "--related", b[0].id);
+      const reverse = await lbLocal("dep", "add", b[0].id, "--related", a[0].id);
+
+      expect(first.exitCode).toBe(0);
+      expect(second.exitCode).toBe(0);
+      expect(reverse.exitCode).toBe(0);
+      expect(second.stdout).toContain("Already related");
+      expect(reverse.stdout).toContain("Already related");
+
+      const showA = await lbLocalJson<Array<{ related?: string[] }>>("show", a[0].id);
+      const showB = await lbLocalJson<Array<{ related?: string[] }>>("show", b[0].id);
+
+      expect(showA[0].related).toEqual([b[0].id]);
+      expect(showB[0].related).toEqual([a[0].id]);
+    });
+
+    test("should remove all duplicate related rows in one --related remove", async () => {
+      const a = await lbLocalJson<Array<{ id: string }>>("create", "Dup related A");
+      const b = await lbLocalJson<Array<{ id: string }>>("create", "Dup related B");
+
+      const seedDuplicates = `
+        import { Database } from "bun:sqlite";
+        const db = new Database(".lb/cache.db");
+        const now = new Date().toISOString();
+        db.exec("DROP INDEX IF EXISTS idx_deps_related_canonical_unique");
+        db.run(
+          "INSERT INTO dependencies (issue_id, depends_on_id, type, created_at, created_by) VALUES (?, ?, 'related', ?, 'test')",
+          [process.argv[1], process.argv[2], now]
+        );
+        db.run(
+          "INSERT INTO dependencies (issue_id, depends_on_id, type, created_at, created_by) VALUES (?, ?, 'related', ?, 'test')",
+          [process.argv[2], process.argv[1], now]
+        );
+        db.close();
+      `;
+
+      const seeded = await evalLocal(seedDuplicates, [a[0].id, b[0].id]);
+      expect(seeded.exitCode).toBe(0);
+
+      const removed = await lbLocal("dep", "remove", a[0].id, b[0].id, "--related");
+      expect(removed.exitCode).toBe(0);
+
+      const showA = await lbLocalJson<Array<{ related?: string[] }>>("show", a[0].id);
+      const showB = await lbLocalJson<Array<{ related?: string[] }>>("show", b[0].id);
+      expect(showA[0].related || []).not.toContain(b[0].id);
+      expect(showB[0].related || []).not.toContain(a[0].id);
+    });
+
     test("should show dep tree", async () => {
       const parent = await lbLocalJson<Array<{ id: string }>>("create", "Tree parent");
 
