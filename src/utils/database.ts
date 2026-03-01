@@ -4,9 +4,9 @@
  */
 
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
-import { getDbPath, getTeamKey } from "./config.js";
+import { ensureRepoMinCliVersion, getDbPath, getTeamKey } from "./config.js";
 import { requestJsonlExport } from "./jsonl-scheduler.js";
 import type {
   AgentIdentity,
@@ -71,6 +71,8 @@ const AGENT_NOUNS = [
   "Willow",
 ];
 const HANDLE_SANITIZE_RE = /[^a-zA-Z0-9_-]/g;
+const BREAKING_SCHEMA_V6_MIN_CLI = "v16";
+const V6_BACKUP_METADATA_KEY = "migration_backup_v6";
 
 function isDatabaseLockedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -127,7 +129,7 @@ export function getDatabase(): Database {
         db!.exec("PRAGMA journal_mode = WAL");
       }
       db!.exec("PRAGMA synchronous = NORMAL");
-      initSchema(db!);
+      initSchema(db!, dbPath);
     });
   }
   return db;
@@ -136,7 +138,7 @@ export function getDatabase(): Database {
 /**
  * Initialize database schema
  */
-function initSchema(db: Database): void {
+function initSchema(db: Database, dbPath: string): void {
   // Check schema version and migrate if needed
   const versionRow = db.query("PRAGMA user_version").get() as { user_version: number };
   const currentVersion = versionRow?.user_version || 0;
@@ -425,6 +427,8 @@ function initSchema(db: Database): void {
   }
 
   if (currentVersion < 6) {
+    ensurePreMigrationBackup(db, dbPath, 6);
+
     const issueCols = db.query("PRAGMA table_info(issues)").all() as Array<{ name: string }>;
     const hasLocalIdSchema = issueCols.some((c) => c.name === "local_id");
 
@@ -500,7 +504,31 @@ function initSchema(db: Database): void {
     `);
 
     db.exec("PRAGMA user_version = 6");
+    ensureRepoMinCliVersion(BREAKING_SCHEMA_V6_MIN_CLI);
   }
+}
+
+function ensurePreMigrationBackup(db: Database, dbPath: string, targetVersion: number): void {
+  const metadataKey = targetVersion === 6 ? V6_BACKUP_METADATA_KEY : `migration_backup_v${targetVersion}`;
+  const existing = db
+    .query("SELECT value FROM metadata WHERE key = ?")
+    .get(metadataKey) as { value: string } | null;
+  if (existing?.value && existsSync(existing.value)) {
+    return;
+  }
+
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+
+  const backupDir = `${dirname(dbPath)}/backups`;
+  if (!existsSync(backupDir)) {
+    mkdirSync(backupDir, { recursive: true });
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupPath = `${backupDir}/cache-pre-v${targetVersion}-${timestamp}.db`;
+  copyFileSync(dbPath, backupPath);
+
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [metadataKey, backupPath]);
 }
 
 /**
