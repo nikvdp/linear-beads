@@ -9,13 +9,14 @@ import {
   claimOutboxItem,
   releaseOutboxItemClaim,
   updateOutboxItemError,
-  getIssueIdMapping,
   setIssueIdMapping,
   replaceIssueId,
   getParentId,
   getChildIds,
   getCachedIssue,
   isLocalId,
+  resolveIssueId as resolveRemoteIssueId,
+  resolveIssueLocalId,
   updateMailMessageSyncStatus,
 } from "./database.js";
 import {
@@ -42,15 +43,12 @@ function resolveDepsString(
       const [type, targetId] = dep.split(":");
       if (!targetId) return dep;
       referencedIds.add(targetId);
-      if (isLocalId(targetId)) {
-        const mapped = getIssueIdMapping(targetId);
-        if (!mapped) {
-          unresolvedLocalIds.add(targetId);
-          return dep;
-        }
-        return `${type}:${mapped}`;
+      const resolved = resolveRemoteIssueId(targetId);
+      if (isLocalId(targetId) && resolved === targetId) {
+        unresolvedLocalIds.add(targetId);
+        return dep;
       }
-      return dep;
+      return `${type}:${resolved}`;
     });
 
   return resolved.join(",");
@@ -81,14 +79,12 @@ function resolveOutboxItem(item: OutboxItem): {
     const value = payload[key];
     if (typeof value !== "string") return;
     referencedIds.add(value);
-    if (isLocalId(value)) {
-      const mapped = getIssueIdMapping(value);
-      if (!mapped) {
-        unresolvedLocalIds.add(value);
-        return;
-      }
-      payload[key] = mapped;
+    const resolved = resolveRemoteIssueId(value);
+    if (isLocalId(value) && resolved === value) {
+      unresolvedLocalIds.add(value);
+      return;
     }
+    payload[key] = resolved;
   };
 
   switch (item.operation) {
@@ -217,7 +213,7 @@ async function processResolvedItem(
       });
 
       setIssueIdMapping(localId, issue.id);
-      replaceIssueId(localId, issue.id);
+      replaceIssueId(localId, issue.id, issue.linear_id);
 
       if (createPayload.deps) {
         const deps = createPayload.deps.split(",").map((dep: string) => {
@@ -391,23 +387,17 @@ export async function processOutboxQueue(
 
   const addBlockedId = (id: string): void => {
     blockedIssueIds.add(id);
-    if (isLocalId(id)) {
-      const mapped = getIssueIdMapping(id);
-      if (mapped) {
-        blockedIssueIds.add(mapped);
-      }
-    }
+    const localId = resolveIssueLocalId(id);
+    blockedIssueIds.add(localId);
+    blockedIssueIds.add(resolveRemoteIssueId(localId));
+    blockedIssueIds.add(resolveRemoteIssueId(id));
   };
 
   const isBlocked = (id: string): boolean => {
     if (blockedIssueIds.has(id)) return true;
-    if (isLocalId(id)) {
-      const mapped = getIssueIdMapping(id);
-      if (mapped && blockedIssueIds.has(mapped)) {
-        return true;
-      }
-    }
-    return false;
+    const localId = resolveIssueLocalId(id);
+    if (blockedIssueIds.has(localId)) return true;
+    return blockedIssueIds.has(resolveRemoteIssueId(id));
   };
 
   for (const item of items) {
