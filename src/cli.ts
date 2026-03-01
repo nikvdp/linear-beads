@@ -26,22 +26,13 @@ import { agentCommand } from "./commands/agent.js";
 import { mailCommand } from "./commands/mail.js";
 import { verifyConnection } from "./utils/issue-backend.js";
 import { closeDatabase } from "./utils/database.js";
-import { getBinaryVersion, resolveBinaryPath } from "./utils/self-update.js";
+import { getRuntimeCliVersion } from "./utils/runtime-version.js";
 import { exportToJsonl } from "./utils/jsonl.js";
 import { processOutbox } from "./utils/background-sync-worker.js";
 import { assertMinCliVersion } from "./utils/config.js";
 
 function currentCliVersion(): string {
-  try {
-    return getBinaryVersion(resolveBinaryPath());
-  } catch {
-    const binaryPath = process.argv[1];
-    if (binaryPath) {
-      return getBinaryVersion(binaryPath);
-    }
-  }
-
-  return "v0.0.0";
+  return getRuntimeCliVersion();
 }
 
 function shouldSkipMinCliGate(argv: string[]): boolean {

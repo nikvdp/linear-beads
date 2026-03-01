@@ -14,8 +14,8 @@ import {
 import { basename, dirname, resolve } from "path";
 import { tmpdir } from "os";
 import { createHash } from "crypto";
-import packageJson from "../../package.json";
 import { normalizeReleaseTag } from "./release-version";
+import { getRuntimeCliVersion } from "./runtime-version";
 
 type GitHubRelease = {
   tag_name: string;
@@ -241,12 +241,8 @@ function ensureWritableBinaryDirectory(binaryPath: string): void {
   }
 }
 
-function embeddedVersion(): string {
-  return packageJson.version ? normalizeReleaseTag(`v${packageJson.version}`) : "v0.0.0";
-}
-
 export function getBinaryVersion(_binaryPath?: string): string {
-  return embeddedVersion();
+  return getRuntimeCliVersion();
 }
 
 function releaseUrl(version: string): string {
