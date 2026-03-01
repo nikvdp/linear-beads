@@ -75,10 +75,14 @@ const localIssueBackend: IssueBackendAdapter = {
   async deleteIssue() {
     throw localIssueBackendError("deleteIssue");
   },
-  async createRelation() {
+  async createRelation(_issueId: string, _relatedIssueId: string, _type: "blocks" | "related") {
     throw localIssueBackendError("createRelation");
   },
-  async deleteRelation() {
+  async deleteRelation(
+    _issueId: string,
+    _relatedIssueId: string,
+    _relationType?: "blocks" | "related"
+  ) {
     throw localIssueBackendError("deleteRelation");
   },
   async addComment() {
@@ -188,9 +192,10 @@ export async function createRelation(
 
 export async function deleteRelation(
   issueId: string,
-  relatedIssueId: string
+  relatedIssueId: string,
+  relationType?: "blocks" | "related"
 ): ReturnType<IssueBackendAdapter["deleteRelation"]> {
-  return getIssueBackendAdapter().deleteRelation(issueId, relatedIssueId);
+  return getIssueBackendAdapter().deleteRelation(issueId, relatedIssueId, relationType);
 }
 
 export async function addComment(

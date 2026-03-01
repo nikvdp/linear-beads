@@ -315,8 +315,9 @@ async function processResolvedItem(
       const relPayload = payload as {
         issueA: string;
         issueB: string;
+        relationType?: "blocks" | "related";
       };
-      await deleteRelation(relPayload.issueA, relPayload.issueB);
+      await deleteRelation(relPayload.issueA, relPayload.issueB, relPayload.relationType);
       return { usedRemoteBackend: true };
     }
     case "mail_send":

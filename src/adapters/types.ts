@@ -45,7 +45,11 @@ export interface IssueBackendAdapter {
     relatedIssueId: string,
     type: "blocks" | "related"
   ): Promise<void>;
-  deleteRelation(issueId: string, relatedIssueId: string): Promise<void>;
+  deleteRelation(
+    issueId: string,
+    relatedIssueId: string,
+    relationType?: "blocks" | "related"
+  ): Promise<void>;
   addComment(issueId: string, body: string): Promise<void>;
 }
 

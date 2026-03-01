@@ -11,6 +11,7 @@ import {
   getDisplayId,
   resolveIssueId,
   isLocalId,
+  resolveIssueLocalId,
 } from "../utils/database.js";
 import { fetchIssue } from "../utils/issue-backend.js";
 import { formatShowJson, formatIssueHuman, output, outputError } from "../utils/output.js";
@@ -65,10 +66,10 @@ export const showCommand = new Command("show")
       const blockedBy = incoming.filter((d) => d.type === "blocks").map((d) => d.issue_id);
       const relatedOut = outgoing
         .filter((d) => d.type === "related" || d.type === "discovered-from")
-        .map((d) => d.depends_on_id);
+        .map((d) => resolveIssueLocalId(d.depends_on_id));
       const relatedIn = incoming
         .filter((d) => d.type === "related" || d.type === "discovered-from")
-        .map((d) => d.issue_id);
+        .map((d) => resolveIssueLocalId(d.issue_id));
       const related = [...new Set([...relatedOut, ...relatedIn])];
 
       // Output

@@ -10,9 +10,12 @@ import {
   getDatabase,
   cacheDependency,
   deleteDependency,
+  deleteDependencyByType,
+  deleteRelatedDependency,
   getDisplayId,
   resolveIssueId,
   isLocalId,
+  resolveIssueLocalId,
 } from "../utils/database.js";
 import { output, outputError } from "../utils/output.js";
 import { queueOperation } from "../utils/spawn-worker.js";
@@ -34,6 +37,36 @@ function getAllDependencies(issueId: string): { outgoing: Dependency[]; incoming
     .all(resolvedId) as Dependency[];
 
   return { outgoing, incoming };
+}
+
+function getRelatedCounterpartId(dep: Dependency, issueId: string): string {
+  return dep.issue_id === issueId ? dep.depends_on_id : dep.issue_id;
+}
+
+function uniqueRelatedDependencies(deps: Dependency[], issueId: string): Dependency[] {
+  const seen = new Set<string>();
+  const result: Dependency[] = [];
+
+  for (const dep of deps) {
+    const counterpart = resolveIssueLocalId(getRelatedCounterpartId(dep, issueId));
+    if (seen.has(counterpart)) {
+      continue;
+    }
+    seen.add(counterpart);
+    result.push(dep);
+  }
+
+  return result;
+}
+
+function hasRelatedDependencyBetween(issueA: string, issueB: string): boolean {
+  const resolvedA = resolveIssueLocalId(issueA);
+  const resolvedB = resolveIssueLocalId(issueB);
+  const { outgoing, incoming } = getAllDependencies(resolvedA);
+  const related = [...outgoing, ...incoming].filter((d) => d.type === "related");
+  return related.some(
+    (dep) => resolveIssueLocalId(getRelatedCounterpartId(dep, resolvedA)) === resolvedB
+  );
 }
 
 /**
@@ -176,6 +209,10 @@ const addCommand = new Command("add")
 
       if (options.related) {
         const targetId = resolveIssueId(options.related);
+        if (hasRelatedDependencyBetween(resolvedIssueId, targetId)) {
+          output(`Already related: ${getDisplayId(resolvedIssueId)} and ${getDisplayId(targetId)}`);
+          return;
+        }
         const dep: Dependency = {
           issue_id: resolvedIssueId,
           depends_on_id: targetId,
@@ -308,7 +345,7 @@ const removeCommand = new Command("remove")
         const parentId = parentDep.depends_on_id;
 
         if (localOnly) {
-          deleteDependency(resolvedIssue, parentId);
+          deleteDependencyByType(resolvedIssue, parentId, "parent-child");
         } else if (options.sync) {
           if (isLocalId(resolvedIssue)) {
             outputError("Issue not synced yet.");
@@ -316,9 +353,9 @@ const removeCommand = new Command("remove")
           }
           // Remove parent by setting parentId to null
           await updateIssueParent(resolvedIssue, null);
-          deleteDependency(resolvedIssue, parentId);
+          deleteDependencyByType(resolvedIssue, parentId, "parent-child");
         } else {
-          deleteDependency(resolvedIssue, parentId);
+          deleteDependencyByType(resolvedIssue, parentId, "parent-child");
           queueOperation(
             "update",
             {
@@ -341,20 +378,21 @@ const removeCommand = new Command("remove")
           const issueB = options.blockedBy ? resolvedIssue : resolvedTarget;
 
           if (localOnly) {
-            deleteDependency(issueA, issueB);
+            deleteDependencyByType(issueA, issueB, "blocks");
           } else if (options.sync) {
             if (isLocalId(issueA) || isLocalId(issueB)) {
               outputError("Dependency target not synced yet.");
               process.exit(1);
             }
-            await deleteRelation(issueA, issueB);
+            await deleteRelation(issueA, issueB, "blocks");
           } else {
-            deleteDependency(issueA, issueB);
+            deleteDependencyByType(issueA, issueB, "blocks");
             queueOperation(
               "delete_relation",
               {
                 issueA: issueA,
                 issueB: issueB,
+                relationType: "blocks",
               },
               issueA
             );
@@ -365,20 +403,21 @@ const removeCommand = new Command("remove")
           );
         } else if (options.related) {
           if (localOnly) {
-            deleteDependency(resolvedIssue, resolvedTarget);
+            deleteRelatedDependency(resolvedIssue, resolvedTarget);
           } else if (options.sync) {
             if (isLocalId(resolvedIssue) || isLocalId(resolvedTarget)) {
               outputError("Dependency target not synced yet.");
               process.exit(1);
             }
-            await deleteRelation(resolvedIssue, resolvedTarget);
+            await deleteRelation(resolvedIssue, resolvedTarget, "related");
           } else {
-            deleteDependency(resolvedIssue, resolvedTarget);
+            deleteRelatedDependency(resolvedIssue, resolvedTarget);
             queueOperation(
               "delete_relation",
               {
                 issueA: resolvedIssue,
                 issueB: resolvedTarget,
+                relationType: "related",
               },
               resolvedIssue
             );
@@ -420,6 +459,7 @@ const listCommand = new Command("list")
       const blockedBy = incoming.filter((d) => d.type === "blocks");
       const related = outgoing.filter((d) => d.type === "related");
       const relatedIncoming = incoming.filter((d) => d.type === "related");
+      const relatedUnique = uniqueRelatedDependencies([...related, ...relatedIncoming], resolvedId);
 
       if (options.json) {
         const formatDep = (d: Dependency) => {
@@ -445,7 +485,7 @@ const listCommand = new Command("list")
               children: children.map(formatDep),
               blocks: blocks.map(formatDep),
               blockedBy: blockedBy.map(formatDep),
-              related: [...related, ...relatedIncoming].map(formatDep),
+              related: relatedUnique.map(formatDep),
             },
             null,
             2
@@ -513,7 +553,7 @@ const listCommand = new Command("list")
 
       output("");
 
-      const allRelated = [...related, ...relatedIncoming];
+      const allRelated = relatedUnique;
       if (allRelated.length > 0) {
         output(`Related (${allRelated.length}):`);
         allRelated.forEach((dep) => {

@@ -18,6 +18,8 @@ import {
   cacheDependency,
   clearIssueDependencies,
   clearIssuesCache,
+  deleteDependencyByType,
+  deleteRelatedDependency,
   cacheLabel,
   getLabelIdByName,
   cacheProject,
@@ -36,6 +38,13 @@ import {
   priorityToLinear,
   statusToLinearState,
 } from "../types.js";
+
+type RelationType = "blocks" | "related";
+type LinearRelationNode = {
+  id: string;
+  type: string;
+  relatedIssue: { id: string };
+};
 
 /**
  * Convert Linear issue to bd-compatible issue
@@ -1159,16 +1168,144 @@ export async function closeIssue(issueId: string, teamId: string, reason?: strin
 /**
  * Create relation between issues
  */
+function normalizeRelationType(value: string): RelationType | null {
+  const normalized = value.toLowerCase();
+  if (normalized === "blocks" || normalized === "related") {
+    return normalized;
+  }
+  return null;
+}
+
+function relationTypeMatches(value: string, expected?: RelationType): boolean {
+  const normalized = normalizeRelationType(value);
+  if (!normalized) {
+    return false;
+  }
+  if (!expected) {
+    return true;
+  }
+  return normalized === expected;
+}
+
+async function fetchIssueRelationNodes(
+  client: ReturnType<typeof getGraphQLClient>,
+  issueId: string
+): Promise<LinearRelationNode[]> {
+  const query = `
+    query GetIssueRelations($id: String!) {
+      issue(id: $id) {
+        relations {
+          nodes {
+            id
+            type
+            relatedIssue {
+              id
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const result = await client.request<{
+    issue: {
+      relations: {
+        nodes: LinearRelationNode[];
+      };
+    } | null;
+  }>(query, { id: issueId });
+
+  if (!result.issue) {
+    throw new Error(`Issue not found: ${issueId}`);
+  }
+
+  return result.issue.relations.nodes;
+}
+
+export function collectRelationIdsForPair(
+  sourceIssueRelations: LinearRelationNode[],
+  targetIssueRelations: LinearRelationNode[],
+  sourceIssueId: string,
+  targetIssueId: string,
+  relationType?: RelationType
+): string[] {
+  const ids = new Set<string>();
+
+  for (const relation of sourceIssueRelations) {
+    if (
+      relation.relatedIssue.id === targetIssueId &&
+      relationTypeMatches(relation.type, relationType)
+    ) {
+      ids.add(relation.id);
+    }
+  }
+
+  for (const relation of targetIssueRelations) {
+    if (
+      relation.relatedIssue.id === sourceIssueId &&
+      relationTypeMatches(relation.type, relationType)
+    ) {
+      ids.add(relation.id);
+    }
+  }
+
+  return [...ids];
+}
+
+async function deleteRelationById(
+  client: ReturnType<typeof getGraphQLClient>,
+  relationId: string
+): Promise<void> {
+  const deleteMutation = `
+    mutation DeleteRelation($id: String!) {
+      issueRelationDelete(id: $id) {
+        success
+      }
+    }
+  `;
+
+  const deleteResult = await client.request<{
+    issueRelationDelete: { success: boolean };
+  }>(deleteMutation, { id: relationId });
+
+  if (!deleteResult.issueRelationDelete.success) {
+    throw new Error("Failed to delete relation");
+  }
+}
+
 export async function createRelation(
   issueId: string,
   relatedIssueId: string,
-  type: "blocks" | "related"
+  type: RelationType
 ): Promise<void> {
   const client = getGraphQLClient();
 
   // Resolve identifiers to UUIDs
   const issueUuid = (await resolveIssueId(issueId)) || issueId;
   const relatedUuid = (await resolveIssueId(relatedIssueId)) || relatedIssueId;
+
+  const [issueRelations, relatedIssueRelations] = await Promise.all([
+    fetchIssueRelationNodes(client, issueUuid),
+    fetchIssueRelationNodes(client, relatedUuid),
+  ]);
+
+  const existing = collectRelationIdsForPair(
+    issueRelations,
+    relatedIssueRelations,
+    issueUuid,
+    relatedUuid,
+    type
+  );
+  if (existing.length > 0) {
+    cacheDependency({
+      issue_id: issueId,
+      depends_on_id: relatedIssueId,
+      type,
+      created_at: new Date().toISOString(),
+      created_by: "user",
+    });
+    return;
+  }
 
   const mutation = `
     mutation CreateRelation($input: IssueRelationCreateInput!) {
@@ -1205,98 +1342,76 @@ export async function createRelation(
 /**
  * Delete a relation between two issues
  */
-export async function deleteRelation(issueId: string, relatedIssueId: string): Promise<void> {
+export async function deleteRelation(
+  issueId: string,
+  relatedIssueId: string,
+  relationType?: RelationType
+): Promise<void> {
   const client = getGraphQLClient();
 
   // Resolve identifiers to UUIDs
   const issueUuid = (await resolveIssueId(issueId)) || issueId;
   const relatedUuid = (await resolveIssueId(relatedIssueId)) || relatedIssueId;
+  const [issueRelations, relatedIssueRelations] = await Promise.all([
+    fetchIssueRelationNodes(client, issueUuid),
+    fetchIssueRelationNodes(client, relatedUuid),
+  ]);
 
-  // First, find the relation ID by querying the issue's relations
-  const query = `
-    query GetIssueRelations($id: String!) {
-      issue(id: $id) {
-        relations {
-          nodes {
-            id
-            relatedIssue {
-              id
-            }
-          }
-        }
-      }
-    }
-  `;
+  let relationIds: string[] = [];
+  let removedInverseOnly = false;
+  if (relationType === "blocks") {
+    const direct = issueRelations
+      .filter(
+        (relation) =>
+          relation.relatedIssue.id === relatedUuid && relationTypeMatches(relation.type, "blocks")
+      )
+      .map((relation) => relation.id);
 
-  const result = await client.request<{
-    issue: {
-      relations: {
-        nodes: Array<{ id: string; relatedIssue: { id: string } }>;
-      };
-    } | null;
-  }>(query, { id: issueUuid });
-
-  if (!result.issue) {
-    throw new Error(`Issue not found: ${issueId}`);
-  }
-
-  // Find the relation that points to the related issue
-  const relation = result.issue.relations.nodes.find((r) => r.relatedIssue.id === relatedUuid);
-
-  if (!relation) {
-    // Try the inverse direction
-    const inverseResult = await client.request<{
-      issue: {
-        relations: {
-          nodes: Array<{ id: string; relatedIssue: { id: string } }>;
-        };
-      } | null;
-    }>(query, { id: relatedUuid });
-
-    const inverseRelation = inverseResult.issue?.relations.nodes.find(
-      (r) => r.relatedIssue.id === issueUuid
-    );
-
-    if (!inverseRelation) {
-      throw new Error(`No relation found between ${issueId} and ${relatedIssueId}`);
-    }
-
-    // Delete the inverse relation
-    const deleteMutation = `
-      mutation DeleteRelation($id: String!) {
-        issueRelationDelete(id: $id) {
-          success
-        }
-      }
-    `;
-
-    const deleteResult = await client.request<{
-      issueRelationDelete: { success: boolean };
-    }>(deleteMutation, { id: inverseRelation.id });
-
-    if (!deleteResult.issueRelationDelete.success) {
-      throw new Error("Failed to delete relation");
+    if (direct.length > 0) {
+      relationIds = direct;
+    } else {
+      relationIds = relatedIssueRelations
+        .filter(
+          (relation) =>
+            relation.relatedIssue.id === issueUuid && relationTypeMatches(relation.type, "blocks")
+        )
+        .map((relation) => relation.id);
+      removedInverseOnly = relationIds.length > 0;
     }
   } else {
-    // Delete the direct relation
-    const deleteMutation = `
-      mutation DeleteRelation($id: String!) {
-        issueRelationDelete(id: $id) {
-          success
-        }
-      }
-    `;
-
-    const deleteResult = await client.request<{
-      issueRelationDelete: { success: boolean };
-    }>(deleteMutation, { id: relation.id });
-
-    if (!deleteResult.issueRelationDelete.success) {
-      throw new Error("Failed to delete relation");
-    }
+    relationIds = collectRelationIdsForPair(
+      issueRelations,
+      relatedIssueRelations,
+      issueUuid,
+      relatedUuid,
+      relationType
+    );
   }
 
-  // Remove from local cache (both directions)
+  if (relationIds.length === 0) {
+    const descriptor = relationType ? `${relationType} relation` : "relation";
+    throw new Error(`No ${descriptor} found between ${issueId} and ${relatedIssueId}`);
+  }
+
+  for (const relationId of relationIds) {
+    await deleteRelationById(client, relationId);
+  }
+
+  if (relationType === "related") {
+    deleteRelatedDependency(issueId, relatedIssueId);
+    return;
+  }
+
+  if (relationType === "blocks") {
+    if (removedInverseOnly) {
+      deleteDependencyByType(relatedIssueId, issueId, "blocks");
+    } else {
+      deleteDependencyByType(issueId, relatedIssueId, "blocks");
+    }
+    return;
+  }
+
+  // Legacy mode: remove cached relation regardless of direction/type.
   const { deleteDependency } = await import("./database.js");
   deleteDependency(issueId, relatedIssueId);
 }

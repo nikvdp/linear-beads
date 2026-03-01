@@ -73,6 +73,7 @@ const AGENT_NOUNS = [
 const HANDLE_SANITIZE_RE = /[^a-zA-Z0-9_-]/g;
 const BREAKING_SCHEMA_V6_MIN_CLI = "v16";
 const V6_BACKUP_METADATA_KEY = "migration_backup_v6";
+const RELATED_DEPENDENCY_INTEGRITY_METADATA_KEY = "related_dependency_integrity_v1";
 
 function isDatabaseLockedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -103,6 +104,22 @@ export function runWithBusyRetry<T>(operation: () => T): T {
       attempt++;
     }
   }
+}
+
+function canonicalizeDependencyPair(
+  issueId: string,
+  dependsOnId: string,
+  type: Dependency["type"]
+): [string, string] {
+  if (type !== "related") {
+    return [issueId, dependsOnId];
+  }
+
+  if (issueId <= dependsOnId) {
+    return [issueId, dependsOnId];
+  }
+
+  return [dependsOnId, issueId];
 }
 
 /**
@@ -506,6 +523,52 @@ function initSchema(db: Database, dbPath: string): void {
     db.exec("PRAGMA user_version = 6");
     ensureRepoMinCliVersion(BREAKING_SCHEMA_V6_MIN_CLI);
   }
+
+  ensureRelatedDependencyIntegrity(db);
+}
+
+function ensureRelatedDependencyIntegrity(db: Database): void {
+  const existing = db
+    .query("SELECT value FROM metadata WHERE key = ?")
+    .get(RELATED_DEPENDENCY_INTEGRITY_METADATA_KEY) as { value?: string } | null;
+  if (existing?.value) {
+    return;
+  }
+
+  db.exec(`
+    DELETE FROM dependencies
+    WHERE type = 'related'
+      AND id NOT IN (
+        SELECT MIN(id)
+        FROM dependencies
+        WHERE type = 'related'
+        GROUP BY
+          CASE WHEN issue_id <= depends_on_id THEN issue_id ELSE depends_on_id END,
+          CASE WHEN issue_id <= depends_on_id THEN depends_on_id ELSE issue_id END
+      );
+  `);
+
+  db.exec(`
+    UPDATE dependencies
+    SET issue_id = CASE WHEN issue_id <= depends_on_id THEN issue_id ELSE depends_on_id END,
+        depends_on_id = CASE WHEN issue_id <= depends_on_id THEN depends_on_id ELSE issue_id END
+    WHERE type = 'related'
+      AND issue_id > depends_on_id;
+  `);
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_deps_related_canonical_unique
+    ON dependencies (
+      CASE WHEN issue_id <= depends_on_id THEN issue_id ELSE depends_on_id END,
+      CASE WHEN issue_id <= depends_on_id THEN depends_on_id ELSE issue_id END
+    )
+    WHERE type = 'related';
+  `);
+
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [
+    RELATED_DEPENDENCY_INTEGRITY_METADATA_KEY,
+    new Date().toISOString(),
+  ]);
 }
 
 function ensurePreMigrationBackup(db: Database, dbPath: string, targetVersion: number): void {
@@ -905,8 +968,13 @@ export function getCachedIssues(): Issue[] {
  */
 export function cacheDependency(dep: Dependency): void {
   const db = getDatabase();
-  const issueId = resolveIssueLocalId(dep.issue_id);
-  const dependsOnId = resolveIssueLocalId(dep.depends_on_id);
+  const resolvedIssueId = resolveIssueLocalId(dep.issue_id);
+  const resolvedDependsOnId = resolveIssueLocalId(dep.depends_on_id);
+  const [issueId, dependsOnId] = canonicalizeDependencyPair(
+    resolvedIssueId,
+    resolvedDependsOnId,
+    dep.type
+  );
   runWithBusyRetry(() => {
     db.run(
       `
@@ -949,6 +1017,60 @@ export function deleteDependency(issueId: string, dependsOnId: string): void {
       resolvedDependsOnId,
       resolvedIssueId,
     ]);
+  });
+  requestJsonlExport();
+}
+
+/**
+ * Delete a dependency for a specific type/direction.
+ */
+export function deleteDependencyByType(
+  issueId: string,
+  dependsOnId: string,
+  type: Dependency["type"]
+): void {
+  const db = getDatabase();
+  const resolvedIssueId = resolveIssueLocalId(issueId);
+  const resolvedDependsOnId = resolveIssueLocalId(dependsOnId);
+  const [leftId, rightId] = canonicalizeDependencyPair(resolvedIssueId, resolvedDependsOnId, type);
+
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ? AND type = ?", [
+      leftId,
+      rightId,
+      type,
+    ]);
+  });
+  requestJsonlExport();
+}
+
+/**
+ * Delete a related relationship pair in both directions.
+ * Removes all rows for legacy duplicate states.
+ */
+export function deleteRelatedDependency(issueId: string, relatedIssueId: string): void {
+  const db = getDatabase();
+  const resolvedIssueId = resolveIssueLocalId(issueId);
+  const resolvedRelatedId = resolveIssueLocalId(relatedIssueId);
+  const [leftId, rightId] = canonicalizeDependencyPair(
+    resolvedIssueId,
+    resolvedRelatedId,
+    "related"
+  );
+
+  runWithBusyRetry(() => {
+    db.run(
+      `
+      DELETE FROM dependencies
+      WHERE type = 'related'
+        AND (
+          (issue_id = ? AND depends_on_id = ?)
+          OR
+          (issue_id = ? AND depends_on_id = ?)
+        )
+    `,
+      [leftId, rightId, rightId, leftId]
+    );
   });
   requestJsonlExport();
 }
