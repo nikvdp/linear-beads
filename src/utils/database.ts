@@ -509,10 +509,11 @@ function initSchema(db: Database, dbPath: string): void {
 }
 
 function ensurePreMigrationBackup(db: Database, dbPath: string, targetVersion: number): void {
-  const metadataKey = targetVersion === 6 ? V6_BACKUP_METADATA_KEY : `migration_backup_v${targetVersion}`;
-  const existing = db
-    .query("SELECT value FROM metadata WHERE key = ?")
-    .get(metadataKey) as { value: string } | null;
+  const metadataKey =
+    targetVersion === 6 ? V6_BACKUP_METADATA_KEY : `migration_backup_v${targetVersion}`;
+  const existing = db.query("SELECT value FROM metadata WHERE key = ?").get(metadataKey) as {
+    value: string;
+  } | null;
   if (existing?.value && existsSync(existing.value)) {
     return;
   }

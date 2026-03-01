@@ -45,7 +45,12 @@ function currentCliVersion(): string {
 }
 
 function shouldSkipMinCliGate(argv: string[]): boolean {
-  if (argv.includes("--help") || argv.includes("-h") || argv.includes("--version") || argv.includes("-V")) {
+  if (
+    argv.includes("--help") ||
+    argv.includes("-h") ||
+    argv.includes("--version") ||
+    argv.includes("-V")
+  ) {
     return true;
   }
 
