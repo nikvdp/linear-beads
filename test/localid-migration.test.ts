@@ -106,6 +106,15 @@ describe("pre-localid fixture migrations", () => {
       expect(names).toContain("linear_id");
       expect(names).toContain("linear_identifier");
       expect(names).not.toContain("identifier");
+
+      const backupRow = migratedDb
+        .query("SELECT value FROM metadata WHERE key = 'migration_backup_v6'")
+        .get() as {
+        value: string;
+      } | null;
+      expect(backupRow).not.toBeNull();
+      expect(backupRow?.value).toContain("/.lb/backups/cache-pre-v6-");
+      expect(backupRow?.value ? existsSync(backupRow.value) : false).toBe(true);
       migratedDb.close();
     });
   }
