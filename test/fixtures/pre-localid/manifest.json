@@ -1,0 +1,23 @@
+{
+  "captured_at": "2026-03-01T07:02:51.686Z",
+  "fixtures": [
+    {
+      "name": "pre-localid-synced-only",
+      "archive": "pre-localid-synced-only.tar.gz",
+      "schema_user_version": 5,
+      "description": "Synced-only cache with parent-child dependencies."
+    },
+    {
+      "name": "pre-localid-pending-outbox",
+      "archive": "pre-localid-pending-outbox.tar.gz",
+      "schema_user_version": 5,
+      "description": "Pending LOCAL issue with queued create outbox payload."
+    },
+    {
+      "name": "pre-localid-mapped-local-alias",
+      "archive": "pre-localid-mapped-local-alias.tar.gz",
+      "schema_user_version": 5,
+      "description": "Legacy local->LIN mapping via issue_id_map after PK replacement behavior."
+    }
+  ]
+}
