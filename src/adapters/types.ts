@@ -40,7 +40,11 @@ export interface IssueBackendAdapter {
   updateIssueParent(issueId: string, parentId: string | null): Promise<void>;
   closeIssue(issueId: string, teamId: string, reason?: string): Promise<Issue>;
   deleteIssue(issueId: string): Promise<void>;
-  createRelation(issueId: string, relatedIssueId: string, type: "blocks" | "related"): Promise<void>;
+  createRelation(
+    issueId: string,
+    relatedIssueId: string,
+    type: "blocks" | "related"
+  ): Promise<void>;
   deleteRelation(issueId: string, relatedIssueId: string): Promise<void>;
   addComment(issueId: string, body: string): Promise<void>;
 }
@@ -51,5 +55,7 @@ export interface MailBackendAdapter {
   reply(messageId: string): Promise<void>;
   markRead(messageId: string, recipientAgentId: string): Promise<void>;
   ack(messageId: string, recipientAgentId: string): Promise<void>;
-  ingest(options?: { limit?: number }): Promise<{ inserted: number; skipped: number; cursor: string | null }>;
+  ingest(options?: {
+    limit?: number;
+  }): Promise<{ inserted: number; skipped: number; cursor: string | null }>;
 }

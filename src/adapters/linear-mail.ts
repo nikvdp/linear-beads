@@ -135,7 +135,10 @@ function buildOutboundEnvelope(messageId: string): {
 
   const sender = getAgentById(message.sender_agent_id);
   const recipientHandles = message.recipients
-    .map((recipient) => getAgentById(recipient.recipient_agent_id)?.handle || recipient.recipient_agent_id)
+    .map(
+      (recipient) =>
+        getAgentById(recipient.recipient_agent_id)?.handle || recipient.recipient_agent_id
+    )
     .filter(Boolean);
 
   const envelope: LinearMailEnvelope = {

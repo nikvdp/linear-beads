@@ -1346,17 +1346,24 @@ describe("Local-only Mode", () => {
         unreadAfter: Array<{ message: { id: string } }>;
         mark: { updated: number };
         ack: { updated: number };
-        threadView: { thread: { id: string }; messages: Array<{ id: string; recipients: unknown[] }> };
+        threadView: {
+          thread: { id: string };
+          messages: Array<{ id: string; recipients: unknown[] }>;
+        };
         byHandle: { id: string; handle: string } | null;
         allAgentsCount: number;
       };
 
       expect(parsed.stored.message.id).toBeDefined();
       expect(parsed.extraRecipients.some((r) => r.kind === "cc")).toBe(true);
-      expect(parsed.unreadBefore.some((entry) => entry.message.id === parsed.stored.message.id)).toBe(true);
+      expect(
+        parsed.unreadBefore.some((entry) => entry.message.id === parsed.stored.message.id)
+      ).toBe(true);
       expect(parsed.mark.updated).toBeGreaterThanOrEqual(1);
       expect(parsed.ack.updated).toBeGreaterThanOrEqual(1);
-      expect(parsed.unreadAfter.some((entry) => entry.message.id === parsed.stored.message.id)).toBe(false);
+      expect(
+        parsed.unreadAfter.some((entry) => entry.message.id === parsed.stored.message.id)
+      ).toBe(false);
       expect(parsed.threadView.thread.id).toBe(parsed.stored.message.thread_id);
       expect(parsed.threadView.messages.some((m) => m.id === parsed.stored.message.id)).toBe(true);
       expect(parsed.byHandle).not.toBeNull();
@@ -1370,7 +1377,12 @@ describe("Local-only Mode", () => {
       const alpha = `Alpha${suffix}`;
       const beta = `Beta${suffix}`;
 
-      const alphaReg = await lbLocalJson<{ handle: string }>("agent", "register", "--handle", alpha);
+      const alphaReg = await lbLocalJson<{ handle: string }>(
+        "agent",
+        "register",
+        "--handle",
+        alpha
+      );
       const betaReg = await lbLocalJson<{ handle: string }>("agent", "register", "--handle", beta);
 
       expect(alphaReg.handle).toBe(alpha);
@@ -1450,7 +1462,9 @@ describe("Local-only Mode", () => {
         sent.message.thread_id
       );
       expect(threadView.messages.some((message) => message.id === sent.message.id)).toBe(true);
-      expect(threadView.messages.some((message) => message.id === replyResult.message.id)).toBe(true);
+      expect(threadView.messages.some((message) => message.id === replyResult.message.id)).toBe(
+        true
+      );
     });
   });
 });

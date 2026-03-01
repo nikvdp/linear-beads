@@ -170,9 +170,7 @@ async function migrateToProject(
 
     // Default is migrate-not-copy: remove repo label unless explicitly kept.
     if (!keepLabel && hasRepoLabel) {
-      const newLabelIds = issue.labels.nodes
-        .filter((l) => l.name !== repoLabel)
-        .map((l) => l.id);
+      const newLabelIds = issue.labels.nodes.filter((l) => l.name !== repoLabel).map((l) => l.id);
       input.labelIds = newLabelIds;
     }
 
@@ -231,7 +229,10 @@ type RepoLabelIssuesPage = {
  * Fetch all issues that currently have the repo label.
  * Uses pagination to avoid implicit result caps.
  */
-async function fetchIssuesByRepoLabel(teamId: string, repoLabel: string): Promise<RepoLabelIssue[]> {
+async function fetchIssuesByRepoLabel(
+  teamId: string,
+  repoLabel: string
+): Promise<RepoLabelIssue[]> {
   const client = getGraphQLClient();
   const issues: RepoLabelIssue[] = [];
   let hasNextPage = true;

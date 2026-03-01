@@ -60,7 +60,9 @@ function enrichWithHandles() {
   return (agentId: string) => map.get(agentId) || agentId;
 }
 
-export const mailCommand = new Command("mail").description("Local mail operations between registered agents");
+export const mailCommand = new Command("mail").description(
+  "Local mail operations between registered agents"
+);
 
 mailCommand
   .command("send")

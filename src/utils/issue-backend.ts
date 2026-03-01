@@ -106,15 +106,21 @@ export async function getViewer(): ReturnType<IssueBackendAdapter["getViewer"]> 
   return getIssueBackendAdapter().getViewer();
 }
 
-export async function getUserByEmail(email: string): ReturnType<IssueBackendAdapter["getUserByEmail"]> {
+export async function getUserByEmail(
+  email: string
+): ReturnType<IssueBackendAdapter["getUserByEmail"]> {
   return getIssueBackendAdapter().getUserByEmail(email);
 }
 
-export async function ensureRepoLabel(teamId: string): ReturnType<IssueBackendAdapter["ensureRepoLabel"]> {
+export async function ensureRepoLabel(
+  teamId: string
+): ReturnType<IssueBackendAdapter["ensureRepoLabel"]> {
   return getIssueBackendAdapter().ensureRepoLabel(teamId);
 }
 
-export async function ensureRepoProject(teamId: string): ReturnType<IssueBackendAdapter["ensureRepoProject"]> {
+export async function ensureRepoProject(
+  teamId: string
+): ReturnType<IssueBackendAdapter["ensureRepoProject"]> {
   return getIssueBackendAdapter().ensureRepoProject(teamId);
 }
 

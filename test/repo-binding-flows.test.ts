@@ -12,7 +12,9 @@ const CLI_PATH = join(import.meta.dir, "..", "src", "cli.ts");
 const TEST_PREFIX = `[repo-binding-${Date.now()}]`;
 
 if (!API_KEY) {
-  throw new Error("LINEAR_API_KEY environment variable is required for repo binding integration tests");
+  throw new Error(
+    "LINEAR_API_KEY environment variable is required for repo binding integration tests"
+  );
 }
 
 const client = new GraphQLClient("https://api.linear.app/graphql", {
@@ -88,7 +90,9 @@ async function lb(
 async function lbJson<T>(cwd: string, ...args: string[]): Promise<T> {
   const result = await lb(cwd, ...args, "--json");
   if (result.exitCode !== 0) {
-    throw new Error(`lb ${args.join(" ")} failed:\nstdout=${result.stdout}\nstderr=${result.stderr}`);
+    throw new Error(
+      `lb ${args.join(" ")} failed:\nstdout=${result.stdout}\nstderr=${result.stderr}`
+    );
   }
   return JSON.parse(result.stdout) as T;
 }
@@ -154,13 +158,17 @@ async function waitForIssueState(
     await Bun.sleep(500);
   }
 
-  throw new Error(`Timed out waiting for issue state (${message}) for ${issueId}. Last snapshot: ${JSON.stringify(last)}`);
+  throw new Error(
+    `Timed out waiting for issue state (${message}) for ${issueId}. Last snapshot: ${JSON.stringify(last)}`
+  );
 }
 
 async function mustSucceed(cwd: string, ...args: string[]): Promise<string> {
   const result = await lb(cwd, ...args);
   if (result.exitCode !== 0) {
-    throw new Error(`lb ${args.join(" ")} failed:\nstdout=${result.stdout}\nstderr=${result.stderr}`);
+    throw new Error(
+      `lb ${args.join(" ")} failed:\nstdout=${result.stdout}\nstderr=${result.stderr}`
+    );
   }
   return result.stdout;
 }

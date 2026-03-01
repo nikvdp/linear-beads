@@ -444,7 +444,12 @@ export async function processOutboxQueue(
       if (operationRequiresTeamId(item.operation) && !teamId) {
         throw new Error(`Missing teamId for operation: ${item.operation}`);
       }
-      const result = await processResolvedItem(item, claimedResolution.resolvedPayload, teamId, propagateParent);
+      const result = await processResolvedItem(
+        item,
+        claimedResolution.resolvedPayload,
+        teamId,
+        propagateParent
+      );
       if (result.usedRemoteBackend) {
         remoteProcessed++;
       }

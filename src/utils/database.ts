@@ -1457,7 +1457,10 @@ function randomHandleBase(): string {
 function handleExists(handle: string): boolean {
   const db = getDatabase();
   const row = runWithBusyRetry(
-    () => db.query("SELECT 1 as hit FROM agents WHERE handle = ? LIMIT 1").get(handle) as { hit: 1 } | null
+    () =>
+      db.query("SELECT 1 as hit FROM agents WHERE handle = ? LIMIT 1").get(handle) as {
+        hit: 1;
+      } | null
   );
   return !!row;
 }
@@ -1499,11 +1502,13 @@ function toMailRecipientKind(raw: string): MailRecipientKind {
   throw new Error(`Invalid mail recipient kind: ${raw}`);
 }
 
-export function registerAgent(options: {
-  preferredHandle?: string;
-  displayName?: string;
-  pubkey?: string;
-} = {}): AgentIdentity {
+export function registerAgent(
+  options: {
+    preferredHandle?: string;
+    displayName?: string;
+    pubkey?: string;
+  } = {}
+): AgentIdentity {
   const db = getDatabase();
   const id = crypto.randomUUID();
   const handle = nextUniqueHandle(options.preferredHandle);
@@ -1544,16 +1549,14 @@ export function getAgentByHandle(handle: string): AgentIdentity | null {
           LIMIT 1
           `
         )
-        .get(handle) as
-        | {
-            id: string;
-            handle: string;
-            display_name: string | null;
-            pubkey: string | null;
-            created_at: string;
-            updated_at: string;
-          }
-        | null
+        .get(handle) as {
+        id: string;
+        handle: string;
+        display_name: string | null;
+        pubkey: string | null;
+        created_at: string;
+        updated_at: string;
+      } | null
   );
 
   if (!row) return null;
@@ -1580,16 +1583,14 @@ export function getAgentById(id: string): AgentIdentity | null {
           LIMIT 1
           `
         )
-        .get(id) as
-        | {
-            id: string;
-            handle: string;
-            display_name: string | null;
-            pubkey: string | null;
-            created_at: string;
-            updated_at: string;
-          }
-        | null
+        .get(id) as {
+        id: string;
+        handle: string;
+        display_name: string | null;
+        pubkey: string | null;
+        created_at: string;
+        updated_at: string;
+      } | null
   );
 
   if (!row) return null;
@@ -1648,9 +1649,9 @@ export function getCurrentAgentHandle(): string | null {
   const db = getDatabase();
   const row = runWithBusyRetry(
     () =>
-      db.query("SELECT value FROM metadata WHERE key = 'current_agent_handle'").get() as
-        | { value: string }
-        | null
+      db.query("SELECT value FROM metadata WHERE key = 'current_agent_handle'").get() as {
+        value: string;
+      } | null
   );
   return row?.value || null;
 }
@@ -1721,15 +1722,13 @@ export function getMailThreadById(threadId: string): MailThread | null {
           LIMIT 1
           `
         )
-        .get(threadId) as
-        | {
-            id: string;
-            work_item_ref: string | null;
-            subject: string | null;
-            created_at: string;
-            updated_at: string;
-          }
-        | null
+        .get(threadId) as {
+        id: string;
+        work_item_ref: string | null;
+        subject: string | null;
+        created_at: string;
+        updated_at: string;
+      } | null
   );
 
   if (!row) return null;
@@ -1982,7 +1981,10 @@ export function fetchInbox(
   }));
 }
 
-export function markMessageRead(agentId: string, messageId: string): {
+export function markMessageRead(
+  agentId: string,
+  messageId: string
+): {
   messageId: string;
   readAt: string;
   updated: number;
@@ -2006,7 +2008,10 @@ export function markMessageRead(agentId: string, messageId: string): {
   return { messageId, readAt, updated };
 }
 
-export function ackMessage(agentId: string, messageId: string): {
+export function ackMessage(
+  agentId: string,
+  messageId: string
+): {
   messageId: string;
   readAt: string;
   ackAt: string;
@@ -2048,15 +2053,13 @@ export function fetchThread(threadId: string): {
           WHERE id = ?
           `
         )
-        .get(threadId) as
-        | {
-            id: string;
-            work_item_ref: string | null;
-            subject: string | null;
-            created_at: string;
-            updated_at: string;
-          }
-        | null
+        .get(threadId) as {
+        id: string;
+        work_item_ref: string | null;
+        subject: string | null;
+        created_at: string;
+        updated_at: string;
+      } | null
   );
 
   if (!threadRow) {
@@ -2149,7 +2152,9 @@ export function fetchThread(threadId: string): {
   };
 }
 
-export function getMailMessageById(messageId: string): (MailMessage & { recipients: MailRecipient[] }) | null {
+export function getMailMessageById(
+  messageId: string
+): (MailMessage & { recipients: MailRecipient[] }) | null {
   const db = getDatabase();
   const row = runWithBusyRetry(
     () =>
@@ -2162,18 +2167,16 @@ export function getMailMessageById(messageId: string): (MailMessage & { recipien
           LIMIT 1
           `
         )
-        .get(messageId) as
-        | {
-            id: string;
-            thread_id: string;
-            sender_agent_id: string;
-            subject: string;
-            body_md: string;
-            created_at: string;
-            reply_to_message_id: string | null;
-            sync_status: "synced" | "pending" | "failed";
-          }
-        | null
+        .get(messageId) as {
+        id: string;
+        thread_id: string;
+        sender_agent_id: string;
+        subject: string;
+        body_md: string;
+        created_at: string;
+        reply_to_message_id: string | null;
+        sync_status: "synced" | "pending" | "failed";
+      } | null
   );
   if (!row) return null;
 

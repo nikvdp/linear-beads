@@ -5,12 +5,7 @@
 import { Command, InvalidArgumentError } from "commander";
 import { getGraphQLClient } from "../utils/graphql.js";
 import { getTeamId } from "../utils/issue-backend.js";
-import {
-  getRepoName,
-  getRepoScope,
-  type RepoScopeMode,
-  writeRepoConfig,
-} from "../utils/config.js";
+import { getRepoName, getRepoScope, type RepoScopeMode, writeRepoConfig } from "../utils/config.js";
 import { output } from "../utils/output.js";
 
 type RebindIssue = {
@@ -158,7 +153,11 @@ async function fetchIssuesByBinding(
   return issues;
 }
 
-async function ensureLabel(teamId: string, labelName: string, dryRun: boolean): Promise<EnsureResult> {
+async function ensureLabel(
+  teamId: string,
+  labelName: string,
+  dryRun: boolean
+): Promise<EnsureResult> {
   const client = getGraphQLClient();
 
   const labelQuery = `
@@ -222,7 +221,11 @@ async function ensureLabel(teamId: string, labelName: string, dryRun: boolean): 
   };
 }
 
-async function ensureProject(teamId: string, projectName: string, dryRun: boolean): Promise<EnsureResult> {
+async function ensureProject(
+  teamId: string,
+  projectName: string,
+  dryRun: boolean
+): Promise<EnsureResult> {
   const client = getGraphQLClient();
 
   const projectQuery = `
