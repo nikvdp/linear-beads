@@ -101,6 +101,12 @@ describe("self-update", () => {
     expect(readFileSync(binaryPath, "utf8")).toBe("old-binary");
   });
 
+  test("uses embedded binary version even when .version sidecar is stale", () => {
+    writeFileSync(`${binaryPath}.version`, "v16\n");
+
+    expect(getBinaryVersion(binaryPath)).toBe(normalizeReleaseTag(`v${packageJson.version}`));
+  });
+
   test("installs newer version and replaces binary", async () => {
     const version = "9.9.9";
     const binaryBytes = new TextEncoder().encode(`replacement-${platformAssetName()}`);
@@ -118,9 +124,10 @@ describe("self-update", () => {
 
     expect(result.alreadyUpdated).toBe(false);
     expect(result.updatedPath).toBe(binaryPath);
+    expect(result.localVersion).toBe(normalizeReleaseTag(`v${packageJson.version}`));
     expect(result.remoteVersion).toBe(`v${version}`);
     expect(readFileSync(binaryPath, "utf8")).toBe(`replacement-${platformAssetName()}`);
-    expect(getBinaryVersion(binaryPath)).toBe(normalizeReleaseTag(`v${version}`));
+    expect(getBinaryVersion(binaryPath)).toBe(normalizeReleaseTag(`v${packageJson.version}`));
 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       return makeReleaseResponse(String(input), version, binaryBytes);
@@ -133,8 +140,9 @@ describe("self-update", () => {
       path: binaryPath,
     });
 
-    expect(checkResult.alreadyUpdated).toBe(true);
-    expect(checkResult.localVersion).toBe(normalizeReleaseTag(`v${version}`));
+    expect(checkResult.alreadyUpdated).toBe(false);
+    expect(checkResult.localVersion).toBe(normalizeReleaseTag(`v${packageJson.version}`));
+    expect(checkResult.localVersion).toBe(result.localVersion);
   });
 
   test("normalizes package.json version for user-facing binary version", () => {
