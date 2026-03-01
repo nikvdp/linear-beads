@@ -819,8 +819,9 @@ describe("Local-only Mode", () => {
     const db = new Database(join(testDir, ".lb", "cache.db"));
     db.exec(`
       CREATE TABLE IF NOT EXISTS issues (
-        id TEXT PRIMARY KEY,
-        identifier TEXT NOT NULL,
+        local_id TEXT PRIMARY KEY,
+        linear_id TEXT,
+        linear_identifier TEXT,
         title TEXT NOT NULL,
         description TEXT,
         status TEXT NOT NULL,
@@ -839,10 +840,11 @@ describe("Local-only Mode", () => {
     const now = new Date().toISOString();
     db.run(
       `INSERT OR REPLACE INTO issues
-      (id, identifier, title, status, priority, sync_status, created_at, updated_at)
-      VALUES (?, ?, ?, 'open', 2, 'synced', ?, ?)`,
+      (local_id, linear_id, linear_identifier, title, status, priority, sync_status, created_at, updated_at)
+      VALUES (?, NULL, ?, ?, 'open', 2, 'synced', ?, ?)`,
       [id, id, title, now, now]
     );
+    db.exec("PRAGMA user_version = 6");
     db.close();
   }
 
