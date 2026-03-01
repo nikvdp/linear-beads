@@ -15,6 +15,7 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { parse as parseJsonc } from "jsonc-parser";
+import { normalizeReleaseTag, parseReleaseTag } from "./release-version.js";
 
 // Combined config type that includes both schema-defined options and legacy env var options
 interface LoadedConfig extends ConfigTypes {
@@ -465,6 +466,66 @@ export function getIssueBackendKind(): "linear" | "local" {
 export function getMailBackendKind(): "linear" | "local" {
   const value = getOption("mail_backend") as string | undefined;
   return value === "linear" ? "linear" : "local";
+}
+
+function normalizeCliVersionTag(rawVersion: string): string {
+  const trimmed = rawVersion.trim();
+  if (!trimmed) {
+    return "v0";
+  }
+
+  const prefixed = trimmed.startsWith("v") ? trimmed : `v${trimmed}`;
+  return normalizeReleaseTag(prefixed);
+}
+
+function cliVersionOrder(rawVersion: string): number | null {
+  const parsed = parseReleaseTag(normalizeCliVersionTag(rawVersion));
+  if (parsed === undefined || Number.isNaN(parsed)) {
+    return null;
+  }
+  return parsed;
+}
+
+export function isCliVersionAtLeast(currentVersion: string, requiredVersion: string): boolean {
+  const currentOrder = cliVersionOrder(currentVersion);
+  const requiredOrder = cliVersionOrder(requiredVersion);
+  if (currentOrder === null || requiredOrder === null) {
+    return false;
+  }
+  return currentOrder >= requiredOrder;
+}
+
+export function assertMinCliVersion(currentVersion: string): void {
+  const requiredVersion = (getOption("min_cli_version") as string | undefined)?.trim();
+  if (!requiredVersion) {
+    return;
+  }
+
+  const requiredOrder = cliVersionOrder(requiredVersion);
+  if (requiredOrder === null) {
+    throw new Error(
+      `Invalid min_cli_version '${requiredVersion}' in repo config. Expected a value like 'v16'.`
+    );
+  }
+
+  const currentOrder = cliVersionOrder(currentVersion);
+  const normalizedRequired = normalizeCliVersionTag(requiredVersion);
+  const normalizedCurrent = normalizeCliVersionTag(currentVersion);
+
+  if (currentOrder === null || currentOrder < requiredOrder) {
+    throw new Error(
+      `This repository requires lb ${normalizedRequired} or newer. Current binary is ${normalizedCurrent}. Update lb (for example: lb self-update) and retry.`
+    );
+  }
+}
+
+export function ensureRepoMinCliVersion(minCliVersion: string): void {
+  const normalizedTarget = normalizeCliVersionTag(minCliVersion);
+  const currentRequired = (getOption("min_cli_version") as string | undefined)?.trim();
+  if (currentRequired && isCliVersionAtLeast(currentRequired, normalizedTarget)) {
+    return;
+  }
+  writeRepoConfig({ min_cli_version: normalizedTarget });
 }
 
 /**

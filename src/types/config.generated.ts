@@ -35,6 +35,10 @@ export interface HttpsLbCliDevConfigSchemaJson {
    */
   repo_binding_version?: 1 | 2;
   /**
+   * Minimum lb CLI version required for this repository (for example: 'v16'). Older binaries exit early with an upgrade message.
+   */
+  min_cli_version?: string;
+  /**
    * Issue backend adapter. 'linear' uses Linear GraphQL. 'local' keeps issue operations local-only.
    */
   issue_backend?: "linear" | "local";

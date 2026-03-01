@@ -38,6 +38,10 @@
       "default": 1,
       "description": "Binding policy version for implicit repo scope fallback when repo_scope is not explicitly set. Version 1 defaults to label scope, version 2 defaults to project scope."
     },
+    "min_cli_version": {
+      "type": "string",
+      "description": "Minimum lb CLI version required for this repository (for example: 'v16'). Older binaries exit early with an upgrade message."
+    },
     "issue_backend": {
       "type": "string",
       "enum": ["linear", "local"],

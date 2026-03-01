@@ -29,6 +29,7 @@ import { closeDatabase } from "./utils/database.js";
 import { getBinaryVersion, resolveBinaryPath } from "./utils/self-update.js";
 import { exportToJsonl } from "./utils/jsonl.js";
 import { processOutbox } from "./utils/background-sync-worker.js";
+import { assertMinCliVersion } from "./utils/config.js";
 
 function currentCliVersion(): string {
   try {
@@ -43,12 +44,21 @@ function currentCliVersion(): string {
   return "v0.0.0";
 }
 
+function shouldSkipMinCliGate(argv: string[]): boolean {
+  if (argv.includes("--help") || argv.includes("-h") || argv.includes("--version") || argv.includes("-V")) {
+    return true;
+  }
+
+  return argv.some((arg) => arg === "self-update");
+}
+
+const cliVersion = currentCliVersion();
 const program = new Command();
 
 program
   .name("lb")
   .description("Linear-native beads-style issue tracker")
-  .version(currentCliVersion())
+  .version(cliVersion)
   .option("--worker", "Internal: run background sync worker")
   .option("--export-worker", "Internal: run JSONL export worker")
   .configureHelp({
@@ -61,6 +71,15 @@ program
   });
 
 // Check for --worker flag before parsing commands
+if (!shouldSkipMinCliGate(process.argv)) {
+  try {
+    assertMinCliVersion(cliVersion);
+  } catch (error) {
+    console.error("Error:", error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
+}
+
 if (process.argv.includes("--worker")) {
   processOutbox()
     .then(() => process.exit(0))
