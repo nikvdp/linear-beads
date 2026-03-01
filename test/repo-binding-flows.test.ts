@@ -3,6 +3,7 @@ import { GraphQLClient } from "graphql-request";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { basename, join } from "path";
+import { Database } from "bun:sqlite";
 
 setDefaultTimeout(120000);
 
@@ -58,12 +59,32 @@ function writeRepoConfig(
   writeFileSync(join(lbDir, "config.jsonc"), `${JSON.stringify(config, null, 2)}\n`);
 }
 
-function readRepoConfig(repoDir: string): { repo_name?: string; repo_scope?: string } {
+function readRepoConfig(repoDir: string): {
+  repo_name?: string;
+  repo_scope?: string;
+  repo_binding_version?: number;
+} {
   const configPath = join(repoDir, ".lb", "config.jsonc");
   if (!existsSync(configPath)) {
     throw new Error(`Config file missing: ${configPath}`);
   }
   return JSON.parse(readFileSync(configPath, "utf8"));
+}
+
+function seedLegacyLocalState(repoDir: string): void {
+  const lbDir = join(repoDir, ".lb");
+  mkdirSync(lbDir, { recursive: true });
+  const db = new Database(join(lbDir, "cache.db"));
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+  db.query(
+    "INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_sync', datetime('now'))"
+  ).run();
+  db.close();
 }
 
 async function lb(
@@ -201,9 +222,32 @@ describe("repo binding flows", () => {
     await mustSucceed(repoDir, "init");
 
     const config = readRepoConfig(repoDir);
-    expect(config.repo_scope).toBe("project");
+    expect(config.repo_binding_version).toBe(2);
+    expect(config.repo_scope).toBeUndefined();
     expect(typeof config.repo_name).toBe("string");
     expect(config.repo_name).toBe(basename(repoDir));
+  });
+
+  test("init bootstraps missing config even when .lb exists", async () => {
+    const repoDir = createTempGitRepo("lb-init-bootstrap-missing-config");
+    mkdirSync(join(repoDir, ".lb"), { recursive: true });
+
+    await mustSucceed(repoDir, "init");
+
+    const config = readRepoConfig(repoDir);
+    expect(config.repo_binding_version).toBe(2);
+    expect(config.repo_scope).toBeUndefined();
+  });
+
+  test("init keeps legacy default when local cache has prior state", async () => {
+    const repoDir = createTempGitRepo("lb-init-legacy-local-state");
+    seedLegacyLocalState(repoDir);
+
+    await mustSucceed(repoDir, "init");
+
+    const config = readRepoConfig(repoDir);
+    expect(config.repo_binding_version).toBe(1);
+    expect(config.repo_scope).toBeUndefined();
   });
 
   test("init preserves explicit existing label scope config", async () => {
