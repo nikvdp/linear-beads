@@ -46,6 +46,8 @@ function linearToBdIssue(linear: LinearIssue): Issue & { linear_state_id: string
 
   const issue: Issue & { linear_state_id: string } = {
     id: linear.identifier,
+    linear_id: linear.id,
+    linear_identifier: linear.identifier,
     title: linear.title,
     description: linear.description || undefined,
     status: linearStateToStatus(linear.state.type),

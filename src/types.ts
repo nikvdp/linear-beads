@@ -32,6 +32,11 @@ export interface Dependency {
  */
 export interface Issue {
   id: string;
+  // Canonical local identifier (stable primary key in local cache)
+  local_id?: string;
+  // Linear UUID and human identifier, when synced
+  linear_id?: string;
+  linear_identifier?: string;
   title: string;
   description?: string;
   status: IssueStatus;

@@ -287,6 +287,14 @@ function initSchema(db: Database): void {
       last_error TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS issue_id_map (
+      local_id TEXT PRIMARY KEY,
+      linear_id TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_issue_id_map_linear_id ON issue_id_map(linear_id);
+
     -- Metadata (cache timestamps, etc.)
     CREATE TABLE IF NOT EXISTS metadata (
       key TEXT PRIMARY KEY,
@@ -414,6 +422,84 @@ function initSchema(db: Database): void {
     `);
 
     db.exec("PRAGMA user_version = 5");
+  }
+
+  if (currentVersion < 6) {
+    const issueCols = db.query("PRAGMA table_info(issues)").all() as Array<{ name: string }>;
+    const hasLocalIdSchema = issueCols.some((c) => c.name === "local_id");
+
+    if (!hasLocalIdSchema) {
+      db.exec(`
+        CREATE TABLE issues_new (
+          local_id TEXT PRIMARY KEY,
+          linear_id TEXT,
+          linear_identifier TEXT,
+          title TEXT NOT NULL,
+          description TEXT,
+          status TEXT NOT NULL,
+          priority INTEGER NOT NULL,
+          issue_type TEXT,
+          sync_status TEXT NOT NULL DEFAULT 'synced',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          closed_at TEXT,
+          assignee TEXT,
+          linear_state_id TEXT,
+          cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        INSERT INTO issues_new (
+          local_id,
+          linear_id,
+          linear_identifier,
+          title,
+          description,
+          status,
+          priority,
+          issue_type,
+          sync_status,
+          created_at,
+          updated_at,
+          closed_at,
+          assignee,
+          linear_state_id,
+          cached_at
+        )
+        SELECT
+          id AS local_id,
+          NULL AS linear_id,
+          CASE
+            WHEN UPPER(id) LIKE 'LOCAL-%' THEN NULL
+            ELSE identifier
+          END AS linear_identifier,
+          title,
+          description,
+          status,
+          priority,
+          issue_type,
+          sync_status,
+          created_at,
+          updated_at,
+          closed_at,
+          assignee,
+          linear_state_id,
+          cached_at
+        FROM issues;
+
+        DROP TABLE issues;
+        ALTER TABLE issues_new RENAME TO issues;
+      `);
+    }
+
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_linear_id ON issues(linear_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_linear_identifier ON issues(linear_identifier);
+      CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+      CREATE INDEX IF NOT EXISTS idx_issues_sync_status ON issues(sync_status);
+      CREATE INDEX IF NOT EXISTS idx_issues_cached_at ON issues(cached_at);
+    `);
+
+    db.exec("PRAGMA user_version = 6");
   }
 }
 
@@ -597,88 +683,124 @@ export function needsFullSync(): boolean {
 /**
  * Cache an issue
  */
-export function cacheIssue(
-  issue: Issue & { linear_state_id?: string; sync_status?: "synced" | "pending" | "failed" }
-): void {
-  const db = getDatabase();
-  runWithBusyRetry(() => {
-    db.run(
-      `
-    INSERT OR REPLACE INTO issues 
-    (id, identifier, title, description, status, priority, issue_type, sync_status, created_at, updated_at, closed_at, assignee, linear_state_id, cached_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `,
-      [
-        issue.id,
-        issue.id, // identifier same as id for now
-        issue.title,
-        issue.description || null,
-        issue.status,
-        issue.priority,
-        issue.issue_type || null,
-        issue.sync_status || "synced",
-        issue.created_at,
-        issue.updated_at,
-        issue.closed_at || null,
-        issue.assignee || null,
-        issue.linear_state_id || null,
-      ]
-    );
-  });
-  requestJsonlExport();
+type CachedIssueInput = Issue & {
+  linear_state_id?: string;
+  sync_status?: "synced" | "pending" | "failed";
+  local_id?: string;
+  linear_id?: string;
+  linear_identifier?: string;
+};
+
+function toIssueDisplayId(localId: string, linearIdentifier?: string | null): string {
+  return linearIdentifier || localId;
 }
 
-/**
- * Cache multiple issues (transactional)
- */
-export function cacheIssues(issues: Array<Issue & { linear_state_id?: string }>): void {
-  const db = getDatabase();
-  const insert = db.prepare(`
-    INSERT OR REPLACE INTO issues 
-    (id, identifier, title, description, status, priority, issue_type, sync_status, created_at, updated_at, closed_at, assignee, linear_state_id, cached_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `);
-
-  const transaction = db.transaction(() => {
-    for (const issue of issues) {
-      insert.run(
-        issue.id,
-        issue.id,
-        issue.title,
-        issue.description || null,
-        issue.status,
-        issue.priority,
-        issue.issue_type || null,
-        issue.sync_status || "synced",
-        issue.created_at,
-        issue.updated_at,
-        issue.closed_at || null,
-        issue.assignee || null,
-        issue.linear_state_id || null
-      );
-    }
-  });
-
-  runWithBusyRetry(() => {
-    transaction();
-  });
-  requestJsonlExport();
-}
-
-/**
- * Get cached issue by ID
- */
-export function getCachedIssue(id: string): Issue | null {
-  const db = getDatabase();
-  const resolvedId = resolveIssueId(id);
+function findExistingLocalIdForIssue(
+  db: Database,
+  localId: string,
+  linearId?: string,
+  linearIdentifier?: string
+): string | null {
   const row = db
-    .query("SELECT * FROM issues WHERE id = ? OR identifier = ?")
-    .get(resolvedId, resolvedId) as Record<string, unknown> | null;
+    .query(
+      `
+      SELECT local_id
+      FROM issues
+      WHERE local_id = ?
+         OR (? IS NOT NULL AND linear_id = ?)
+         OR (? IS NOT NULL AND linear_identifier = ?)
+      LIMIT 1
+    `
+    )
+    .get(
+      localId,
+      linearId || null,
+      linearId || null,
+      linearIdentifier || null,
+      linearIdentifier || null
+    ) as { local_id: string } | null;
 
-  if (!row) return null;
+  return row?.local_id || null;
+}
+
+function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
+  const normalizedSyncStatus = issue.sync_status || "synced";
+  const providedLocalId = issue.local_id || issue.id;
+  const inferredLinearIdentifier =
+    issue.linear_identifier || (!isLocalId(issue.id) ? issue.id : undefined);
+  const existingLocalId = findExistingLocalIdForIssue(
+    db,
+    providedLocalId,
+    issue.linear_id,
+    inferredLinearIdentifier
+  );
+  const localId = existingLocalId || providedLocalId;
+  const linearIdentifier = inferredLinearIdentifier || (isLocalId(localId) ? null : localId);
+
+  db.run(
+    `
+      INSERT INTO issues (
+        local_id,
+        linear_id,
+        linear_identifier,
+        title,
+        description,
+        status,
+        priority,
+        issue_type,
+        sync_status,
+        created_at,
+        updated_at,
+        closed_at,
+        assignee,
+        linear_state_id,
+        cached_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(local_id) DO UPDATE SET
+        linear_id = COALESCE(excluded.linear_id, issues.linear_id),
+        linear_identifier = COALESCE(excluded.linear_identifier, issues.linear_identifier),
+        title = excluded.title,
+        description = excluded.description,
+        status = excluded.status,
+        priority = excluded.priority,
+        issue_type = excluded.issue_type,
+        sync_status = excluded.sync_status,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at,
+        closed_at = excluded.closed_at,
+        assignee = excluded.assignee,
+        linear_state_id = excluded.linear_state_id,
+        cached_at = datetime('now')
+    `,
+    [
+      localId,
+      issue.linear_id || null,
+      linearIdentifier,
+      issue.title,
+      issue.description || null,
+      issue.status,
+      issue.priority,
+      issue.issue_type || null,
+      normalizedSyncStatus,
+      issue.created_at,
+      issue.updated_at,
+      issue.closed_at || null,
+      issue.assignee || null,
+      issue.linear_state_id || null,
+    ]
+  );
+}
+
+function rowToIssue(row: Record<string, unknown>): Issue {
+  const localId = row.local_id as string;
+  const linearIdentifier = row.linear_identifier as string | null;
 
   const issue: Issue = {
-    id: row.id as string,
+    id: toIssueDisplayId(localId, linearIdentifier),
+    local_id: localId,
+    linear_id: (row.linear_id as string | null) || undefined,
+    linear_identifier: linearIdentifier || undefined,
     title: row.title as string,
     description: row.description as string | undefined,
     status: row.status as Issue["status"],
@@ -697,6 +819,46 @@ export function getCachedIssue(id: string): Issue | null {
   return issue;
 }
 
+export function cacheIssue(issue: CachedIssueInput): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    upsertIssueRow(db, issue);
+  });
+  requestJsonlExport();
+}
+
+/**
+ * Cache multiple issues (transactional)
+ */
+export function cacheIssues(issues: Array<Issue & { linear_state_id?: string }>): void {
+  const db = getDatabase();
+  const transaction = db.transaction(() => {
+    for (const issue of issues) {
+      upsertIssueRow(db, issue);
+    }
+  });
+
+  runWithBusyRetry(() => {
+    transaction();
+  });
+  requestJsonlExport();
+}
+
+/**
+ * Get cached issue by ID
+ */
+export function getCachedIssue(id: string): Issue | null {
+  const db = getDatabase();
+  const normalizedId = normalizeIssueInputId(id);
+  const resolvedLocalId = resolveIssueLocalId(normalizedId);
+  const row = db
+    .query("SELECT * FROM issues WHERE local_id = ? OR linear_identifier = ? LIMIT 1")
+    .get(resolvedLocalId, normalizedId) as Record<string, unknown> | null;
+
+  if (!row) return null;
+  return rowToIssue(row);
+}
+
 /**
  * Get all cached issues
  */
@@ -706,26 +868,7 @@ export function getCachedIssues(): Issue[] {
     Record<string, unknown>
   >;
 
-  return rows.map((row) => {
-    const issue: Issue = {
-      id: row.id as string,
-      title: row.title as string,
-      description: row.description as string | undefined,
-      status: row.status as Issue["status"],
-      priority: row.priority as Issue["priority"],
-      sync_status: (row.sync_status as Issue["sync_status"]) || "synced",
-      created_at: row.created_at as string,
-      updated_at: row.updated_at as string,
-      closed_at: row.closed_at as string | undefined,
-      assignee: row.assignee as string | undefined,
-    };
-
-    if (row.issue_type) {
-      issue.issue_type = row.issue_type as Issue["issue_type"];
-    }
-
-    return issue;
-  });
+  return rows.map((row) => rowToIssue(row));
 }
 
 /**
@@ -733,6 +876,8 @@ export function getCachedIssues(): Issue[] {
  */
 export function cacheDependency(dep: Dependency): void {
   const db = getDatabase();
+  const issueId = resolveIssueLocalId(dep.issue_id);
+  const dependsOnId = resolveIssueLocalId(dep.depends_on_id);
   runWithBusyRetry(() => {
     db.run(
       `
@@ -740,7 +885,7 @@ export function cacheDependency(dep: Dependency): void {
     (issue_id, depends_on_id, type, created_at, created_by)
     VALUES (?, ?, ?, ?, ?)
   `,
-      [dep.issue_id, dep.depends_on_id, dep.type, dep.created_at, dep.created_by]
+      [issueId, dependsOnId, dep.type, dep.created_at, dep.created_by]
     );
   });
   requestJsonlExport();
@@ -751,7 +896,7 @@ export function cacheDependency(dep: Dependency): void {
  */
 export function clearIssueDependencies(issueId: string): void {
   const db = getDatabase();
-  const resolvedId = resolveIssueId(issueId);
+  const resolvedId = resolveIssueLocalId(issueId);
   runWithBusyRetry(() => {
     db.run("DELETE FROM dependencies WHERE issue_id = ?", [resolvedId]);
   });
@@ -763,8 +908,8 @@ export function clearIssueDependencies(issueId: string): void {
  */
 export function deleteDependency(issueId: string, dependsOnId: string): void {
   const db = getDatabase();
-  const resolvedIssueId = resolveIssueId(issueId);
-  const resolvedDependsOnId = resolveIssueId(dependsOnId);
+  const resolvedIssueId = resolveIssueLocalId(issueId);
+  const resolvedDependsOnId = resolveIssueLocalId(dependsOnId);
   runWithBusyRetry(() => {
     db.run("DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ?", [
       resolvedIssueId,
@@ -784,7 +929,7 @@ export function deleteDependency(issueId: string, dependsOnId: string): void {
  */
 export function getDependencies(issueId: string): Dependency[] {
   const db = getDatabase();
-  const resolvedId = resolveIssueId(issueId);
+  const resolvedId = resolveIssueLocalId(issueId);
   const rows = db.query("SELECT * FROM dependencies WHERE issue_id = ?").all(resolvedId) as Array<
     Record<string, unknown>
   >;
@@ -812,7 +957,7 @@ export function getParentId(issueId: string): string | null {
  */
 export function getChildIds(issueId: string): string[] {
   const db = getDatabase();
-  const resolvedId = resolveIssueId(issueId);
+  const resolvedId = resolveIssueLocalId(issueId);
   const rows = db
     .query("SELECT issue_id FROM dependencies WHERE depends_on_id = ? AND type = 'parent-child'")
     .all(resolvedId) as Array<{ issue_id: string }>;
@@ -824,7 +969,7 @@ export function getChildIds(issueId: string): string[] {
  */
 export function getInverseDependencies(issueId: string): Dependency[] {
   const db = getDatabase();
-  const resolvedId = resolveIssueId(issueId);
+  const resolvedId = resolveIssueLocalId(issueId);
   const rows = db
     .query("SELECT * FROM dependencies WHERE depends_on_id = ?")
     .all(resolvedId) as Array<Record<string, unknown>>;
@@ -843,7 +988,7 @@ export function getInverseDependencies(issueId: string): Dependency[] {
  */
 export function getDependents(issueId: string): Dependency[] {
   const db = getDatabase();
-  const resolvedId = resolveIssueId(issueId);
+  const resolvedId = resolveIssueLocalId(issueId);
   const rows = db
     .query("SELECT * FROM dependencies WHERE depends_on_id = ?")
     .all(resolvedId) as Array<Record<string, unknown>>;
@@ -870,7 +1015,7 @@ export function getBlockedIssueIds(): Set<string> {
       `
     SELECT DISTINCT d.depends_on_id as blocked_id
     FROM dependencies d
-    JOIN issues i ON d.issue_id = i.id
+    JOIN issues i ON d.issue_id = i.local_id
     WHERE d.type = 'blocks' AND i.status != 'closed'
   `
     )
@@ -1112,9 +1257,9 @@ export function clearIssuesCache(): void {
  */
 export function deleteCachedIssue(issueId: string): void {
   const db = getDatabase();
-  const resolvedId = resolveIssueId(issueId);
+  const resolvedId = resolveIssueLocalId(issueId);
   runWithBusyRetry(() => {
-    db.run("DELETE FROM issues WHERE id = ?", [resolvedId]);
+    db.run("DELETE FROM issues WHERE local_id = ?", [resolvedId]);
     db.run("DELETE FROM dependencies WHERE issue_id = ? OR depends_on_id = ?", [
       resolvedId,
       resolvedId,
@@ -1178,26 +1323,42 @@ export function getProjectIdByName(name: string): string | null {
  */
 export function getAllCachedIssueIds(): string[] {
   const db = getDatabase();
-  const rows = db.query("SELECT id FROM issues").all() as Array<{ id: string }>;
-  return rows.map((r) => r.id);
+  const rows = db.query("SELECT local_id FROM issues").all() as Array<{ local_id: string }>;
+  return rows.map((r) => r.local_id);
 }
 
 /**
  * Prune issues that are no longer in the remote (stale).
  * Called after full sync to remove issues that were deleted or moved out of scope.
- * @param validIds Set of issue IDs that are still valid (from remote)
+ * @param validIds Set of remote linear identifiers that are still valid
  * @returns Number of issues pruned
  */
 export function pruneStaleIssues(validIds: Set<string>): number {
   const db = getDatabase();
-  const allIds = getAllCachedIssueIds();
+  const rows = db
+    .query("SELECT local_id, linear_identifier, sync_status FROM issues")
+    .all() as Array<{
+    local_id: string;
+    linear_identifier: string | null;
+    sync_status: "synced" | "pending" | "failed" | null;
+  }>;
   let pruned = 0;
 
   runWithBusyRetry(() => {
-    for (const id of allIds) {
-      if (!validIds.has(id)) {
-        db.run("DELETE FROM issues WHERE id = ?", [id]);
-        db.run("DELETE FROM dependencies WHERE issue_id = ? OR depends_on_id = ?", [id, id]);
+    for (const row of rows) {
+      const syncStatus = row.sync_status || "synced";
+      if (syncStatus !== "synced") {
+        continue;
+      }
+      if (!row.linear_identifier) {
+        continue;
+      }
+      if (!validIds.has(row.linear_identifier)) {
+        db.run("DELETE FROM issues WHERE local_id = ?", [row.local_id]);
+        db.run("DELETE FROM dependencies WHERE issue_id = ? OR depends_on_id = ?", [
+          row.local_id,
+          row.local_id,
+        ]);
         pruned++;
       }
     }
@@ -1256,10 +1417,10 @@ function inferTeamPrefixForIssueNumber(issueNumber: string): string {
       db
         .query(
           `
-        SELECT DISTINCT UPPER(substr(id, 1, instr(id, '-') - 1)) AS prefix
+        SELECT DISTINCT UPPER(substr(COALESCE(linear_identifier, local_id), 1, instr(COALESCE(linear_identifier, local_id), '-') - 1)) AS prefix
         FROM issues
-        WHERE instr(id, '-') > 1
-          AND CAST(substr(id, instr(id, '-') + 1) AS INTEGER) = ?
+        WHERE instr(COALESCE(linear_identifier, local_id), '-') > 1
+          AND CAST(substr(COALESCE(linear_identifier, local_id), instr(COALESCE(linear_identifier, local_id), '-') + 1) AS INTEGER) = ?
         UNION
         SELECT DISTINCT UPPER(substr(linear_id, 1, instr(linear_id, '-') - 1)) AS prefix
         FROM issue_id_map
@@ -1275,9 +1436,9 @@ function inferTeamPrefixForIssueNumber(issueNumber: string): string {
       db
         .query(
           `
-        SELECT DISTINCT UPPER(substr(id, 1, instr(id, '-') - 1)) AS prefix
+        SELECT DISTINCT UPPER(substr(COALESCE(linear_identifier, local_id), 1, instr(COALESCE(linear_identifier, local_id), '-') - 1)) AS prefix
         FROM issues
-        WHERE instr(id, '-') > 1
+        WHERE instr(COALESCE(linear_identifier, local_id), '-') > 1
         UNION
         SELECT DISTINCT UPPER(substr(linear_id, 1, instr(linear_id, '-') - 1)) AS prefix
         FROM issue_id_map
@@ -1348,12 +1509,64 @@ function normalizeIssueInputId(id: string): string {
 }
 
 /**
- * Resolve input ID to Linear ID if mapping exists
+ * Resolve an input ID to canonical local_id.
+ */
+export function resolveIssueLocalId(id: string): string {
+  const normalizedId = normalizeIssueInputId(id);
+  const db = getDatabase();
+
+  const direct = db
+    .query("SELECT local_id FROM issues WHERE local_id = ? OR linear_identifier = ? LIMIT 1")
+    .get(normalizedId, normalizedId) as { local_id: string } | null;
+  if (direct?.local_id) {
+    return direct.local_id;
+  }
+
+  if (isLocalId(normalizedId)) {
+    const mappedLinear = getIssueIdMapping(normalizedId);
+    if (mappedLinear) {
+      const mappedRow = db
+        .query("SELECT local_id FROM issues WHERE local_id = ? OR linear_identifier = ? LIMIT 1")
+        .get(mappedLinear, mappedLinear) as { local_id: string } | null;
+      if (mappedRow?.local_id) {
+        return mappedRow.local_id;
+      }
+      return mappedLinear;
+    }
+  }
+
+  return normalizedId;
+}
+
+export function getLinearIdentifierForLocalId(localId: string): string | null {
+  const db = getDatabase();
+  const row = db.query("SELECT linear_identifier FROM issues WHERE local_id = ?").get(localId) as {
+    linear_identifier: string | null;
+  } | null;
+  return row?.linear_identifier || null;
+}
+
+export function getLinearIdForLocalId(localId: string): string | null {
+  const db = getDatabase();
+  const row = db.query("SELECT linear_id FROM issues WHERE local_id = ?").get(localId) as {
+    linear_id: string | null;
+  } | null;
+  return row?.linear_id || null;
+}
+
+/**
+ * Resolve input ID to a remote-friendly identifier (LIN-123 when available).
  */
 export function resolveIssueId(id: string): string {
-  const normalizedId = normalizeIssueInputId(id);
-  if (!isLocalId(normalizedId)) return normalizedId;
-  return getIssueIdMapping(normalizedId) || normalizedId;
+  const localId = resolveIssueLocalId(id);
+  const linearIdentifier = getLinearIdentifierForLocalId(localId);
+  if (linearIdentifier) {
+    return linearIdentifier;
+  }
+  if (isLocalId(localId)) {
+    return getIssueIdMapping(localId) || localId;
+  }
+  return localId;
 }
 
 /**
@@ -1361,48 +1574,85 @@ export function resolveIssueId(id: string): string {
  */
 export function getLocalIdForLinearId(linearId: string): string | null {
   const db = getDatabase();
-  const row = db.query("SELECT local_id FROM issue_id_map WHERE linear_id = ?").get(linearId) as {
+  const row = db
+    .query("SELECT local_id FROM issues WHERE linear_identifier = ? OR local_id = ? LIMIT 1")
+    .get(linearId, linearId) as { local_id: string } | null;
+  if (row?.local_id) {
+    return row.local_id;
+  }
+
+  const legacy = db
+    .query("SELECT local_id FROM issue_id_map WHERE linear_id = ?")
+    .get(linearId) as {
     local_id: string;
   } | null;
-  return row?.local_id || null;
+  return legacy?.local_id || null;
 }
 
 /**
  * Format issue ID to include local ID when available
  */
 export function getDisplayId(id: string): string {
-  return resolveIssueId(id);
+  const localId = resolveIssueLocalId(id);
+  const linearIdentifier = getLinearIdentifierForLocalId(localId);
+  if (linearIdentifier) {
+    return linearIdentifier;
+  }
+  if (isLocalId(localId)) {
+    return getIssueIdMapping(localId) || localId;
+  }
+  return localId;
 }
 
 /**
- * Replace a local issue ID with a Linear ID in cache + dependencies
+ * Attach remote identifiers to a stable local issue row after sync.
  */
-export function replaceIssueId(localId: string, linearId: string): void {
-  if (localId === linearId) return;
+export function replaceIssueId(localId: string, linearIdentifier: string, linearId?: string): void {
   const db = getDatabase();
-
-  const existing = db.query("SELECT id FROM issues WHERE id = ?").get(linearId) as {
-    id: string;
-  } | null;
+  const resolvedLocalId = resolveIssueLocalId(localId);
+  const sourceLocalId = localId;
 
   runWithBusyRetry(() => {
-    if (existing) {
-      db.run("DELETE FROM issues WHERE id = ?", [localId]);
-    } else {
-      db.run(
-        `
-      UPDATE issues
-      SET id = ?, identifier = ?, sync_status = 'synced'
-      WHERE id = ?
-    `,
-        [linearId, linearId, localId]
-      );
+    const existingForLinear = db
+      .query("SELECT local_id FROM issues WHERE linear_identifier = ? AND local_id != ? LIMIT 1")
+      .get(linearIdentifier, resolvedLocalId) as { local_id: string } | null;
+
+    if (existingForLinear?.local_id) {
+      db.run("UPDATE dependencies SET issue_id = ? WHERE issue_id = ?", [
+        resolvedLocalId,
+        existingForLinear.local_id,
+      ]);
+      db.run("UPDATE dependencies SET depends_on_id = ? WHERE depends_on_id = ?", [
+        resolvedLocalId,
+        existingForLinear.local_id,
+      ]);
+      db.run("DELETE FROM issues WHERE local_id = ?", [existingForLinear.local_id]);
     }
 
-    db.run("UPDATE dependencies SET issue_id = ? WHERE issue_id = ?", [linearId, localId]);
-    db.run("UPDATE dependencies SET depends_on_id = ? WHERE depends_on_id = ?", [
-      linearId,
-      localId,
+    db.run(
+      `
+      UPDATE issues
+      SET linear_identifier = ?,
+          linear_id = COALESCE(?, linear_id),
+          sync_status = 'synced',
+          updated_at = ?
+      WHERE local_id = ?
+    `,
+      [linearIdentifier, linearId || null, new Date().toISOString(), resolvedLocalId]
+    );
+
+    db.run(
+      `
+      INSERT OR REPLACE INTO issue_id_map (local_id, linear_id, created_at)
+      VALUES (?, ?, ?)
+    `,
+      [resolvedLocalId, linearIdentifier, new Date().toISOString()]
+    );
+
+    db.run("UPDATE outbox SET local_id = ? WHERE local_id = ? OR local_id = ?", [
+      resolvedLocalId,
+      resolvedLocalId,
+      sourceLocalId,
     ]);
   });
 
