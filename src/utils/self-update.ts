@@ -7,10 +7,8 @@ import {
   chmodSync,
   constants,
   copyFileSync,
-  readFileSync,
   renameSync,
   statSync,
-  writeFileSync,
   unlinkSync,
 } from "fs";
 import { basename, dirname, resolve } from "path";
@@ -243,33 +241,12 @@ function ensureWritableBinaryDirectory(binaryPath: string): void {
   }
 }
 
-function versionFilePath(binaryPath: string): string {
-  return `${binaryPath}.version`;
+function embeddedVersion(): string {
+  return packageJson.version ? normalizeReleaseTag(`v${packageJson.version}`) : "v0.0.0";
 }
 
-function readStoredVersion(binaryPath: string): string | undefined {
-  try {
-    const data = readFileSync(versionFilePath(binaryPath), "utf8").trim();
-    if (!data) {
-      return undefined;
-    }
-    return normalizeTag(data);
-  } catch {
-    return undefined;
-  }
-}
-
-function currentVersion(binaryPath: string): string {
-  return (
-    readStoredVersion(binaryPath) || (packageJson.version ? `v${packageJson.version}` : "unknown")
-  );
-}
-
-export function getBinaryVersion(binaryPath?: string): string {
-  if (!binaryPath) {
-    return packageJson.version ? normalizeReleaseTag(`v${packageJson.version}`) : "v0.0.0";
-  }
-  return normalizeReleaseTag(currentVersion(binaryPath));
+export function getBinaryVersion(_binaryPath?: string): string {
+  return embeddedVersion();
 }
 
 function releaseUrl(version: string): string {
@@ -353,7 +330,7 @@ export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpd
   const release = await fetchJson<GitHubRelease>(getReleaseApiUrl(options.version));
   const remoteVersion = normalizeReleaseTag(release.tag_name);
   const binaryPath = resolveBinaryPath(options.path);
-  const local = normalizeReleaseTag(currentVersion(binaryPath));
+  const local = getBinaryVersion(binaryPath);
   const localClean = normalizeTag(local);
   const binaryName = artifactNameForPlatform();
   const asset = release.assets.find((item) => item.name === binaryName);
@@ -396,7 +373,6 @@ export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpd
     await Bun.write(stagedPath, bytes);
     installDownloadedBinary(stagedPath, binaryPath);
     chmodSync(binaryPath, 0o755);
-    writeFileSync(versionFilePath(binaryPath), `${remoteVersion}\n`, "utf8");
   } finally {
     try {
       unlinkSync(stagedPath);
