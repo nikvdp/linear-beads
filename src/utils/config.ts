@@ -184,6 +184,10 @@ export function deepMerge<T extends object>(target: T, source: Partial<T>): T {
  * Repo scoping mode type
  */
 export type RepoScopeMode = "label" | "project" | "both";
+export type RepoBindingVersion = 1 | 2;
+
+const LEGACY_REPO_BINDING_VERSION: RepoBindingVersion = 1;
+const PROJECT_DEFAULT_REPO_BINDING_VERSION: RepoBindingVersion = 2;
 
 /**
  * Default config values
@@ -192,10 +196,62 @@ export const DEFAULT_CONFIG: LoadedConfig = {
   use_issue_types: false,
   cache_ttl_seconds: 120,
   local_only: false,
-  repo_scope: "label", // Default to label for backward compatibility
+  repo_binding_version: LEGACY_REPO_BINDING_VERSION,
   issue_backend: "linear",
   mail_backend: "local",
 };
+
+function parseRepoScope(value: unknown): RepoScopeMode | undefined {
+  if (value === "label" || value === "project" || value === "both") {
+    return value;
+  }
+  return undefined;
+}
+
+function parseRepoBindingVersion(value: unknown): RepoBindingVersion | undefined {
+  if (value === 1 || value === 2) {
+    return value;
+  }
+  return undefined;
+}
+
+function scopeFromBindingVersion(version: RepoBindingVersion): RepoScopeMode {
+  if (version >= PROJECT_DEFAULT_REPO_BINDING_VERSION) {
+    return "project";
+  }
+  return "label";
+}
+
+function resolveRepoScopeFromLayers(layers: Array<Record<string, unknown> | null>): RepoScopeMode {
+  for (const layer of layers) {
+    const scope = parseRepoScope(layer?.repo_scope);
+    if (scope) {
+      return scope;
+    }
+  }
+
+  for (const layer of layers) {
+    const version = parseRepoBindingVersion(layer?.repo_binding_version);
+    if (version) {
+      return scopeFromBindingVersion(version);
+    }
+  }
+
+  return "label";
+}
+
+function resolveRepoBindingVersionFromLayers(
+  layers: Array<Record<string, unknown> | null>
+): RepoBindingVersion {
+  for (const layer of layers) {
+    const version = parseRepoBindingVersion(layer?.repo_binding_version);
+    if (version) {
+      return version;
+    }
+  }
+
+  return LEGACY_REPO_BINDING_VERSION;
+}
 
 /**
  * Find git root directory
@@ -271,6 +327,10 @@ function loadConfig(): LoadedConfig {
   if (repoConfig) {
     config = deepMerge(config, repoConfig as Partial<LoadedConfig>);
   }
+
+  const scopeLayers = [repoConfig, globalConfig];
+  config.repo_binding_version = resolveRepoBindingVersionFromLayers(scopeLayers);
+  config.repo_scope = resolveRepoScopeFromLayers(scopeLayers);
 
   // 3. Environment variables override everything except CLI
   if (process.env.LINEAR_API_KEY) {
@@ -375,6 +435,10 @@ export function isLocalOnly(): boolean {
  */
 export function getRepoScope(): RepoScopeMode {
   return (getOption("repo_scope") as RepoScopeMode) || "label";
+}
+
+export function getRepoBindingVersion(): RepoBindingVersion {
+  return parseRepoBindingVersion(getOption("repo_binding_version")) || LEGACY_REPO_BINDING_VERSION;
 }
 
 /**

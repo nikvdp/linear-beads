@@ -31,6 +31,10 @@ export interface HttpsLbCliDevConfigSchemaJson {
    */
   repo_scope?: "label" | "project" | "both";
   /**
+   * Binding policy version for implicit repo scope fallback when repo_scope is not explicitly set. Version 1 defaults to label scope, version 2 defaults to project scope.
+   */
+  repo_binding_version?: 1 | 2;
+  /**
    * Issue backend adapter. 'linear' uses Linear GraphQL. 'local' keeps issue operations local-only.
    */
   issue_backend?: "linear" | "local";
