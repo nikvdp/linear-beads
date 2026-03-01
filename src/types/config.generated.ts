@@ -27,7 +27,7 @@ export interface HttpsLbCliDevConfigSchemaJson {
    */
   local_only?: boolean;
   /**
-   * How to scope issues to this repo in Linear. 'label' uses repo:name labels (default, backward compatible). 'project' uses Linear Projects. 'both' uses both for filtering/assignment.
+   * How to scope issues to this repo in Linear. 'label' uses repo:name labels. 'project' uses Linear Projects. 'both' uses both for filtering/assignment. When omitted, repo_binding_version controls the implicit fallback.
    */
   repo_scope?: "label" | "project" | "both";
   /**
