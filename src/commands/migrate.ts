@@ -8,6 +8,7 @@ import { getTeamId, fetchIssues } from "../utils/issue-backend.js";
 import { getRepoLabel, getRepoName, getRepoScope } from "../utils/config.js";
 import { output } from "../utils/output.js";
 import { ensureRepoProject } from "../utils/issue-backend.js";
+import { getLocalSchemaStatus } from "../utils/schema-status.js";
 
 /**
  * Remove type labels from all issues in this repo
@@ -282,6 +283,32 @@ async function fetchIssuesByRepoLabel(
 
 export const migrateCommand = new Command("migrate")
   .description("Migration utilities")
+  .addCommand(
+    new Command("status")
+      .description("Show local DB schema version and migration status")
+      .option("-j, --json", "Output as JSON")
+      .action(async (options) => {
+        try {
+          const status = getLocalSchemaStatus();
+
+          if (options.json) {
+            output(`${JSON.stringify(status, null, 2)}`);
+            return;
+          }
+
+          output(`Database: ${status.db_path}`);
+          output(`Schema version: ${status.schema_version}`);
+          output(`Latest schema: ${status.latest_schema_version}`);
+          output(
+            `Migrated to local-id schema (v${status.latest_schema_version}+): ${status.migrated_to_local_ids ? "yes" : "no"}`
+          );
+          output(`Needs migration: ${status.needs_migration ? "yes" : "no"}`);
+        } catch (error) {
+          console.error("Error:", error instanceof Error ? error.message : error);
+          process.exit(1);
+        }
+      })
+  )
   .addCommand(
     new Command("remove-type-labels")
       .description("Remove type labels (type:X or Type group) from all issues in this repo")
