@@ -17,6 +17,7 @@ That's it. The agent will walk you through setup (install, auth, etc.) and confi
 **Download a binary** from [releases](https://github.com/nikvdp/linear-beads/releases) and add it to your PATH.
 
 **Or with bun:**
+
 ```bash
 bun install -g github:nikvdp/linear-beads
 ```
@@ -35,12 +36,20 @@ After onboarding, your agent uses `lb` instead of its built-in task tools. Issue
 ## Repo Scoping (Label vs Project)
 
 `lb` supports three scoping modes:
+
 - `label`: scope by `repo:<name>` label
 - `project`: scope by Linear project name
 - `both`: include both scopes
 
-For backward compatibility, the runtime fallback remains `label` when no repo config exists.  
-For new repos, first-time `lb init` writes `.lb/config.jsonc` with `repo_scope: "project"` and the detected `repo_name`.
+Scope resolution is versioned:
+
+- If `repo_scope` is explicitly set, that value is used.
+- Otherwise `repo_binding_version` controls the implicit default:
+  - `1` => `label` (legacy default)
+  - `2` => `project` (new default)
+
+For new repos, first-time `lb init` writes `.lb/config.jsonc` with detected `repo_name` and `repo_binding_version: 2`.
+Legacy repos without config are inferred as `repo_binding_version: 1` to preserve label-default behavior.
 
 ### Configuration
 
@@ -48,15 +57,16 @@ Add to `.lb/config.jsonc`:
 
 ```jsonc
 {
-  "repo_scope": "project"  // "label", "project", or "both"
+  "repo_scope": "project", // optional explicit mode: "label", "project", or "both"
+  "repo_binding_version": 2, // implicit default policy when repo_scope is omitted (1 or 2)
 }
 ```
 
-| Mode | Description |
-|------|-------------|
-| `label` | Uses `repo:name` labels (backward-compatible fallback) |
-| `project` | Uses Linear Projects - one project per repo |
-| `both` | Uses both labels and projects |
+| Mode      | Description                                            |
+| --------- | ------------------------------------------------------ |
+| `label`   | Uses `repo:name` labels (backward-compatible fallback) |
+| `project` | Uses Linear Projects - one project per repo            |
+| `both`    | Uses both labels and projects                          |
 
 ### Migrating from Labels to Projects
 
@@ -112,6 +122,7 @@ bun run scripts/smoke-repo-binding.ts
 ### Offline Mode
 
 When you lose internet connectivity, `lb` continues working:
+
 - All reads work from local SQLite cache
 - Writes queue in an outbox and sync when you're back online
 - `lb sync` shows a friendly message instead of failing
@@ -122,11 +133,12 @@ For pure local usage (no Linear backend), add to `.lb/config.jsonc`:
 
 ```jsonc
 {
-  "local_only": true
+  "local_only": true,
 }
 ```
 
 In local-only mode:
+
 - `lb sync` is disabled (shows a message)
 - `lb create` generates LOCAL-001, LOCAL-002, etc. IDs
 - All commands work from local SQLite only
@@ -153,7 +165,7 @@ Add to `.lb/config.jsonc`:
 ```jsonc
 {
   "mail_backend": "local", // or "linear"
-  "issue_backend": "linear"
+  "issue_backend": "linear",
 }
 ```
 
