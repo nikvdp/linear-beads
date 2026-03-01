@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
+import { parse as parseJsonc } from "jsonc-parser";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -116,6 +117,11 @@ describe("pre-localid fixture migrations", () => {
       expect(backupRow?.value).toContain("/.lb/backups/cache-pre-v6-");
       expect(backupRow?.value ? existsSync(backupRow.value) : false).toBe(true);
       migratedDb.close();
+
+      const repoConfigPath = join(repoDir, ".lb", "config.jsonc");
+      const repoConfigRaw = readFileSync(repoConfigPath, "utf8");
+      const repoConfig = parseJsonc(repoConfigRaw) as { min_cli_version?: string };
+      expect(repoConfig.min_cli_version).toBe("v16");
     });
   }
 

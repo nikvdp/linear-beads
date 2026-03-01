@@ -2,6 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { parseReleaseTag } from "../src/utils/release-version.js";
+import { getRuntimeCliVersion } from "../src/utils/runtime-version.js";
 
 const CLI_PATH = join(import.meta.dir, "..", "src", "cli.ts");
 const tempDirs: string[] = [];
@@ -53,18 +55,24 @@ async function runLb(
 }
 
 describe("min cli version gate", () => {
+  const currentVersion = getRuntimeCliVersion();
+  const currentOrder = parseReleaseTag(currentVersion);
+  if (currentOrder === undefined) {
+    throw new Error(`Unable to parse current runtime version '${currentVersion}'`);
+  }
+
   test("rejects commands when repo min_cli_version is higher than current binary", async () => {
-    const repoDir = createRepo("v999999");
+    const repoDir = createRepo(`v${currentOrder + 1}`);
     const result = await runLb(repoDir, "list", "--all");
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("requires lb v999999 or newer");
+    expect(result.stderr).toContain(`requires lb v${currentOrder + 1} or newer`);
     expect(result.stderr).toContain("Current binary is");
     expect(result.stderr).toContain("lb self-update");
   });
 
-  test("allows commands when current binary satisfies repo min_cli_version", async () => {
-    const repoDir = createRepo("v0");
+  test("allows commands when current binary exactly matches repo min_cli_version", async () => {
+    const repoDir = createRepo(currentVersion);
     const result = await runLb(repoDir, "list", "--all");
 
     expect(result.exitCode).toBe(0);
