@@ -32,25 +32,57 @@ import {
 } from "./issue-backend.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
 
+type ResolutionContext = {
+  pendingCreateLocalIds: Set<string>;
+};
+
+type ResolutionResult = {
+  canProcess: boolean;
+  dropOperation: boolean;
+  primaryId?: string;
+  referencedIds: string[];
+  unresolvedLocalIds: string[];
+  resolvedPayload?: Record<string, unknown>;
+};
+
+function canonicalLocalId(id: string): string {
+  return resolveIssueLocalId(id);
+}
+
+function isOrphanUnresolvedLocalId(localId: string, context: ResolutionContext): boolean {
+  const canonical = canonicalLocalId(localId);
+  if (!isLocalId(canonical)) return false;
+  if (context.pendingCreateLocalIds.has(canonical)) return false;
+  if (getCachedIssue(canonical)) return false;
+  if (getIssueIdMapping(canonical)) return false;
+  return true;
+}
+
 function resolveDepsString(
   deps: string,
   unresolvedLocalIds: Set<string>,
-  referencedIds: Set<string>
+  referencedIds: Set<string>,
+  context: ResolutionContext
 ): string {
   const resolved = deps
     .split(",")
     .map((dep) => dep.trim())
     .filter(Boolean)
-    .map((dep) => {
+    .flatMap((dep) => {
       const [type, targetId] = dep.split(":");
-      if (!targetId) return dep;
+      if (!targetId) return [dep];
       referencedIds.add(targetId);
-      const resolved = resolveRemoteIssueId(targetId);
-      if (isLocalId(targetId) && resolved === targetId) {
-        unresolvedLocalIds.add(targetId);
-        return dep;
+      const resolvedTarget = resolveRemoteIssueId(targetId);
+      if (isLocalId(targetId) && resolvedTarget === targetId) {
+        const canonical = canonicalLocalId(targetId);
+        if (isOrphanUnresolvedLocalId(canonical, context)) {
+          // Drop orphaned LOCAL references from deps instead of deadlocking the outbox.
+          return [];
+        }
+        unresolvedLocalIds.add(canonical);
+        return [dep];
       }
-      return `${type}:${resolved}`;
+      return [`${type}:${resolvedTarget}`];
     });
 
   return resolved.join(",");
@@ -66,58 +98,68 @@ function getPrimaryId(item: OutboxItem): string | undefined {
   return undefined;
 }
 
-function resolveOutboxItem(item: OutboxItem): {
-  canProcess: boolean;
-  primaryId?: string;
-  referencedIds: string[];
-  resolvedPayload?: Record<string, unknown>;
-} {
+function resolveOutboxItem(item: OutboxItem, context: ResolutionContext): ResolutionResult {
   const payload = { ...(item.payload as Record<string, unknown>) };
   const unresolvedLocalIds = new Set<string>();
   const referencedIds = new Set<string>();
   const primaryId = getPrimaryId(item);
+  let dropOperation = false;
 
-  const resolveField = (key: string): void => {
+  const resolveField = (
+    key: string,
+    options: { dropFieldIfOrphan?: boolean; dropOperationIfOrphan?: boolean } = {}
+  ): void => {
     const value = payload[key];
     if (typeof value !== "string") return;
     referencedIds.add(value);
-    const resolved = resolveRemoteIssueId(value);
-    if (isLocalId(value) && resolved === value) {
-      unresolvedLocalIds.add(value);
+    const resolvedValue = resolveRemoteIssueId(value);
+    if (isLocalId(value) && resolvedValue === value) {
+      const canonical = canonicalLocalId(value);
+      if (isOrphanUnresolvedLocalId(canonical, context)) {
+        if (options.dropFieldIfOrphan) {
+          delete payload[key];
+          return;
+        }
+        if (options.dropOperationIfOrphan) {
+          dropOperation = true;
+          return;
+        }
+      }
+      unresolvedLocalIds.add(canonical);
       return;
     }
-    payload[key] = resolved;
+    payload[key] = resolvedValue;
   };
 
   switch (item.operation) {
     case "create": {
-      resolveField("parentId");
+      resolveField("parentId", { dropFieldIfOrphan: true });
       if (typeof payload.deps === "string") {
-        payload.deps = resolveDepsString(payload.deps, unresolvedLocalIds, referencedIds);
+        payload.deps = resolveDepsString(payload.deps, unresolvedLocalIds, referencedIds, context);
       }
       break;
     }
     case "update": {
-      resolveField("issueId");
-      resolveField("parentId");
+      resolveField("issueId", { dropOperationIfOrphan: true });
+      resolveField("parentId", { dropFieldIfOrphan: true });
       if (typeof payload.deps === "string") {
-        payload.deps = resolveDepsString(payload.deps, unresolvedLocalIds, referencedIds);
+        payload.deps = resolveDepsString(payload.deps, unresolvedLocalIds, referencedIds, context);
       }
       break;
     }
     case "close":
     case "delete": {
-      resolveField("issueId");
+      resolveField("issueId", { dropOperationIfOrphan: true });
       break;
     }
     case "create_relation": {
-      resolveField("issueId");
-      resolveField("relatedIssueId");
+      resolveField("issueId", { dropOperationIfOrphan: true });
+      resolveField("relatedIssueId", { dropOperationIfOrphan: true });
       break;
     }
     case "delete_relation": {
-      resolveField("issueA");
-      resolveField("issueB");
+      resolveField("issueA", { dropOperationIfOrphan: true });
+      resolveField("issueB", { dropOperationIfOrphan: true });
       break;
     }
     case "mail_send":
@@ -130,18 +172,33 @@ function resolveOutboxItem(item: OutboxItem): {
     }
   }
 
+  if (dropOperation) {
+    return {
+      canProcess: true,
+      dropOperation: true,
+      primaryId,
+      referencedIds: [...referencedIds],
+      unresolvedLocalIds: [...unresolvedLocalIds],
+      resolvedPayload: payload,
+    };
+  }
+
   if (unresolvedLocalIds.size > 0) {
     return {
       canProcess: false,
+      dropOperation: false,
       primaryId,
       referencedIds: [...referencedIds],
+      unresolvedLocalIds: [...unresolvedLocalIds],
     };
   }
 
   return {
     canProcess: true,
+    dropOperation: false,
     primaryId,
     referencedIds: [...referencedIds],
+    unresolvedLocalIds: [...unresolvedLocalIds],
     resolvedPayload: payload,
   };
 }
@@ -389,11 +446,22 @@ export function operationRequiresTeamId(operation: OutboxItem["operation"]): boo
   }
 }
 
+function isPermanentEntityError(errorMessage: string): boolean {
+  const msg = errorMessage.toLowerCase();
+  return msg.includes("entity not found") || msg.includes("entity is trashed");
+}
+
 export async function processOutboxQueue(
   teamId: string,
   options: { propagateParent?: boolean } = {}
 ): Promise<{ success: number; failed: number; deferred: number; remoteProcessed: number }> {
   const items = getPendingOutboxItems();
+  const pendingCreateLocalIds = new Set(
+    items
+      .filter((item) => item.operation === "create" && typeof item.local_id === "string")
+      .map((item) => canonicalLocalId(item.local_id as string))
+  );
+  const resolutionContext: ResolutionContext = { pendingCreateLocalIds };
   let success = 0;
   let failed = 0;
   let deferred = 0;
@@ -426,7 +494,7 @@ export async function processOutboxQueue(
       }
     }
 
-    const resolution = resolveOutboxItem(item);
+    const resolution = resolveOutboxItem(item, resolutionContext);
 
     if (resolution.primaryId && isBlocked(resolution.primaryId)) {
       deferred++;
@@ -442,13 +510,31 @@ export async function processOutboxQueue(
       continue;
     }
 
-    const claimedResolution = resolveOutboxItem(item);
+    const claimedResolution = resolveOutboxItem(item, resolutionContext);
+    if (claimedResolution.dropOperation) {
+      removeOutboxItem(item.id);
+      success++;
+      continue;
+    }
     if (!claimedResolution.canProcess || !claimedResolution.resolvedPayload) {
       releaseOutboxItemClaim(item.id);
+      const unresolvedLocals = new Set(claimedResolution.unresolvedLocalIds.map(canonicalLocalId));
       if (claimedResolution.primaryId) {
-        addBlockedId(claimedResolution.primaryId);
+        const primaryLocalId = canonicalLocalId(claimedResolution.primaryId);
+        if (
+          !(
+            unresolvedLocals.has(primaryLocalId) &&
+            pendingCreateLocalIds.has(primaryLocalId)
+          )
+        ) {
+          addBlockedId(claimedResolution.primaryId);
+        }
       }
       for (const id of claimedResolution.referencedIds) {
+        const localId = canonicalLocalId(id);
+        if (unresolvedLocals.has(localId) && pendingCreateLocalIds.has(localId)) {
+          continue;
+        }
         addBlockedId(id);
       }
       deferred++;
@@ -472,6 +558,13 @@ export async function processOutboxQueue(
       success++;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
+      if (isPermanentEntityError(errorMsg)) {
+        // Legacy queue rows can reference deleted/trashed entities forever.
+        // Drop these rows so sync converges instead of retrying indefinitely.
+        removeOutboxItem(item.id);
+        success++;
+        continue;
+      }
       updateOutboxItemError(item.id, errorMsg);
       failed++;
     }
