@@ -9,6 +9,7 @@ import {
   cacheIssue,
   cacheDependency,
   getDatabase,
+  getCachedIssues,
   getDisplayId,
   resolveIssueId,
   isLocalId,
@@ -21,11 +22,12 @@ import {
   getUserByEmail,
   createRelation,
 } from "../utils/issue-backend.js";
-import { formatIssueJson, formatIssueHuman, output } from "../utils/output.js";
+import { formatIssueJson, formatIssueHuman, output, outputError } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Issue, IssueType } from "../types.js";
 import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
 import { useTypes, isLocalOnly } from "../utils/config.js";
+import { chooseReuseIssue, findDuplicateMatches } from "../utils/duplicate-detection.js";
 
 const VALID_DEP_TYPES = ["blocks", "related", "discovered-from"];
 
@@ -67,6 +69,12 @@ function collect(value: string, previous: string[] = []): string[] {
   return previous.concat([value]);
 }
 
+function reasonLabel(reason: string): string {
+  if (reason === "exact_title") return "exact title";
+  if (reason === "normalized_title") return "normalized title";
+  return "description hash";
+}
+
 export const createCommand = new Command("create")
   .description("Create a new issue")
   .argument("<title>", "Issue title")
@@ -80,6 +88,8 @@ export const createCommand = new Command("create")
   .option("--discovered-from <id>", "Found while working on ID (repeatable)", collect)
   .option("--assign <email>", "Assign to user (email or 'me')")
   .option("--unassign", "Leave unassigned (skip auto-assign)")
+  .option("--allow-duplicate", "Allow creating an issue even when duplicate matches are found")
+  .option("--reuse-if-duplicate", "Return a matching issue instead of creating a duplicate")
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Sync immediately (block on network)")
   .option("--team <team>", "Team key (overrides config)")
@@ -89,6 +99,62 @@ export const createCommand = new Command("create")
       if (priorityError || priority === undefined) {
         console.error(priorityError);
         process.exit(1);
+      }
+
+      const duplicateCandidates = getCachedIssues().filter(
+        (issue) => issue.status === "open" || issue.status === "in_progress"
+      );
+      const duplicateMatches = findDuplicateMatches(
+        duplicateCandidates,
+        title,
+        options.description as string | undefined
+      );
+
+      if (duplicateMatches.length > 0) {
+        if (options.reuseIfDuplicate) {
+          const reused = chooseReuseIssue(duplicateMatches);
+          if (options.json) {
+            output(formatIssueJson(reused));
+          } else {
+            output(`Reused existing issue: ${getDisplayId(reused.id)}: ${reused.title}`);
+          }
+          return;
+        }
+
+        if (!options.allowDuplicate) {
+          const details = duplicateMatches
+            .map((match) => {
+              const reasons = match.reasons.map((reason) => reasonLabel(reason)).join(", ");
+              return `- ${getDisplayId(match.issue.id)} [${match.issue.status}] ${match.issue.title} (${reasons})`;
+            })
+            .join("\n");
+
+          const guidance =
+            "Re-run with --allow-duplicate to create anyway, or --reuse-if-duplicate to reuse one.";
+          if (options.json) {
+            outputError(
+              JSON.stringify(
+                {
+                  error: "duplicate_detected",
+                  message: guidance,
+                  matches: duplicateMatches.map((match) => ({
+                    id: getDisplayId(match.issue.id),
+                    title: match.issue.title,
+                    status: match.issue.status,
+                    reasons: match.reasons,
+                  })),
+                },
+                null,
+                2
+              )
+            );
+          } else {
+            outputError("Potential duplicate issue(s) found:");
+            outputError(details);
+            outputError(guidance);
+          }
+          process.exit(1);
+        }
       }
 
       // Handle issue type - only if types are enabled or explicitly provided
