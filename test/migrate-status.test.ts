@@ -83,7 +83,7 @@ describe("migrate status command", () => {
 
     expect(payload.db_exists).toBe(false);
     expect(payload.schema_version).toBe(0);
-    expect(payload.latest_schema_version).toBe(6);
+    expect(payload.latest_schema_version).toBe(7);
     expect(payload.migrated_to_local_ids).toBe(false);
     expect(payload.needs_migration).toBe(false);
   });
@@ -116,7 +116,7 @@ describe("migrate status command", () => {
   });
 
   test("reports up-to-date schema", async () => {
-    const { repoDir } = createRepo(6);
+    const { repoDir } = createRepo(7);
     const result = await runLb(repoDir, "migrate", "status", "--json");
 
     expect(result.exitCode).toBe(0);
@@ -131,7 +131,7 @@ describe("migrate status command", () => {
     };
 
     expect(payload.db_exists).toBe(true);
-    expect(payload.schema_version).toBe(6);
+    expect(payload.schema_version).toBe(7);
     expect(payload.migrated_to_local_ids).toBe(true);
     expect(payload.up_to_date).toBe(true);
     expect(payload.needs_migration).toBe(false);
