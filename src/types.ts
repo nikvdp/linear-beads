@@ -135,6 +135,7 @@ export interface OutboxItem {
     | "mail_reply";
   payload: Record<string, unknown>;
   local_id?: string;
+  remote_issue_identifier?: string;
   created_at: string;
   retry_count: number;
   last_error?: string;

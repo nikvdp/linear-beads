@@ -298,6 +298,7 @@ function initSchema(db: Database, dbPath: string): void {
       operation TEXT NOT NULL,
       payload TEXT NOT NULL,
       local_id TEXT,
+      remote_issue_identifier TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       next_attempt_at TEXT,
       processing INTEGER NOT NULL DEFAULT 0,
@@ -522,6 +523,15 @@ function initSchema(db: Database, dbPath: string): void {
 
     db.exec("PRAGMA user_version = 6");
     ensureRepoMinCliVersion(BREAKING_SCHEMA_V6_MIN_CLI);
+  }
+
+  if (currentVersion < 7) {
+    const outboxCols = db.query("PRAGMA table_info(outbox)").all() as Array<{ name: string }>;
+    if (!outboxCols.some((c) => c.name === "remote_issue_identifier")) {
+      db.exec("ALTER TABLE outbox ADD COLUMN remote_issue_identifier TEXT");
+    }
+
+    db.exec("PRAGMA user_version = 7");
   }
 
   ensureRelatedDependencyIntegrity(db);
@@ -1245,10 +1255,28 @@ export function getPendingOutboxItems(): OutboxItem[] {
     operation: row.operation as OutboxItem["operation"],
     payload: JSON.parse(row.payload as string),
     local_id: (row.local_id as string | null) || undefined,
+    remote_issue_identifier: (row.remote_issue_identifier as string | null) || undefined,
     created_at: row.created_at as string,
     retry_count: row.retry_count as number,
     last_error: row.last_error as string | undefined,
   }));
+}
+
+export function markOutboxCreateRemoteIssueIdentifier(
+  id: number,
+  remoteIssueIdentifier: string
+): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run(
+      `
+      UPDATE outbox
+      SET remote_issue_identifier = ?
+      WHERE id = ? AND operation = 'create'
+    `,
+      [remoteIssueIdentifier, id]
+    );
+  });
 }
 
 /**

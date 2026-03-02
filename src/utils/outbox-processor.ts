@@ -10,7 +10,10 @@ import {
   releaseOutboxItemClaim,
   updateOutboxItemError,
   setIssueIdMapping,
+  getIssueIdMapping,
   replaceIssueId,
+  getLinearIdForLocalId,
+  markOutboxCreateRemoteIssueIdentifier,
   getParentId,
   getChildIds,
   getCachedIssue,
@@ -203,17 +206,27 @@ async function processResolvedItem(
         parentId?: string;
         deps?: string;
       };
-      const issue = await createIssue({
-        title: createPayload.title,
-        description: createPayload.description,
-        priority: createPayload.priority,
-        issueType: createPayload.issueType,
-        parentId: createPayload.parentId,
-        teamId,
-      });
+      let remoteIssueIdentifier = item.remote_issue_identifier || getIssueIdMapping(localId);
+      let remoteIssueUuid = getLinearIdForLocalId(resolveIssueLocalId(localId)) || undefined;
+      let usedRemoteBackend = false;
 
-      setIssueIdMapping(localId, issue.id);
-      replaceIssueId(localId, issue.id, issue.linear_id);
+      if (!remoteIssueIdentifier) {
+        const issue = await createIssue({
+          title: createPayload.title,
+          description: createPayload.description,
+          priority: createPayload.priority,
+          issueType: createPayload.issueType,
+          parentId: createPayload.parentId,
+          teamId,
+        });
+        remoteIssueIdentifier = issue.id;
+        remoteIssueUuid = issue.linear_id;
+        markOutboxCreateRemoteIssueIdentifier(item.id, remoteIssueIdentifier);
+        usedRemoteBackend = true;
+      }
+
+      setIssueIdMapping(localId, remoteIssueIdentifier);
+      replaceIssueId(localId, remoteIssueIdentifier, remoteIssueUuid);
 
       if (createPayload.deps) {
         const deps = createPayload.deps.split(",").map((dep: string) => {
@@ -223,17 +236,21 @@ async function processResolvedItem(
         for (const dep of deps) {
           try {
             if (dep.type === "blocked-by") {
-              await createRelation(dep.targetId, issue.id, "blocks");
+              await createRelation(dep.targetId, remoteIssueIdentifier, "blocks");
             } else {
               const relationType = dep.type === "blocks" ? "blocks" : "related";
-              await createRelation(issue.id, dep.targetId, relationType as "blocks" | "related");
+              await createRelation(
+                remoteIssueIdentifier,
+                dep.targetId,
+                relationType as "blocks" | "related"
+              );
             }
           } catch {
             // Ignore relation creation failures in background
           }
         }
       }
-      return { usedRemoteBackend: true };
+      return { usedRemoteBackend };
     }
     case "update": {
       const updatePayload = payload as {
