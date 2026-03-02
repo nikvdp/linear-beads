@@ -32,7 +32,7 @@ function createRepo(): string {
 
 async function runEval(
   cwd: string,
-  mode: "mapping" | "marker"
+  mode: "mapping" | "marker" | "orphan"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import { Database } from "bun:sqlite";
@@ -48,20 +48,22 @@ async function runEval(
     } from ${JSON.stringify(DATABASE_UTILS_PATH)};
     import { processOutboxQueue } from ${JSON.stringify(OUTBOX_PROCESSOR_PATH)};
 
-    const now = new Date().toISOString();
+    const mode = process.argv[1];
     const localId = generateLocalId();
-    cacheIssue({
-      id: localId,
-      title: "Replay guard issue",
-      status: "open",
-      priority: 2,
-      sync_status: "pending",
-      created_at: now,
-      updated_at: now,
-    });
+    const now = new Date().toISOString();
+    if (mode !== "orphan") {
+      cacheIssue({
+        id: localId,
+        title: "Replay guard issue",
+        status: "open",
+        priority: 2,
+        sync_status: "pending",
+        created_at: now,
+        updated_at: now,
+      });
+    }
 
     const outboxId = queueOutboxItem("create", { title: "Replay guard issue", priority: 2 }, localId);
-    const mode = process.argv[1];
     if (mode === "mapping") {
       setIssueIdMapping(localId, "LIN-9001");
     } else if (mode === "marker") {
@@ -146,5 +148,29 @@ describe("outbox create replay protection", () => {
     expect(payload.row?.local_id).toMatch(/^LOCAL-/);
     expect(payload.row?.linear_identifier).toBe("LIN-9002");
     expect(payload.row?.sync_status).toBe("synced");
+  });
+
+  test("drops orphaned create outbox rows when local issue no longer exists", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "orphan");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      result: { success: number; failed: number; remoteProcessed: number };
+      remaining: number;
+      mapping: string | null;
+      displayId: string;
+      row: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+    };
+
+    expect(payload.result.success).toBe(1);
+    expect(payload.result.failed).toBe(0);
+    expect(payload.result.remoteProcessed).toBe(0);
+    expect(payload.remaining).toBe(0);
+    expect(payload.mapping).toBeNull();
+    expect(payload.displayId).toMatch(/^LOCAL-/);
+    expect(payload.row).toBeNull();
   });
 });
