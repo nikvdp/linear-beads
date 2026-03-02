@@ -6,6 +6,7 @@ import { Command } from "commander";
 import {
   queueOutboxItem,
   getCachedIssue,
+  getChildIds,
   cacheIssue,
   getDisplayId,
   resolveIssueId,
@@ -20,12 +21,55 @@ export const closeCommand = new Command("close")
   .description("Close an issue")
   .argument("<id>", "Issue ID")
   .option("-r, --reason <reason>", "Close reason (added as comment)")
+  .option("-f, --force", "Close even if open children remain")
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Sync immediately (block on network)")
   .option("--team <team>", "Team key (overrides config)")
   .action(async (id: string, options) => {
     try {
       const resolvedId = resolveIssueId(id);
+      const childIds = getChildIds(resolvedId);
+      const openChildren = childIds
+        .map((childId) => {
+          const child = getCachedIssue(childId);
+          const status = child?.status || "unknown";
+          return {
+            id: childId,
+            title: child?.title || "Unknown",
+            status,
+          };
+        })
+        .filter((child) => child.status !== "closed");
+
+      if (!options.force && openChildren.length > 0) {
+        if (options.json) {
+          outputError(
+            JSON.stringify(
+              {
+                error: "open_children",
+                message:
+                  "Cannot close parent issue while child issues remain open. Re-run with --force to override.",
+                parent: getDisplayId(resolvedId),
+                children: openChildren.map((child) => ({
+                  id: getDisplayId(child.id),
+                  title: child.title,
+                  status: child.status,
+                })),
+              },
+              null,
+              2
+            )
+          );
+        } else {
+          outputError(`Cannot close ${getDisplayId(resolvedId)}: open child issues remain.`);
+          for (const child of openChildren) {
+            outputError(`- ${getDisplayId(child.id)} [${child.status}] ${child.title}`);
+          }
+          outputError("Use --force to close the parent anyway.");
+        }
+        process.exit(1);
+      }
+
       // Local-only mode: update cache directly
       if (isLocalOnly()) {
         const issue = getCachedIssue(resolvedId);
