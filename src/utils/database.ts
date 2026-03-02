@@ -93,6 +93,28 @@ function isDuplicateColumnError(error: unknown): boolean {
   return error.message.toLowerCase().includes("duplicate column name");
 }
 
+function addColumnIfMissing(
+  db: Database,
+  tableName: string,
+  columnName: string,
+  alterStatement: string
+): void {
+  const existingColumns = db.query(`PRAGMA table_info(${tableName})`).all() as Array<{
+    name: string;
+  }>;
+  if (existingColumns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  try {
+    db.exec(alterStatement);
+  } catch (error) {
+    if (!isDuplicateColumnError(error)) {
+      throw error;
+    }
+  }
+}
+
 function sleepSync(ms: number): void {
   const signal = new Int32Array(new SharedArrayBuffer(4));
   Atomics.wait(signal, 0, 0, ms);
@@ -379,16 +401,13 @@ function initSchema(db: Database, dbPath: string): void {
   `);
 
   if (currentVersion < 2) {
-    const issueCols = db.query("PRAGMA table_info(issues)").all() as Array<{ name: string }>;
-    const outboxCols = db.query("PRAGMA table_info(outbox)").all() as Array<{ name: string }>;
-
-    if (!issueCols.some((c) => c.name === "sync_status")) {
-      db.exec("ALTER TABLE issues ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'synced'");
-    }
-
-    if (!outboxCols.some((c) => c.name === "local_id")) {
-      db.exec("ALTER TABLE outbox ADD COLUMN local_id TEXT");
-    }
+    addColumnIfMissing(
+      db,
+      "issues",
+      "sync_status",
+      "ALTER TABLE issues ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'synced'"
+    );
+    addColumnIfMissing(db, "outbox", "local_id", "ALTER TABLE outbox ADD COLUMN local_id TEXT");
 
     db.exec(`
       CREATE TABLE IF NOT EXISTS issue_id_map (
@@ -402,25 +421,29 @@ function initSchema(db: Database, dbPath: string): void {
   }
 
   if (currentVersion < 3) {
-    const outboxCols = db.query("PRAGMA table_info(outbox)").all() as Array<{ name: string }>;
-
-    if (!outboxCols.some((c) => c.name === "processing")) {
-      db.exec("ALTER TABLE outbox ADD COLUMN processing INTEGER NOT NULL DEFAULT 0");
-    }
-
-    if (!outboxCols.some((c) => c.name === "processing_started_at")) {
-      db.exec("ALTER TABLE outbox ADD COLUMN processing_started_at TEXT");
-    }
+    addColumnIfMissing(
+      db,
+      "outbox",
+      "processing",
+      "ALTER TABLE outbox ADD COLUMN processing INTEGER NOT NULL DEFAULT 0"
+    );
+    addColumnIfMissing(
+      db,
+      "outbox",
+      "processing_started_at",
+      "ALTER TABLE outbox ADD COLUMN processing_started_at TEXT"
+    );
 
     db.exec("PRAGMA user_version = 3");
   }
 
   if (currentVersion < 4) {
-    const outboxCols = db.query("PRAGMA table_info(outbox)").all() as Array<{ name: string }>;
-
-    if (!outboxCols.some((c) => c.name === "next_attempt_at")) {
-      db.exec("ALTER TABLE outbox ADD COLUMN next_attempt_at TEXT");
-    }
+    addColumnIfMissing(
+      db,
+      "outbox",
+      "next_attempt_at",
+      "ALTER TABLE outbox ADD COLUMN next_attempt_at TEXT"
+    );
 
     db.exec("PRAGMA user_version = 4");
   }
@@ -582,16 +605,12 @@ function initSchema(db: Database, dbPath: string): void {
   }
 
   if (currentVersion < 7) {
-    const outboxCols = db.query("PRAGMA table_info(outbox)").all() as Array<{ name: string }>;
-    if (!outboxCols.some((c) => c.name === "remote_issue_identifier")) {
-      try {
-        db.exec("ALTER TABLE outbox ADD COLUMN remote_issue_identifier TEXT");
-      } catch (error) {
-        if (!isDuplicateColumnError(error)) {
-          throw error;
-        }
-      }
-    }
+    addColumnIfMissing(
+      db,
+      "outbox",
+      "remote_issue_identifier",
+      "ALTER TABLE outbox ADD COLUMN remote_issue_identifier TEXT"
+    );
 
     db.exec("PRAGMA user_version = 7");
   }
