@@ -1080,6 +1080,28 @@ describe("Local-only Mode", () => {
       expect(result[0].status).toBe("closed");
       expect(result[0].closed_at).toBeDefined();
     });
+
+    test("should block closing parent with open children unless --force", async () => {
+      const parent = await lbLocalJson<Array<{ id: string }>>("create", "Parent close guard");
+      const child = await lbLocalJson<Array<{ id: string }>>(
+        "create",
+        "Child open",
+        "--parent",
+        parent[0].id
+      );
+
+      const blocked = await lbLocal("close", parent[0].id);
+      expect(blocked.exitCode).toBe(1);
+      expect(blocked.stderr).toContain("open child issues remain");
+      expect(blocked.stderr).toContain(child[0].id);
+
+      const forceClosed = await lbLocalJson<Array<{ id: string; status: string }>>(
+        "close",
+        parent[0].id,
+        "--force"
+      );
+      expect(forceClosed[0].status).toBe("closed");
+    });
   });
 
   describe("delete", () => {
