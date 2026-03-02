@@ -74,6 +74,7 @@ const HANDLE_SANITIZE_RE = /[^a-zA-Z0-9_-]/g;
 const BREAKING_SCHEMA_V6_MIN_CLI = "v16";
 const V6_BACKUP_METADATA_KEY = "migration_backup_v6";
 const RELATED_DEPENDENCY_INTEGRITY_METADATA_KEY = "related_dependency_integrity_v1";
+const DEPENDENCY_ALIAS_INTEGRITY_METADATA_KEY = "dependency_alias_integrity_v1";
 const SCHEMA_INIT_LOCK_TTL_MS = 10 * 60 * 1000;
 const SCHEMA_INIT_LOCK_POLL_MS = 50;
 const SCHEMA_INIT_LOCK_WAIT_MS = 60 * 1000;
@@ -615,7 +616,59 @@ function initSchema(db: Database, dbPath: string): void {
     db.exec("PRAGMA user_version = 7");
   }
 
+  ensureDependencyAliasIntegrity(db);
   ensureRelatedDependencyIntegrity(db);
+}
+
+function ensureDependencyAliasIntegrity(db: Database): void {
+  const existing = db
+    .query("SELECT value FROM metadata WHERE key = ?")
+    .get(DEPENDENCY_ALIAS_INTEGRITY_METADATA_KEY) as { value?: string } | null;
+  if (existing?.value) {
+    return;
+  }
+
+  // Normalize dependencies that reference synced issue aliases (LIN-*) back to canonical local_id.
+  db.exec(`
+    INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at, created_by)
+    SELECT i.local_id, d.depends_on_id, d.type, d.created_at, d.created_by
+    FROM dependencies d
+    JOIN issues i ON i.linear_identifier = d.issue_id
+    WHERE i.linear_identifier IS NOT NULL
+      AND i.local_id != d.issue_id;
+  `);
+
+  db.exec(`
+    DELETE FROM dependencies
+    WHERE issue_id IN (
+      SELECT linear_identifier
+      FROM issues
+      WHERE linear_identifier IS NOT NULL
+    );
+  `);
+
+  db.exec(`
+    INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at, created_by)
+    SELECT d.issue_id, i.local_id, d.type, d.created_at, d.created_by
+    FROM dependencies d
+    JOIN issues i ON i.linear_identifier = d.depends_on_id
+    WHERE i.linear_identifier IS NOT NULL
+      AND i.local_id != d.depends_on_id;
+  `);
+
+  db.exec(`
+    DELETE FROM dependencies
+    WHERE depends_on_id IN (
+      SELECT linear_identifier
+      FROM issues
+      WHERE linear_identifier IS NOT NULL
+    );
+  `);
+
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [
+    DEPENDENCY_ALIAS_INTEGRITY_METADATA_KEY,
+    new Date().toISOString(),
+  ]);
 }
 
 function ensureRelatedDependencyIntegrity(db: Database): void {
@@ -1887,6 +1940,30 @@ export function replaceIssueId(localId: string, linearIdentifier: string, linear
         existingForLinear.local_id,
       ]);
       db.run("DELETE FROM issues WHERE local_id = ?", [existingForLinear.local_id]);
+    }
+
+    if (linearIdentifier !== resolvedLocalId) {
+      db.run(
+        `
+        INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at, created_by)
+        SELECT ?, depends_on_id, type, created_at, created_by
+        FROM dependencies
+        WHERE issue_id = ?
+      `,
+        [resolvedLocalId, linearIdentifier]
+      );
+      db.run("DELETE FROM dependencies WHERE issue_id = ?", [linearIdentifier]);
+
+      db.run(
+        `
+        INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at, created_by)
+        SELECT issue_id, ?, type, created_at, created_by
+        FROM dependencies
+        WHERE depends_on_id = ?
+      `,
+        [resolvedLocalId, linearIdentifier]
+      );
+      db.run("DELETE FROM dependencies WHERE depends_on_id = ?", [linearIdentifier]);
     }
 
     db.run(

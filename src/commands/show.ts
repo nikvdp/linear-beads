@@ -59,11 +59,21 @@ export const showCommand = new Command("show")
       const outgoing = getDependencies(issue.id);
       const incoming = getInverseDependencies(issue.id);
 
+      const uniqueLocal = (ids: string[]): string[] => [
+        ...new Set(ids.map((v) => resolveIssueLocalId(v))),
+      ];
+
       // Organize by relationship type
       const parent = outgoing.find((d) => d.type === "parent-child")?.depends_on_id;
-      const children = incoming.filter((d) => d.type === "parent-child").map((d) => d.issue_id);
-      const blocks = outgoing.filter((d) => d.type === "blocks").map((d) => d.depends_on_id);
-      const blockedBy = incoming.filter((d) => d.type === "blocks").map((d) => d.issue_id);
+      const children = uniqueLocal(
+        incoming.filter((d) => d.type === "parent-child").map((d) => d.issue_id)
+      );
+      const blocks = uniqueLocal(
+        outgoing.filter((d) => d.type === "blocks").map((d) => d.depends_on_id)
+      );
+      const blockedBy = uniqueLocal(
+        incoming.filter((d) => d.type === "blocks").map((d) => d.issue_id)
+      );
       const relatedOut = outgoing
         .filter((d) => d.type === "related" || d.type === "discovered-from")
         .map((d) => resolveIssueLocalId(d.depends_on_id));
