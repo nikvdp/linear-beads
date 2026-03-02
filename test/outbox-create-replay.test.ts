@@ -35,6 +35,7 @@ async function runEval(
   mode: "mapping" | "marker"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
+    import { Database } from "bun:sqlite";
     import {
       cacheIssue,
       generateLocalId,
@@ -71,7 +72,12 @@ async function runEval(
     const remaining = getPendingOutboxItems().length;
     const mapping = getIssueIdMapping(localId);
     const displayId = getDisplayId(localId);
-    console.log(JSON.stringify({ result, remaining, mapping, displayId }));
+    const db = new Database(".lb/cache.db", { readonly: true });
+    const row = db.query(
+      "SELECT local_id, linear_identifier, sync_status FROM issues WHERE local_id = ? LIMIT 1"
+    ).get(localId) as { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+    db.close();
+    console.log(JSON.stringify({ result, remaining, mapping, displayId, row }));
   `;
 
   const proc = Bun.spawn(["bun", "--eval", script, mode], {
@@ -104,12 +110,17 @@ describe("outbox create replay protection", () => {
       remaining: number;
       mapping: string | null;
       displayId: string;
+      row: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
     };
     expect(payload.result.success).toBe(1);
     expect(payload.result.failed).toBe(0);
     expect(payload.remaining).toBe(0);
     expect(payload.mapping).toBe("LIN-9001");
     expect(payload.displayId).toBe("LIN-9001");
+    expect(payload.row).not.toBeNull();
+    expect(payload.row?.local_id).toMatch(/^LOCAL-/);
+    expect(payload.row?.linear_identifier).toBe("LIN-9001");
+    expect(payload.row?.sync_status).toBe("synced");
   });
 
   test("uses persisted outbox remote marker to finalize mapping without re-create", async () => {
@@ -124,11 +135,16 @@ describe("outbox create replay protection", () => {
       remaining: number;
       mapping: string | null;
       displayId: string;
+      row: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
     };
     expect(payload.result.success).toBe(1);
     expect(payload.result.failed).toBe(0);
     expect(payload.remaining).toBe(0);
     expect(payload.mapping).toBe("LIN-9002");
     expect(payload.displayId).toBe("LIN-9002");
+    expect(payload.row).not.toBeNull();
+    expect(payload.row?.local_id).toMatch(/^LOCAL-/);
+    expect(payload.row?.linear_identifier).toBe("LIN-9002");
+    expect(payload.row?.sync_status).toBe("synced");
   });
 });
