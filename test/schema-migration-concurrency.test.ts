@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -31,6 +31,58 @@ function extractFixture(): string {
   }
 
   return join(tempDir, FIXTURE_NAME);
+}
+
+function createLegacyV1Repo(): string {
+  const repoDir = mkdtempSync(join(tmpdir(), "lb-schema-v1-race-"));
+  tempDirs.push(repoDir);
+
+  const init = Bun.spawnSync(["git", "init", "-q"], {
+    cwd: repoDir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (init.exitCode !== 0) {
+    const stderr = init.stderr ? Buffer.from(init.stderr).toString("utf8") : "";
+    throw new Error(`Failed to initialize repo: ${stderr}`);
+  }
+
+  mkdirSync(join(repoDir, ".lb"), { recursive: true });
+  writeFileSync(join(repoDir, ".lb", "config.jsonc"), `${JSON.stringify({ local_only: true })}\n`);
+
+  const dbPath = join(repoDir, ".lb", "cache.db");
+  const db = new Database(dbPath);
+  db.exec(`
+    CREATE TABLE issues (
+      id TEXT PRIMARY KEY,
+      identifier TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL,
+      priority INTEGER NOT NULL,
+      issue_type TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      closed_at TEXT,
+      assignee TEXT,
+      linear_state_id TEXT,
+      cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE outbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      operation TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT
+    );
+
+    PRAGMA user_version = 1;
+  `);
+  db.close();
+
+  return repoDir;
 }
 
 async function runLb(cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -70,5 +122,29 @@ describe("schema migration concurrency", () => {
     // Ensure the command output is valid JSON (no half-migrated crash output).
     expect(Array.isArray(JSON.parse(a.stdout))).toBe(true);
     expect(Array.isArray(JSON.parse(b.stdout))).toBe(true);
+  });
+
+  test("parallel startup calls safely apply legacy add-column migrations", async () => {
+    const repoDir = createLegacyV1Repo();
+
+    const [a, b] = await Promise.all([runLb(repoDir), runLb(repoDir)]);
+    expect(a.exitCode).toBe(0);
+    expect(b.exitCode).toBe(0);
+    expect(a.stderr).toBe("");
+    expect(b.stderr).toBe("");
+
+    const dbPath = join(repoDir, ".lb", "cache.db");
+    const db = new Database(dbPath, { readonly: true });
+    const version = db.query("PRAGMA user_version").get() as { user_version: number };
+    const outboxColumns = db.query("PRAGMA table_info(outbox)").all() as Array<{ name: string }>;
+    db.close();
+
+    expect(version.user_version).toBe(7);
+    const columnNames = outboxColumns.map((column) => column.name);
+    expect(columnNames).toContain("local_id");
+    expect(columnNames).toContain("processing");
+    expect(columnNames).toContain("processing_started_at");
+    expect(columnNames).toContain("next_attempt_at");
+    expect(columnNames).toContain("remote_issue_identifier");
   });
 });
