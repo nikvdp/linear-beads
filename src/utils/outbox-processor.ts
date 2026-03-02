@@ -9,7 +9,6 @@ import {
   claimOutboxItem,
   releaseOutboxItemClaim,
   updateOutboxItemError,
-  setIssueIdMapping,
   getIssueIdMapping,
   replaceIssueId,
   getLinearIdForLocalId,
@@ -225,7 +224,6 @@ async function processResolvedItem(
         usedRemoteBackend = true;
       }
 
-      setIssueIdMapping(localId, remoteIssueIdentifier);
       replaceIssueId(localId, remoteIssueIdentifier, remoteIssueUuid);
 
       if (createPayload.deps) {

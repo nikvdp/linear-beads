@@ -24,7 +24,7 @@ const LOCAL_ID_PREFIX = "LOCAL-";
 const SQLITE_BUSY_TIMEOUT_MS = 10000;
 const SQLITE_MAX_LOCK_RETRIES = 20;
 const SQLITE_RETRY_BASE_DELAY_MS = 50;
-const OUTBOX_CLAIM_TIMEOUT_MS = 60000;
+const OUTBOX_CLAIM_TIMEOUT_MS = 600000;
 const OUTBOX_RETRY_BASE_DELAY_MS = 1000;
 const OUTBOX_RETRY_MAX_DELAY_MS = 300000;
 const LINEAR_ID_WITH_DASH_RE = /^([A-Za-z]+)-(\d+)$/;
@@ -1710,7 +1710,7 @@ export function resolveIssueLocalId(id: string): string {
       if (mappedRow?.local_id) {
         return mappedRow.local_id;
       }
-      return mappedLinear;
+      return normalizedId;
     }
   }
 
