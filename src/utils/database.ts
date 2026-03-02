@@ -4,8 +4,8 @@
  */
 
 import { Database } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync } from "fs";
-import { dirname } from "path";
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, statSync, unlinkSync } from "fs";
+import { dirname, join } from "path";
 import { ensureRepoMinCliVersion, getDbPath, getTeamKey } from "./config.js";
 import { requestJsonlExport } from "./jsonl-scheduler.js";
 import type {
@@ -74,6 +74,9 @@ const HANDLE_SANITIZE_RE = /[^a-zA-Z0-9_-]/g;
 const BREAKING_SCHEMA_V6_MIN_CLI = "v16";
 const V6_BACKUP_METADATA_KEY = "migration_backup_v6";
 const RELATED_DEPENDENCY_INTEGRITY_METADATA_KEY = "related_dependency_integrity_v1";
+const SCHEMA_INIT_LOCK_TTL_MS = 10 * 60 * 1000;
+const SCHEMA_INIT_LOCK_POLL_MS = 50;
+const SCHEMA_INIT_LOCK_WAIT_MS = 60 * 1000;
 
 function isDatabaseLockedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -93,6 +96,52 @@ function isDuplicateColumnError(error: unknown): boolean {
 function sleepSync(ms: number): void {
   const signal = new Int32Array(new SharedArrayBuffer(4));
   Atomics.wait(signal, 0, 0, ms);
+}
+
+function getSchemaInitLockPath(dbPath: string): string {
+  return join(dirname(dbPath), "cache.schema.lock");
+}
+
+function withSchemaInitLock<T>(dbPath: string, operation: () => T): T {
+  const lockPath = getSchemaInitLockPath(dbPath);
+  const deadline = Date.now() + SCHEMA_INIT_LOCK_WAIT_MS;
+
+  while (true) {
+    try {
+      const stat = statSync(lockPath);
+      if (Date.now() - stat.mtimeMs > SCHEMA_INIT_LOCK_TTL_MS) {
+        unlinkSync(lockPath);
+      }
+    } catch {
+      // No lock file yet.
+    }
+
+    let lockFd: number | null = null;
+    try {
+      lockFd = openSync(lockPath, "wx");
+    } catch {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Timed out waiting for schema init lock at ${lockPath}. Another lb process may be stuck.`
+        );
+      }
+      sleepSync(SCHEMA_INIT_LOCK_POLL_MS);
+      continue;
+    }
+
+    try {
+      return operation();
+    } finally {
+      if (lockFd !== null) {
+        closeSync(lockFd);
+      }
+      try {
+        unlinkSync(lockPath);
+      } catch {
+        // Lock file may already be gone.
+      }
+    }
+  }
 }
 
 export function runWithBusyRetry<T>(operation: () => T): T {
@@ -142,16 +191,18 @@ export function getDatabase(): Database {
 
     db = new Database(dbPath);
     db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
-    runWithBusyRetry(() => {
-      const journalModeRow = db!.query("PRAGMA journal_mode").get() as {
-        journal_mode?: string;
-      } | null;
-      const journalMode = journalModeRow?.journal_mode?.toLowerCase();
-      if (journalMode !== "wal") {
-        db!.exec("PRAGMA journal_mode = WAL");
-      }
-      db!.exec("PRAGMA synchronous = NORMAL");
-      initSchema(db!, dbPath);
+    withSchemaInitLock(dbPath, () => {
+      runWithBusyRetry(() => {
+        const journalModeRow = db!.query("PRAGMA journal_mode").get() as {
+          journal_mode?: string;
+        } | null;
+        const journalMode = journalModeRow?.journal_mode?.toLowerCase();
+        if (journalMode !== "wal") {
+          db!.exec("PRAGMA journal_mode = WAL");
+        }
+        db!.exec("PRAGMA synchronous = NORMAL");
+        initSchema(db!, dbPath);
+      });
     });
   }
   return db;
