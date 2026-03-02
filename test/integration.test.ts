@@ -1247,6 +1247,61 @@ describe("Local-only Mode", () => {
       expect(showB[0].related || []).not.toContain(a[0].id);
     });
 
+    test("should normalize stale LIN alias dependency rows to LOCAL canonical IDs", async () => {
+      const a = await lbLocalJson<Array<{ id: string }>>("create", "Alias normalize A");
+      const b = await lbLocalJson<Array<{ id: string }>>("create", "Alias normalize B");
+
+      await lbLocal("dep", "add", a[0].id, "--blocks", b[0].id);
+
+      const seedAndNormalize = `
+        import { Database } from "bun:sqlite";
+        import { replaceIssueId } from '${import.meta.dir}/../src/utils/database.ts';
+
+        const [localA, localB, linA, linB] = process.argv.slice(1);
+        const db = new Database(".lb/cache.db");
+        const now = new Date().toISOString();
+
+        db.run(
+          "INSERT INTO dependencies (issue_id, depends_on_id, type, created_at, created_by) VALUES (?, ?, 'blocks', ?, 'test')",
+          [linA, linB, now]
+        );
+        db.close();
+
+        replaceIssueId(localA, linA);
+        replaceIssueId(localB, linB);
+      `;
+
+      const seeded = await evalLocal(seedAndNormalize, [a[0].id, b[0].id, "LIN-5001", "LIN-5002"]);
+      expect(seeded.exitCode).toBe(0);
+
+      const verify = `
+        import { Database } from "bun:sqlite";
+
+        const [localA, localB, linA, linB] = process.argv.slice(1);
+        const db = new Database(".lb/cache.db", { readonly: true });
+        const rows = db.query(
+          "SELECT issue_id, depends_on_id, type FROM dependencies WHERE type = 'blocks'"
+        ).all() as Array<{ issue_id: string; depends_on_id: string; type: string }>;
+        db.close();
+
+        const canonical = rows.filter((r) => r.issue_id === localA && r.depends_on_id === localB);
+        const alias = rows.filter((r) => r.issue_id === linA || r.depends_on_id === linB);
+        console.log(JSON.stringify({ rows, canonical: canonical.length, alias: alias.length }));
+      `;
+
+      const checked = await evalLocal(verify, [a[0].id, b[0].id, "LIN-5001", "LIN-5002"]);
+      expect(checked.exitCode).toBe(0);
+      const parsed = JSON.parse(checked.stdout) as {
+        canonical: number;
+        alias: number;
+      };
+      expect(parsed.canonical).toBe(1);
+      expect(parsed.alias).toBe(0);
+
+      const shown = await lbLocalJson<Array<{ blocks?: string[] }>>("show", a[0].id);
+      expect(shown[0].blocks).toEqual([b[0].id]);
+    });
+
     test("should show dep tree", async () => {
       const parent = await lbLocalJson<Array<{ id: string }>>("create", "Tree parent");
 
