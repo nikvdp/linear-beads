@@ -417,6 +417,15 @@ export async function processOutboxQueue(
   };
 
   for (const item of items) {
+    if (item.operation === "create" && item.local_id) {
+      const localIssue = getCachedIssue(item.local_id);
+      if (!localIssue) {
+        removeOutboxItem(item.id);
+        success++;
+        continue;
+      }
+    }
+
     const resolution = resolveOutboxItem(item);
 
     if (resolution.primaryId && isBlocked(resolution.primaryId)) {
