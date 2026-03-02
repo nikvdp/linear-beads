@@ -85,6 +85,11 @@ function isDatabaseLockedError(error: unknown): boolean {
   );
 }
 
+function isDuplicateColumnError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.toLowerCase().includes("duplicate column name");
+}
+
 function sleepSync(ms: number): void {
   const signal = new Int32Array(new SharedArrayBuffer(4));
   Atomics.wait(signal, 0, 0, ms);
@@ -528,7 +533,13 @@ function initSchema(db: Database, dbPath: string): void {
   if (currentVersion < 7) {
     const outboxCols = db.query("PRAGMA table_info(outbox)").all() as Array<{ name: string }>;
     if (!outboxCols.some((c) => c.name === "remote_issue_identifier")) {
-      db.exec("ALTER TABLE outbox ADD COLUMN remote_issue_identifier TEXT");
+      try {
+        db.exec("ALTER TABLE outbox ADD COLUMN remote_issue_identifier TEXT");
+      } catch (error) {
+        if (!isDuplicateColumnError(error)) {
+          throw error;
+        }
+      }
     }
 
     db.exec("PRAGMA user_version = 7");
