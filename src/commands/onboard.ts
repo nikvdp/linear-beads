@@ -61,6 +61,46 @@ lb dep tree LIN-A          # Visualize dependency tree
 - \`--related ID\` - Soft link, doesn't block progress
 - \`--discovered-from ID\` - Found while working on ID (creates relation)
 
+### Multiline Descriptions (Important)
+
+Avoid writing ticket descriptions with literal escaped newlines like \`"line1\\\\nline2"\`.
+That usually creates unreadable content in Linear.
+
+Prefer one of these:
+
+\`\`\`bash
+# 1) Heredoc into a variable
+desc=$(cat <<'EOF'
+Why
+
+Need to update parser behavior.
+
+Acceptance criteria
+- Parse X
+- Validate Y
+EOF
+)
+lb create "Title" -d "$desc"
+\`\`\`
+
+\`\`\`bash
+# 2) Read description directly from a file
+lb create "Title" --description-file /tmp/ticket.md
+\`\`\`
+
+\`\`\`bash
+# 3) Pipe description via stdin
+cat /tmp/ticket.md | lb create "Title" --description-stdin
+\`\`\`
+
+If you already have escaped \`\\\\n\` text, you can auto-rewrite it:
+
+\`\`\`bash
+lb update LIN-123 -d "Why\\\\n\\\\nDetails" --auto-format-escaped-newlines
+\`\`\`
+
+\`lb\` will emit a prominent warning when it detects likely accidental escaped-newline descriptions.
+
 ### Planning Work (SUBISSUES, NOT BUILT-IN TODOS)
 
 When you need to break down a task into steps, **create subissues in lb**:
