@@ -32,7 +32,7 @@ function createRepo(): string {
 
 async function runEval(
   cwd: string,
-  mode: "mapping" | "marker" | "orphan" | "update_before_create" | "orphan_parent"
+  mode: "mapping" | "marker" | "orphan" | "update_before_create" | "orphan_parent" | "deps_retry"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import { Database } from "bun:sqlite";
@@ -78,6 +78,17 @@ async function runEval(
         localId
       );
       markOutboxCreateRemoteIssueIdentifier(createOutboxId, "LIN-9004");
+    } else if (mode === "deps_retry") {
+      const outboxId = queueOutboxItem(
+        "create",
+        {
+          title: "Replay guard issue",
+          priority: 2,
+          deps: "blocked-by:LIN-9999",
+        },
+        localId
+      );
+      markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9005");
     } else {
       const outboxId = queueOutboxItem(
         "create",
@@ -261,6 +272,41 @@ describe("outbox create replay protection", () => {
     expect(payload.mapping).toBe("LIN-9004");
     expect(payload.displayId).toBe("LIN-9004");
     expect(payload.row?.linear_identifier).toBe("LIN-9004");
+    expect(payload.row?.sync_status).toBe("synced");
+  });
+
+  test("queues relation retry when create deps fail in background processing", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "deps_retry");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      result: { success: number; failed: number; deferred: number; remoteProcessed: number };
+      remaining: number;
+      pending: Array<{
+        id: number;
+        operation: string;
+        local_id: string | null;
+        payload: { issueId?: string; relatedIssueId?: string; type?: string };
+      }>;
+      mapping: string | null;
+      displayId: string;
+      row: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+    };
+
+    expect(payload.result.success).toBe(1);
+    expect(payload.result.failed).toBe(0);
+    expect(payload.result.remoteProcessed).toBe(0);
+    expect(payload.remaining).toBe(1);
+    expect(payload.pending[0]?.operation).toBe("create_relation");
+    expect(payload.pending[0]?.payload?.type).toBe("blocks");
+    expect(payload.pending[0]?.payload?.issueId).toBe("LIN-9999");
+    expect(payload.pending[0]?.payload?.relatedIssueId).toBe("LIN-9005");
+    expect(payload.mapping).toBe("LIN-9005");
+    expect(payload.displayId).toBe("LIN-9005");
+    expect(payload.row?.linear_identifier).toBe("LIN-9005");
     expect(payload.row?.sync_status).toBe("synced");
   });
 });
