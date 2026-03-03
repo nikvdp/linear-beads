@@ -63,43 +63,25 @@ lb dep tree LIN-A          # Visualize dependency tree
 
 ### Multiline Descriptions (Important)
 
-Avoid writing ticket descriptions with literal escaped newlines like \`"line1\\\\nline2"\`.
-That usually creates unreadable content in Linear.
-
-Prefer one of these:
+Avoid literal escaped newlines like \`"line1\\\\nline2"\` in descriptions.
+Use real multiline input instead:
 
 \`\`\`bash
-# 1) Heredoc into a variable
 desc=$(cat <<'EOF'
 Why
 
-Need to update parser behavior.
-
-Acceptance criteria
-- Parse X
-- Validate Y
+Details...
 EOF
 )
 lb create "Title" -d "$desc"
 \`\`\`
 
-\`\`\`bash
-# 2) Read description directly from a file
-lb create "Title" --description-file /tmp/ticket.md
-\`\`\`
+Also supported:
+- \`--description-file <path>\`
+- \`--description-stdin\`
+- \`--auto-format-escaped-newlines\` (rewrite \`\\\\n\` to real line breaks)
 
-\`\`\`bash
-# 3) Pipe description via stdin
-cat /tmp/ticket.md | lb create "Title" --description-stdin
-\`\`\`
-
-If you already have escaped \`\\\\n\` text, you can auto-rewrite it:
-
-\`\`\`bash
-lb update LIN-123 -d "Why\\\\n\\\\nDetails" --auto-format-escaped-newlines
-\`\`\`
-
-\`lb\` will emit a prominent warning when it detects likely accidental escaped-newline descriptions.
+\`lb\` warns when a description likely contains accidental escaped newlines.
 
 ### Planning Work (SUBISSUES, NOT BUILT-IN TODOS)
 
