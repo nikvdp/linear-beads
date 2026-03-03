@@ -42,3 +42,16 @@ export async function resolveDescriptionInput(
 
   return options.inlineDescription;
 }
+
+export function looksLikeEscapedNewlineMistake(description: string | undefined): boolean {
+  if (!description || !description.includes("\\n")) return false;
+
+  const escapedNewlineCount = (description.match(/\\n/g) || []).length;
+  if (escapedNewlineCount >= 2) return true;
+
+  if (/\\n\\n/.test(description)) return true;
+  if (/\\n[-*]\s/.test(description)) return true;
+  if (/:\s*\\n/.test(description)) return true;
+
+  return false;
+}

@@ -28,7 +28,10 @@ import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Priority, IssueStatus } from "../types.js";
 import { parsePriority } from "../types.js";
 import { isLocalOnly } from "../utils/config.js";
-import { resolveDescriptionInput } from "../utils/description-input.js";
+import {
+  looksLikeEscapedNewlineMistake,
+  resolveDescriptionInput,
+} from "../utils/description-input.js";
 
 const VALID_DEP_TYPES = ["blocks", "blocked-by", "related"];
 
@@ -70,6 +73,18 @@ function collect(value: string, previous: string[] = []): string[] {
   return previous.concat([value]);
 }
 
+function warnOnLikelyEscapedNewlineDescription(description: string | undefined): void {
+  if (!looksLikeEscapedNewlineMistake(description)) return;
+  outputError("");
+  outputError("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+  outputError("WARNING: description includes literal '\\n' sequences.");
+  outputError("This usually means newlines were escaped instead of entered as real line breaks.");
+  outputError("Use a heredoc, --description-file, or --description-stdin for multiline content.");
+  outputError("If this was intentional, you can ignore this warning.");
+  outputError("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+  outputError("");
+}
+
 export const updateCommand = new Command("update")
   .description("Update an issue")
   .argument("<id>", "Issue ID")
@@ -98,6 +113,7 @@ export const updateCommand = new Command("update")
         descriptionFile: options.descriptionFile as string | undefined,
         descriptionStdin: !!options.descriptionStdin,
       });
+      warnOnLikelyEscapedNewlineDescription(description);
       const updates: {
         title?: string;
         description?: string;

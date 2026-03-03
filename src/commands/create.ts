@@ -28,7 +28,10 @@ import type { Issue, IssueType } from "../types.js";
 import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
 import { useTypes, isLocalOnly } from "../utils/config.js";
 import { chooseReuseIssue, findDuplicateMatches } from "../utils/duplicate-detection.js";
-import { resolveDescriptionInput } from "../utils/description-input.js";
+import {
+  looksLikeEscapedNewlineMistake,
+  resolveDescriptionInput,
+} from "../utils/description-input.js";
 
 const VALID_DEP_TYPES = ["blocks", "related", "discovered-from"];
 
@@ -76,6 +79,18 @@ function reasonLabel(reason: string): string {
   return "description hash";
 }
 
+function warnOnLikelyEscapedNewlineDescription(description: string | undefined): void {
+  if (!looksLikeEscapedNewlineMistake(description)) return;
+  outputError("");
+  outputError("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+  outputError("WARNING: description includes literal '\\n' sequences.");
+  outputError("This usually means newlines were escaped instead of entered as real line breaks.");
+  outputError("Use a heredoc, --description-file, or --description-stdin for multiline content.");
+  outputError("If this was intentional, you can ignore this warning.");
+  outputError("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+  outputError("");
+}
+
 export const createCommand = new Command("create")
   .description("Create a new issue")
   .argument("<title>", "Issue title")
@@ -108,6 +123,7 @@ export const createCommand = new Command("create")
         descriptionFile: options.descriptionFile as string | undefined,
         descriptionStdin: !!options.descriptionStdin,
       });
+      warnOnLikelyEscapedNewlineDescription(description);
 
       const duplicateCandidates = getCachedIssues().filter(
         (issue) => issue.status === "open" || issue.status === "in_progress"
