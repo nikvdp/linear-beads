@@ -116,6 +116,22 @@ lb blocked                 # Blocked issues (shows what's blocking them)
 lb show LIN-XXX            # Full details with all relationships
 \`\`\`
 
+### One-Off Scope Overrides (Non-Repo Work)
+
+For temporary structured work that should not modify repo config:
+
+\`\`\`bash
+# One command only
+lb --temp-name oneoff-planning --temp-name-mode label list
+
+# Session-level override
+export LB_TEMP_NAME=oneoff-planning
+export LB_TEMP_NAME_MODE=project
+lb create "Plan migration" --sync
+\`\`\`
+
+Precedence: CLI temp flags > env temp vars > config > git heuristic.
+
 ### Key Commands
 
 | Command | Purpose |
