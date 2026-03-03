@@ -31,7 +31,7 @@ import { closeDatabase } from "./utils/database.js";
 import { getRuntimeCliVersion } from "./utils/runtime-version.js";
 import { exportToJsonl } from "./utils/jsonl.js";
 import { processOutbox } from "./utils/background-sync-worker.js";
-import { assertMinCliVersion } from "./utils/config.js";
+import { assertMinCliVersion, setRuntimeOverrides } from "./utils/config.js";
 
 function currentCliVersion(): string {
   return getRuntimeCliVersion();
@@ -50,6 +50,10 @@ function shouldSkipMinCliGate(argv: string[]): boolean {
   return argv.some((arg) => arg === "self-update");
 }
 
+function isValidTempNameMode(mode: string): mode is "label" | "project" | "both" {
+  return mode === "label" || mode === "project" || mode === "both";
+}
+
 const cliVersion = currentCliVersion();
 const program = new Command();
 
@@ -59,6 +63,11 @@ program
   .version(cliVersion)
   .option("--worker", "Internal: run background sync worker")
   .option("--export-worker", "Internal: run JSONL export worker")
+  .option("--temp-name <name>", "Temporary scope name override for this command")
+  .option(
+    "--temp-name-mode <mode>",
+    "Temporary scope mode override: label, project, or both"
+  )
   .configureHelp({
     subcommandTerm: (cmd) => {
       const args = cmd.registeredArguments.map((a) =>
@@ -118,6 +127,26 @@ if (process.argv.includes("--worker")) {
   program.addCommand(mailCommand);
   program.addCommand(dedupeCommand);
   program.addCommand(skillCommand);
+
+  program.hook("preAction", () => {
+    const opts = program.opts<{ tempName?: string; tempNameMode?: string }>();
+    const overrides: { repo_name?: string; repo_scope?: "label" | "project" | "both" } = {};
+
+    if (opts.tempName) {
+      overrides.repo_name = opts.tempName;
+    }
+
+    if (opts.tempNameMode) {
+      if (!isValidTempNameMode(opts.tempNameMode)) {
+        throw new Error("--temp-name-mode must be one of: label, project, both");
+      }
+      overrides.repo_scope = opts.tempNameMode;
+    }
+
+    if (Object.keys(overrides).length > 0) {
+      setRuntimeOverrides(overrides);
+    }
+  });
 
   // Add whoami command for testing connection
   program

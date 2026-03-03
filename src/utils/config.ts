@@ -25,6 +25,15 @@ interface LoadedConfig extends ConfigTypes {
 }
 
 let loadedConfig: LoadedConfig | null = null;
+let runtimeOverrides: Partial<LoadedConfig> = {};
+
+function parseRepoScopeValue(value: string | undefined): RepoScopeMode | undefined {
+  if (!value) return undefined;
+  if (value === "label" || value === "project" || value === "both") {
+    return value as RepoScopeMode;
+  }
+  return undefined;
+}
 
 /**
  * Check if current directory is inside a git worktree
@@ -346,6 +355,13 @@ function loadConfig(): LoadedConfig {
   if (process.env.LB_REPO_NAME) {
     config.repo_name = process.env.LB_REPO_NAME;
   }
+  if (process.env.LB_TEMP_NAME) {
+    config.repo_name = process.env.LB_TEMP_NAME;
+  }
+  const tempMode = parseRepoScopeValue(process.env.LB_TEMP_NAME_MODE);
+  if (tempMode) {
+    config.repo_scope = tempMode;
+  }
 
   // 4. If repo_name not set in config, use heuristic (lowest priority)
   if (!config.repo_name) {
@@ -365,7 +381,7 @@ export function getOption<K extends keyof LoadedConfig>(
   key: K,
   cliValue?: LoadedConfig[K]
 ): LoadedConfig[K] {
-  return cliValue ?? (loadedConfig?.[key] as LoadedConfig[K]);
+  return cliValue ?? (runtimeOverrides[key] as LoadedConfig[K]) ?? (loadedConfig?.[key] as LoadedConfig[K]);
 }
 
 /**
@@ -380,6 +396,14 @@ export function getConfig(): LoadedConfig {
  */
 export function reloadConfig(): void {
   loadedConfig = loadConfig();
+}
+
+/**
+ * Set temporary runtime overrides for the current process.
+ * Used for one-off CLI scope options.
+ */
+export function setRuntimeOverrides(overrides: Partial<LoadedConfig>): void {
+  runtimeOverrides = { ...runtimeOverrides, ...overrides };
 }
 
 /**
