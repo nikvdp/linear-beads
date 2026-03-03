@@ -31,6 +31,7 @@ import { isLocalOnly } from "../utils/config.js";
 import {
   looksLikeEscapedNewlineMistake,
   resolveDescriptionInput,
+  rewriteEscapedNewlines,
 } from "../utils/description-input.js";
 
 const VALID_DEP_TYPES = ["blocks", "blocked-by", "related"];
@@ -92,6 +93,10 @@ export const updateCommand = new Command("update")
   .option("-d, --description <desc>", "New description")
   .option("--description-file <path>", "Read new description from file")
   .option("--description-stdin", "Read new description from stdin")
+  .option(
+    "--auto-format-escaped-newlines",
+    "Rewrite literal \\\\n sequences in description content into real line breaks"
+  )
   .option("-s, --status <status>", "Status: open, in_progress, closed")
   .option("-p, --priority <priority>", "Priority: urgent, high, medium, low, backlog (or 0-4)")
   .option("--assign <email>", "Assign to user (email or 'me')")
@@ -108,11 +113,14 @@ export const updateCommand = new Command("update")
     try {
       const resolvedId = resolveIssueId(id);
       // Validate inputs
-      const description = await resolveDescriptionInput({
+      let description = await resolveDescriptionInput({
         inlineDescription: options.description as string | undefined,
         descriptionFile: options.descriptionFile as string | undefined,
         descriptionStdin: !!options.descriptionStdin,
       });
+      if (options.autoFormatEscapedNewlines) {
+        description = rewriteEscapedNewlines(description);
+      }
       warnOnLikelyEscapedNewlineDescription(description);
       const updates: {
         title?: string;

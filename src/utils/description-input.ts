@@ -55,3 +55,8 @@ export function looksLikeEscapedNewlineMistake(description: string | undefined):
 
   return false;
 }
+
+export function rewriteEscapedNewlines(description: string | undefined): string | undefined {
+  if (description === undefined) return undefined;
+  return description.replace(/\\n/g, "\n");
+}

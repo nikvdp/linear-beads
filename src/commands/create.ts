@@ -31,6 +31,7 @@ import { chooseReuseIssue, findDuplicateMatches } from "../utils/duplicate-detec
 import {
   looksLikeEscapedNewlineMistake,
   resolveDescriptionInput,
+  rewriteEscapedNewlines,
 } from "../utils/description-input.js";
 
 const VALID_DEP_TYPES = ["blocks", "related", "discovered-from"];
@@ -97,6 +98,10 @@ export const createCommand = new Command("create")
   .option("-d, --description <desc>", "Issue description")
   .option("--description-file <path>", "Read issue description from file")
   .option("--description-stdin", "Read issue description from stdin")
+  .option(
+    "--auto-format-escaped-newlines",
+    "Rewrite literal \\\\n sequences in description content into real line breaks"
+  )
   .option("-t, --type <type>", "Type: bug, feature, task, epic, chore (requires use_types config)")
   .option("-p, --priority <priority>", "Priority: urgent, high, medium, low, backlog (or 0-4)", "2")
   .option("--parent <id>", "Parent issue ID (makes this a subtask)")
@@ -118,11 +123,14 @@ export const createCommand = new Command("create")
         console.error(priorityError);
         process.exit(1);
       }
-      const description = await resolveDescriptionInput({
+      let description = await resolveDescriptionInput({
         inlineDescription: options.description as string | undefined,
         descriptionFile: options.descriptionFile as string | undefined,
         descriptionStdin: !!options.descriptionStdin,
       });
+      if (options.autoFormatEscapedNewlines) {
+        description = rewriteEscapedNewlines(description);
+      }
       warnOnLikelyEscapedNewlineDescription(description);
 
       const duplicateCandidates = getCachedIssues().filter(
