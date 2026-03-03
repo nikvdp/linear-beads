@@ -25,6 +25,7 @@ import { selfUpdateCommand } from "./commands/self-update.js";
 import { agentCommand } from "./commands/agent.js";
 import { mailCommand } from "./commands/mail.js";
 import { dedupeCommand } from "./commands/dedupe.js";
+import { skillCommand } from "./commands/skill.js";
 import { verifyConnection } from "./utils/issue-backend.js";
 import { closeDatabase } from "./utils/database.js";
 import { getRuntimeCliVersion } from "./utils/runtime-version.js";
@@ -116,6 +117,7 @@ if (process.argv.includes("--worker")) {
   program.addCommand(agentCommand);
   program.addCommand(mailCommand);
   program.addCommand(dedupeCommand);
+  program.addCommand(skillCommand);
 
   // Add whoami command for testing connection
   program
