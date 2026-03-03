@@ -20,6 +20,7 @@ import {
   resolveIssueId as resolveRemoteIssueId,
   resolveIssueLocalId,
   updateMailMessageSyncStatus,
+  queueOutboxItem,
 } from "./database.js";
 import {
   createIssue,
@@ -47,6 +48,14 @@ type ResolutionResult = {
 
 function canonicalLocalId(id: string): string {
   return resolveIssueLocalId(id);
+}
+
+function queueRelationRetry(issueId: string, relatedIssueId: string, type: "blocks" | "related"): void {
+  queueOutboxItem("create_relation", {
+    issueId,
+    relatedIssueId,
+    type,
+  });
 }
 
 function isOrphanUnresolvedLocalId(localId: string, context: ResolutionContext): boolean {
@@ -288,20 +297,26 @@ async function processResolvedItem(
           const [type, targetId] = dep.trim().split(":");
           return { type, targetId };
         });
+        const createdIssueRef = remoteIssueUuid || remoteIssueIdentifier;
         for (const dep of deps) {
           try {
             if (dep.type === "blocked-by") {
-              await createRelation(dep.targetId, remoteIssueIdentifier, "blocks");
+              await createRelation(dep.targetId, createdIssueRef, "blocks");
             } else {
               const relationType = dep.type === "blocks" ? "blocks" : "related";
               await createRelation(
-                remoteIssueIdentifier,
+                createdIssueRef,
                 dep.targetId,
                 relationType as "blocks" | "related"
               );
             }
           } catch {
-            // Ignore relation creation failures in background
+            if (dep.type === "blocked-by") {
+              queueRelationRetry(dep.targetId, createdIssueRef, "blocks");
+            } else {
+              const relationType = dep.type === "blocks" ? "blocks" : "related";
+              queueRelationRetry(createdIssueRef, dep.targetId, relationType as "blocks" | "related");
+            }
           }
         }
       }
@@ -350,7 +365,12 @@ async function processResolvedItem(
               );
             }
           } catch {
-            // Ignore relation creation failures in background
+            if (dep.type === "blocked-by") {
+              queueRelationRetry(dep.targetId, updatePayload.issueId, "blocks");
+            } else {
+              const relationType = dep.type === "blocks" ? "blocks" : "related";
+              queueRelationRetry(updatePayload.issueId, dep.targetId, relationType as "blocks" | "related");
+            }
           }
         }
       }

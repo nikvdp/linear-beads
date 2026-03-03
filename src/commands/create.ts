@@ -312,15 +312,16 @@ export const createCommand = new Command("create")
 
         // Handle deps after issue creation
         if (resolvedDeps.length > 0) {
+          const createdIssueRef = issue.linear_id || issue.id;
           for (const dep of resolvedDeps) {
             try {
               if (dep.type === "blocked-by") {
                 // blocked-by is inverse: target blocks this issue
-                await createRelation(dep.targetId, issue.id, "blocks");
+                await createRelation(dep.targetId, createdIssueRef, "blocks");
               } else {
                 // Map dep types to Linear relation types
                 const relationType = dep.type === "blocks" ? "blocks" : "related";
-                await createRelation(issue.id, dep.targetId, relationType);
+                await createRelation(createdIssueRef, dep.targetId, relationType);
               }
             } catch (error) {
               console.error(
