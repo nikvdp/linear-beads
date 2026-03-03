@@ -3,10 +3,9 @@
  */
 
 import { Command } from "commander";
-import { output } from "../utils/output.js";
+import { output, outputError } from "../utils/output.js";
 
-// Instructions that should be added to AGENTS.md
-const AGENTS_MD_CONTENT = `## CRITICAL: Task Tracking with \`lb\`
+const AGENTS_MD_LONG = `## CRITICAL: Task Tracking with \`lb\`
 
 > **STOP. READ THIS CAREFULLY.**
 >
@@ -169,36 +168,123 @@ lb show LIN-XXX            # Full details with all relationships
 **Think of \`lb\` as your persistent brain supplement.** Your memory is cache, \`lb\` is database.
 `;
 
-const ONBOARD_CONTENT = `# lb Onboard
+const AGENTS_MD_SHORT = `## Use \`lb\` For Task Tracking
+
+Use \`lb\` as the only task system for this repo. Do not use built-in todo tools.
+
+### Core Loop
+
+\`\`\`bash
+lb sync
+lb ready
+lb show LIN-XXX
+lb update LIN-XXX --status in_progress
+# do the work
+lb close LIN-XXX --reason "Done"
+\`\`\`
+
+### Split Work Into Subissues
+
+\`\`\`bash
+lb create "Step 1: ..." --parent LIN-XXX
+lb create "Step 2: ..." --parent LIN-XXX --blocked-by LIN-YYY
+\`\`\`
+
+### Dependency Links
+
+\`\`\`bash
+lb create "Must do first" --blocks LIN-123
+lb create "Depends on auth" --blocked-by LIN-100
+lb create "Found: X" --discovered-from LIN-50 -d "Details..."
+lb dep tree LIN-XXX
+\`\`\`
+
+### Multiline Descriptions
+
+Do not pass literal \`\\n\` in descriptions. Use real multiline input via heredoc, \`--description-file\`, or \`--description-stdin\`.
+
+### Keep Guidance Persistent
+
+- Add this section to repo-level \`AGENTS.md\` or \`CLAUDE.md\`.
+- You can also install packaged lb skills:
+  - \`lb skill install lb-basic-usage --codex\`
+  - \`lb skill install lb-execution-loop --claude\`
+`;
+
+function buildOnboardContent(mode: "long" | "short"): string {
+  const agentsMdBlock = mode === "long" ? AGENTS_MD_LONG : AGENTS_MD_SHORT;
+  return `# lb Onboard
 
 This repo uses \`lb\` for Linear-backed issue tracking.
 
-## Your Task
+## Use This Output
 
-Add the following to your agent instruction file:
+Add lb guidance to your instruction file:
 - **Claude Code**: CLAUDE.md
-- **Other tools** (OpenCode, Cursor, etc.): AGENTS.md
+- **Other tools**: AGENTS.md
 
-Append to the file if it exists, create it if it doesn't.
+Append if the file exists; create if needed.
+
+Raw block for direct append:
+
+\`\`\`bash
+# Full agents.md block (default long)
+lb onboard --agents-md >> AGENTS.md
+
+# Explicit short/long variants
+lb onboard --agents-md --short >> AGENTS.md
+lb onboard --agents-md --long >> AGENTS.md
+\`\`\`
+
+Install packaged skills instead of copy/paste:
+
+\`\`\`bash
+lb skill list
+lb skill install lb-basic-usage --codex
+lb skill install lb-execution-loop --claude
+lb skill install --all --pi
+\`\`\`
+
+Persistence options:
+
+- Repo-local: add to \`./AGENTS.md\` (or \`./CLAUDE.md\` for Claude).
+- User-global: add to a global instruction file.
+- Skills: install once to a shared skills directory for reuse.
 
 ---
 
-${AGENTS_MD_CONTENT}
+${agentsMdBlock}
 
 ---
 
-After adding the above, run \`lb sync\` then \`lb ready\` to find work.
+After setup, run \`lb sync\` then \`lb ready\` to find work.
 `;
+}
 
 export const onboardCommand = new Command("onboard")
   .description("Output agent instructions for lb")
+  .option("--short", "Use compact onboarding content")
+  .option("--long", "Use full onboarding content (default)")
+  .option("--agents-md", "Emit only the agents.md-ready block")
   .option("-o, --output <file>", "Write to file instead of stdout")
   .action(async (options) => {
+    if (options.short && options.long) {
+      outputError("Use only one of --short or --long.");
+      process.exit(1);
+    }
+
+    const mode: "long" | "short" = options.short ? "short" : "long";
+    const content = options.agentsMd
+      ? mode === "long"
+        ? AGENTS_MD_LONG
+        : AGENTS_MD_SHORT
+      : buildOnboardContent(mode);
+
     if (options.output) {
       const { writeFileSync } = await import("fs");
-      writeFileSync(options.output, ONBOARD_CONTENT);
+      writeFileSync(options.output, content);
       output(`Written to ${options.output}`);
     } else {
-      output(ONBOARD_CONTENT);
+      output(content);
     }
   });
