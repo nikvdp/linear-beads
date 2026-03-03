@@ -118,8 +118,29 @@ export const updateCommand = new Command("update")
         descriptionFile: options.descriptionFile as string | undefined,
         descriptionStdin: !!options.descriptionStdin,
       });
+      const hadExplicitDescriptionInput = description !== undefined;
       if (options.autoFormatEscapedNewlines) {
-        description = rewriteEscapedNewlines(description);
+        if (description !== undefined) {
+          description = rewriteEscapedNewlines(description);
+        } else {
+          let currentDescription: string | undefined;
+          const cached = getCachedIssue(resolvedId);
+          if (cached) {
+            currentDescription = cached.description;
+          } else if (!isLocalId(resolvedId)) {
+            try {
+              const fetched = await fetchIssue(resolvedId);
+              currentDescription = fetched.description;
+            } catch {
+              // Fall through and let existing validations handle missing issue cases later.
+            }
+          }
+          const rewritten = rewriteEscapedNewlines(currentDescription);
+          if (rewritten !== currentDescription) {
+            description = rewritten;
+            output("Auto-formatted existing description.");
+          }
+        }
       }
       warnOnLikelyEscapedNewlineDescription(description);
       const updates: {
@@ -204,6 +225,10 @@ export const updateCommand = new Command("update")
         !options.parent &&
         !options.unparent
       ) {
+        if (options.autoFormatEscapedNewlines && !hadExplicitDescriptionInput) {
+          output("No escaped newline sequences found in existing description; no update needed.");
+          return;
+        }
         outputError("No updates specified");
         process.exit(1);
       }
