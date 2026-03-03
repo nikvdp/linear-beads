@@ -68,6 +68,22 @@ Add to `.lb/config.jsonc`:
 | `project` | Uses Linear Projects - one project per repo            |
 | `both`    | Uses both labels and projects                          |
 
+### Temporary One-Off Scope Overrides
+
+For one-off non-repo task work, you can override scope at runtime without writing config files.
+
+```bash
+# One-off scope for a single command
+lb --temp-name oneoff-planning --temp-name-mode label list
+
+# Environment-based overrides for a shell session
+export LB_TEMP_NAME=oneoff-planning
+export LB_TEMP_NAME_MODE=project
+lb create "Plan migration" --sync
+```
+
+Precedence is: CLI temp flags > env temp vars > config > git heuristic.
+
 ### Migrating from Labels to Projects
 
 If you have existing label-scoped issues and want to switch to project scoping:
