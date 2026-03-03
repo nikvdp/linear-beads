@@ -28,6 +28,7 @@ import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Priority, IssueStatus } from "../types.js";
 import { parsePriority } from "../types.js";
 import { isLocalOnly } from "../utils/config.js";
+import { resolveDescriptionInput } from "../utils/description-input.js";
 
 const VALID_DEP_TYPES = ["blocks", "blocked-by", "related"];
 
@@ -74,6 +75,8 @@ export const updateCommand = new Command("update")
   .argument("<id>", "Issue ID")
   .option("--title <title>", "New title")
   .option("-d, --description <desc>", "New description")
+  .option("--description-file <path>", "Read new description from file")
+  .option("--description-stdin", "Read new description from stdin")
   .option("-s, --status <status>", "Status: open, in_progress, closed")
   .option("-p, --priority <priority>", "Priority: urgent, high, medium, low, backlog (or 0-4)")
   .option("--assign <email>", "Assign to user (email or 'me')")
@@ -90,6 +93,11 @@ export const updateCommand = new Command("update")
     try {
       const resolvedId = resolveIssueId(id);
       // Validate inputs
+      const description = await resolveDescriptionInput({
+        inlineDescription: options.description as string | undefined,
+        descriptionFile: options.descriptionFile as string | undefined,
+        descriptionStdin: !!options.descriptionStdin,
+      });
       const updates: {
         title?: string;
         description?: string;
@@ -99,7 +107,7 @@ export const updateCommand = new Command("update")
       } = {};
 
       if (options.title) updates.title = options.title;
-      if (options.description !== undefined) updates.description = options.description;
+      if (description !== undefined) updates.description = description;
 
       if (options.status) {
         const validStatuses = ["open", "in_progress", "closed"];

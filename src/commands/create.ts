@@ -28,6 +28,7 @@ import type { Issue, IssueType } from "../types.js";
 import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
 import { useTypes, isLocalOnly } from "../utils/config.js";
 import { chooseReuseIssue, findDuplicateMatches } from "../utils/duplicate-detection.js";
+import { resolveDescriptionInput } from "../utils/description-input.js";
 
 const VALID_DEP_TYPES = ["blocks", "related", "discovered-from"];
 
@@ -79,6 +80,8 @@ export const createCommand = new Command("create")
   .description("Create a new issue")
   .argument("<title>", "Issue title")
   .option("-d, --description <desc>", "Issue description")
+  .option("--description-file <path>", "Read issue description from file")
+  .option("--description-stdin", "Read issue description from stdin")
   .option("-t, --type <type>", "Type: bug, feature, task, epic, chore (requires use_types config)")
   .option("-p, --priority <priority>", "Priority: urgent, high, medium, low, backlog (or 0-4)", "2")
   .option("--parent <id>", "Parent issue ID (makes this a subtask)")
@@ -100,6 +103,11 @@ export const createCommand = new Command("create")
         console.error(priorityError);
         process.exit(1);
       }
+      const description = await resolveDescriptionInput({
+        inlineDescription: options.description as string | undefined,
+        descriptionFile: options.descriptionFile as string | undefined,
+        descriptionStdin: !!options.descriptionStdin,
+      });
 
       const duplicateCandidates = getCachedIssues().filter(
         (issue) => issue.status === "open" || issue.status === "in_progress"
@@ -107,7 +115,7 @@ export const createCommand = new Command("create")
       const duplicateMatches = findDuplicateMatches(
         duplicateCandidates,
         title,
-        options.description as string | undefined
+        description
       );
 
       if (duplicateMatches.length > 0) {
@@ -211,7 +219,7 @@ export const createCommand = new Command("create")
         const issue: Issue = {
           id: localId,
           title,
-          description: options.description,
+          description,
           status: "open",
           priority,
           issue_type: issueType,
@@ -302,7 +310,7 @@ export const createCommand = new Command("create")
 
         const issue = await createIssue({
           title,
-          description: options.description,
+          description,
           priority,
           issueType, // undefined if types disabled
           teamId,
@@ -362,7 +370,7 @@ export const createCommand = new Command("create")
 
         const payload: Record<string, unknown> = {
           title,
-          description: options.description,
+          description,
           priority,
           parentId: resolvedParent,
           assign: options.assign,
