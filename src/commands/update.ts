@@ -130,7 +130,9 @@ export const updateCommand = new Command("update")
           } else if (!isLocalId(resolvedId)) {
             try {
               const fetched = await fetchIssue(resolvedId);
-              currentDescription = fetched.description;
+              if (fetched) {
+                currentDescription = fetched.description;
+              }
             } catch {
               // Fall through and let existing validations handle missing issue cases later.
             }
