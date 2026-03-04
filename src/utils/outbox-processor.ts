@@ -66,6 +66,11 @@ function queueRelationRetry(
   });
 }
 
+function isPlaceholderIssueRef(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === "" || normalized === "undefined" || normalized === "null";
+}
+
 function isOrphanUnresolvedLocalId(localId: string, context: ResolutionContext): boolean {
   const canonical = canonicalLocalId(localId);
   if (!isLocalId(canonical)) return false;
@@ -88,6 +93,9 @@ function resolveDepsString(
     .flatMap((dep) => {
       const [type, targetId] = dep.split(":");
       if (!targetId) return [dep];
+      if (isPlaceholderIssueRef(targetId)) {
+        return [];
+      }
       referencedIds.add(targetId);
       const resolvedTarget = resolveRemoteIssueId(targetId);
       if (isLocalId(targetId) && resolvedTarget === targetId) {
@@ -128,6 +136,16 @@ function resolveOutboxItem(item: OutboxItem, context: ResolutionContext): Resolu
   ): void => {
     const value = payload[key];
     if (typeof value !== "string") return;
+    if (isPlaceholderIssueRef(value)) {
+      if (options.dropFieldIfOrphan) {
+        delete payload[key];
+        return;
+      }
+      if (options.dropOperationIfOrphan) {
+        dropOperation = true;
+      }
+      return;
+    }
     referencedIds.add(value);
     const resolvedValue = resolveRemoteIssueId(value);
     if (isLocalId(value) && resolvedValue === value) {
