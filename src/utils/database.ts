@@ -28,6 +28,7 @@ const SQLITE_RETRY_BASE_DELAY_MS = 50;
 const OUTBOX_CLAIM_TIMEOUT_MS = 600000;
 const OUTBOX_RETRY_BASE_DELAY_MS = 1000;
 const OUTBOX_RETRY_MAX_DELAY_MS = 300000;
+const LOCAL_ID_WITH_DASH_RE = /^local-(\d+)$/i;
 const LINEAR_ID_WITH_DASH_RE = /^([A-Za-z]+)-(\d+)$/;
 const LINEAR_ID_NO_DASH_RE = /^([A-Za-z]+)(\d+)$/;
 const NUMERIC_ISSUE_ID_RE = /^\d+$/;
@@ -1990,6 +1991,11 @@ function inferTeamPrefixForIssueNumber(issueNumber: string): string {
 function normalizeIssueInputId(id: string): string {
   const trimmed = id.trim();
   if (!trimmed) return trimmed;
+
+  const localDashedMatch = trimmed.match(LOCAL_ID_WITH_DASH_RE);
+  if (localDashedMatch) {
+    return `LOCAL-${localDashedMatch[1]}`;
+  }
 
   if (isLocalId(trimmed)) {
     return trimmed;
