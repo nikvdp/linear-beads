@@ -32,7 +32,7 @@ function createRepo(): string {
 
 async function runEval(
   cwd: string,
-  mode: "single" | "two_machine"
+  mode: "single" | "two_machine" | "future_retry"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import { Database } from "bun:sqlite";
@@ -43,6 +43,7 @@ async function runEval(
       getIssueIdMapping,
       getPendingOutboxItems,
       markOutboxCreateRemoteIssueIdentifier,
+      repairCreateOutboxForUnsyncedIssues,
       queueMissingCreateOutboxItems,
       queueOutboxItem,
     } from ${JSON.stringify(DATABASE_UTILS_PATH)};
@@ -88,6 +89,53 @@ async function runEval(
       db.close();
 
       console.log(JSON.stringify({ repaired, result, pending: pending.length, mapping, displayId, row }));
+      process.exit(0);
+    }
+
+    if (mode === "future_retry") {
+      const localId = generateLocalId();
+      cacheIssue({
+        id: localId,
+        title: "Retry-delayed create should be revived",
+        status: "open",
+        priority: 2,
+        sync_status: "pending",
+        created_at: now,
+        updated_at: now,
+      });
+
+      const outboxId = queueOutboxItem(
+        "create",
+        { title: "Retry-delayed create should be revived", priority: 2 },
+        localId
+      );
+      markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9104");
+
+      const db = new Database(".lb/cache.db");
+      db.run(
+        "UPDATE outbox SET next_attempt_at = ?, processing = 1, processing_started_at = ? WHERE id = ?",
+        [new Date(Date.now() + 3600_000).toISOString(), now, outboxId]
+      );
+      db.run("UPDATE issues SET linear_identifier = '' WHERE local_id = ?", [localId]);
+      db.close();
+
+      const repaired = repairCreateOutboxForUnsyncedIssues();
+      const pass1 = await processOutboxQueue("TEAM");
+      const pass2 = await processOutboxQueue("TEAM");
+      const pending = getPendingOutboxItems();
+      const mapping = getIssueIdMapping(localId);
+      const displayId = getDisplayId(localId);
+      const verifyDb = new Database(".lb/cache.db", { readonly: true });
+      const row = verifyDb.query(
+        "SELECT local_id, linear_identifier, sync_status FROM issues WHERE local_id = ? LIMIT 1"
+      ).get(localId) as {
+        local_id: string;
+        linear_identifier: string | null;
+        sync_status: string;
+      } | null;
+      verifyDb.close();
+
+      console.log(JSON.stringify({ repaired, pass1, pass2, pending: pending.length, mapping, displayId, row }));
       process.exit(0);
     }
 
@@ -256,5 +304,33 @@ describe("missing create outbox repair", () => {
     expect(payload.childRow?.sync_status).toBe("synced");
     expect(payload.parentRow?.sync_key).toBeTruthy();
     expect(payload.childRow?.sync_key).toBeTruthy();
+  });
+
+  test("revives delayed/stuck create rows and treats blank linear_identifier as unresolved", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "future_retry");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      repaired: { queued: number; revived: number };
+      pass1: { success: number; failed: number; deferred: number };
+      pass2: { success: number; failed: number; deferred: number };
+      pending: number;
+      mapping: string | null;
+      displayId: string;
+      row: { linear_identifier: string | null; sync_status: string } | null;
+    };
+
+    expect(payload.repaired.queued).toBe(0);
+    expect(payload.repaired.revived).toBeGreaterThan(0);
+    expect(payload.pass1.failed).toBe(0);
+    expect(payload.pass2.failed).toBe(0);
+    expect(payload.pending).toBe(0);
+    expect(payload.mapping).toBe("LIN-9104");
+    expect(payload.displayId).toBe("LIN-9104");
+    expect(payload.row?.linear_identifier).toBe("LIN-9104");
+    expect(payload.row?.sync_status).toBe("synced");
   });
 });
