@@ -86,7 +86,7 @@ function getUserVersion(dbPath: string): number {
 
 describe("pre-localid fixture migrations", () => {
   for (const entry of manifest.fixtures) {
-    test(`migrates ${entry.name} to schema v7`, async () => {
+    test(`migrates ${entry.name} to schema v8`, async () => {
       const repoDir = extractFixture(entry);
       const dbPath = join(repoDir, ".lb", "cache.db");
 
@@ -97,7 +97,7 @@ describe("pre-localid fixture migrations", () => {
 
       const migratedDb = new Database(dbPath);
       const version = migratedDb.query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(7);
+      expect(version.user_version).toBe(8);
 
       const columns = migratedDb.query("PRAGMA table_info(issues)").all() as Array<{
         name: string;
