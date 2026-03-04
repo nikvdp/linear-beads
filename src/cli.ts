@@ -64,10 +64,7 @@ program
   .option("--worker", "Internal: run background sync worker")
   .option("--export-worker", "Internal: run JSONL export worker")
   .option("--temp-name <name>", "Temporary scope name override for this command")
-  .option(
-    "--temp-name-mode <mode>",
-    "Temporary scope mode override: label, project, or both"
-  )
+  .option("--temp-name-mode <mode>", "Temporary scope mode override: label, project, or both")
   .configureHelp({
     subcommandTerm: (cmd) => {
       const args = cmd.registeredArguments.map((a) =>
@@ -134,6 +131,8 @@ if (process.argv.includes("--worker")) {
 
     if (opts.tempName) {
       overrides.repo_name = opts.tempName;
+      // Ensure subprocesses (like detached sync workers) inherit CLI temp scope.
+      process.env.LB_TEMP_NAME = opts.tempName;
     }
 
     if (opts.tempNameMode) {
@@ -141,6 +140,8 @@ if (process.argv.includes("--worker")) {
         throw new Error("--temp-name-mode must be one of: label, project, both");
       }
       overrides.repo_scope = opts.tempNameMode;
+      // Ensure subprocesses (like detached sync workers) inherit CLI temp scope.
+      process.env.LB_TEMP_NAME_MODE = opts.tempNameMode;
     }
 
     if (Object.keys(overrides).length > 0) {
