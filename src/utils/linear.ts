@@ -45,10 +45,12 @@ type LinearRelationNode = {
   type: string;
   relatedIssue: { id: string };
 };
-type GraphqlRequestClient = {
+export type GraphqlRequestClient = {
   request<T>(query: string, variables?: Record<string, unknown>): Promise<T>;
 };
 const SYNC_KEY_MARKER_RE = /<!--\s*lb:sync_key=([a-f0-9-]{8,})\s*-->/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function splitDescriptionAndSyncKey(description?: string | null): {
   description?: string;
@@ -71,20 +73,9 @@ function splitDescriptionAndSyncKey(description?: string | null): {
   };
 }
 
-function appendSyncKeyMarker(
-  description: string | undefined,
-  syncKey?: string
-): string | undefined {
-  if (!syncKey) {
-    return description;
-  }
-
-  const cleaned = splitDescriptionAndSyncKey(description).description;
-  const marker = `<!-- lb:sync_key=${syncKey} -->`;
-  if (!cleaned) {
-    return marker;
-  }
-  return `${cleaned}\n\n${marker}`;
+function isUuid(value: string | undefined): value is string {
+  if (!value) return false;
+  return UUID_RE.test(value.trim());
 }
 
 /**
@@ -540,8 +531,13 @@ export async function getTeamId(teamKey?: string): Promise<string> {
 /**
  * Get workflow state ID for a status
  */
-export async function getWorkflowStateId(teamId: string, status: Issue["status"]): Promise<string> {
-  const client = getGraphQLClient();
+export async function getWorkflowStateId(
+  teamId: string,
+  status: Issue["status"],
+  options: { client?: GraphqlRequestClient } = {}
+): Promise<string> {
+  const client: GraphqlRequestClient =
+    options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
   const stateType = statusToLinearState(status);
 
   const query = `
@@ -1044,11 +1040,43 @@ export async function fetchIssue(issueId: string): Promise<Issue | null> {
 }
 
 /**
- * Find a scoped Linear issue by lb sync key marker in description.
+ * Find a scoped Linear issue by sync key.
+ * New-path issues use syncKey as the Linear UUID (IssueCreateInput.id).
+ * Legacy-path issues still rely on the description marker fallback.
  */
-export async function findIssueBySyncKey(teamId: string, syncKey: string): Promise<Issue | null> {
-  const client = getGraphQLClient();
+export async function findIssueBySyncKey(
+  teamId: string,
+  syncKey: string,
+  options: { client?: GraphqlRequestClient } = {}
+): Promise<Issue | null> {
+  const client: GraphqlRequestClient =
+    options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
   const scope = getRepoScope();
+
+  if (isUuid(syncKey)) {
+    try {
+      const byIdQuery = `
+        query GetIssueBySyncKeyId($id: String!) {
+          issue(id: $id) {
+            ${ISSUE_FRAGMENT}
+          }
+        }
+      `;
+      const byIdResult = await client.request<{ issue: LinearIssue | null }>(byIdQuery, {
+        id: syncKey,
+      });
+      if (byIdResult.issue) {
+        const mapped = linearToBdIssue(byIdResult.issue);
+        // Backfill cache sync_key for UUID-path issues that have no legacy marker.
+        if (!mapped.sync_key) {
+          mapped.sync_key = syncKey;
+        }
+        return mapped;
+      }
+    } catch {
+      // Fall through to legacy marker scan.
+    }
+  }
 
   let scopeFilter: string;
   const baseVariables: Record<string, string | undefined> = { teamId };
@@ -1156,10 +1184,12 @@ export async function createIssue(params: {
   status?: IssueStatus;
   syncKey?: string;
   skipCache?: boolean;
+  client?: GraphqlRequestClient;
 }): Promise<Issue> {
-  const client = getGraphQLClient();
+  const client: GraphqlRequestClient =
+    params.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
 
-  const stateId = await getWorkflowStateId(params.teamId, params.status || "open");
+  const stateId = await getWorkflowStateId(params.teamId, params.status || "open", { client });
 
   // Resolve parentId if provided (identifier -> UUID)
   let parentUuid: string | undefined;
@@ -1186,6 +1216,7 @@ export async function createIssue(params: {
 
     if (useLabelScope()) {
       const repoLabelId = await ensureRepoLabel(params.teamId, {
+        client,
         forceRefresh: forceRefreshScopeBindings,
       });
       labelIds.push(repoLabelId);
@@ -1207,12 +1238,16 @@ export async function createIssue(params: {
 
     const input: Record<string, unknown> = {
       title: params.title,
-      description: appendSyncKeyMarker(params.description, params.syncKey),
+      description: params.description,
       priority: priorityToLinear(params.priority),
       teamId: params.teamId,
       stateId,
       parentId: parentUuid,
     };
+    if (isUuid(params.syncKey)) {
+      // Hidden idempotency key path: use sync key as Linear UUID.
+      input.id = params.syncKey;
+    }
 
     if (labelIds.length > 0) {
       input.labelIds = labelIds;
