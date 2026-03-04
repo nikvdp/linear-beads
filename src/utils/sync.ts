@@ -10,7 +10,7 @@ import {
   needsFullSync,
   getLastSync,
   getOutboxStats,
-  queueMissingCreateOutboxItems,
+  repairCreateOutboxForUnsyncedIssues,
 } from "./database.js";
 import {
   fetchIssues,
@@ -35,8 +35,8 @@ export async function pushOutbox(teamId: string): Promise<{ success: number; fai
   let failed = 0;
   let waitedMs = 0;
 
-  // Self-heal missing create rows so LOCAL issues can converge even if outbox state was lost.
-  queueMissingCreateOutboxItems();
+  // Self-heal missing/stuck create rows so LOCAL issues can converge even if outbox state was lost.
+  repairCreateOutboxForUnsyncedIssues();
 
   while (true) {
     const result = await processOutboxQueue(teamId);

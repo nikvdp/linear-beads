@@ -1446,6 +1446,7 @@ type RebuildableIssueRow = {
   priority: number;
   issue_type: string | null;
   sync_key: string | null;
+  sync_status: "synced" | "pending" | "failed" | null;
 };
 
 function buildCreatePayloadForIssue(db: Database, row: RebuildableIssueRow): Record<string, unknown> {
@@ -1502,24 +1503,28 @@ function buildCreatePayloadForIssue(db: Database, row: RebuildableIssueRow): Rec
   };
 }
 
+type RepairCreateOutboxResult = {
+  queued: number;
+  revived: number;
+};
+
 /**
- * Rebuild missing create outbox rows from local unresolved issues.
- * This is the key self-heal path for cross-machine/outbox-loss scenarios.
+ * Repair create outbox rows for unresolved local issues.
+ * - Queues missing create rows
+ * - Revives existing create rows that are backoff-delayed or left in processing state
  */
-export function queueMissingCreateOutboxItems(limit: number = 200): number {
+export function repairCreateOutboxForUnsyncedIssues(limit: number = 200): RepairCreateOutboxResult {
   const db = getDatabase();
+  const nowIso = new Date().toISOString();
   const candidates = db
     .query(
       `
-      SELECT local_id, title, description, priority, issue_type, sync_key
+      SELECT local_id, title, description, priority, issue_type, sync_key, sync_status
       FROM issues i
-      WHERE i.local_id LIKE 'LOCAL-%'
-        AND i.linear_identifier IS NULL
-        AND NOT EXISTS (
-          SELECT 1
-          FROM outbox o
-          WHERE o.operation = 'create'
-            AND o.local_id = i.local_id
+      WHERE (i.linear_identifier IS NULL OR trim(i.linear_identifier) = '')
+        AND (
+          i.local_id LIKE 'LOCAL-%'
+          OR i.sync_status IN ('pending', 'failed')
         )
       ORDER BY i.created_at ASC
       LIMIT ?
@@ -1528,37 +1533,88 @@ export function queueMissingCreateOutboxItems(limit: number = 200): number {
     .all(limit) as RebuildableIssueRow[];
 
   if (candidates.length === 0) {
-    return 0;
+    return { queued: 0, revived: 0 };
   }
 
   let queued = 0;
+  let revived = 0;
   runWithBusyRetry(() => {
     for (const row of candidates) {
-      const payload = buildCreatePayloadForIssue(db, row);
-      const syncKey = typeof payload.syncKey === "string" ? payload.syncKey : generateIssueSyncKey();
-      db.run(
+      const existingCreate = db
+        .query(
+          `
+          SELECT id, next_attempt_at, processing
+          FROM outbox
+          WHERE operation = 'create'
+            AND local_id = ?
+          ORDER BY id ASC
         `
-        INSERT INTO outbox (operation, payload, local_id)
-        VALUES ('create', ?, ?)
-      `,
-        [JSON.stringify(payload), row.local_id]
-      );
+        )
+        .all(row.local_id) as Array<{
+        id: number;
+        next_attempt_at: string | null;
+        processing: number;
+      }>;
+
+      let syncKey: string;
+      if (existingCreate.length === 0) {
+        const payload = buildCreatePayloadForIssue(db, row);
+        syncKey = typeof payload.syncKey === "string" ? payload.syncKey : generateIssueSyncKey();
+        db.run(
+          `
+          INSERT INTO outbox (operation, payload, local_id)
+          VALUES ('create', ?, ?)
+        `,
+          [JSON.stringify(payload), row.local_id]
+        );
+        queued++;
+      } else {
+        syncKey = row.sync_key || generateIssueSyncKey();
+        db.run(
+          `
+          UPDATE outbox
+          SET next_attempt_at = NULL,
+              processing = 0,
+              processing_started_at = NULL
+          WHERE operation = 'create'
+            AND local_id = ?
+            AND (
+              processing = 1
+              OR next_attempt_at IS NOT NULL
+            )
+        `,
+          [row.local_id]
+        );
+        const reviveChanges = db.query("SELECT changes() as count").get() as { count: number };
+        revived += reviveChanges.count;
+      }
+
       db.run(
         `
         UPDATE issues
-        SET sync_status = 'pending',
+        SET sync_status = CASE
+              WHEN sync_status IN ('pending', 'failed') THEN sync_status
+              WHEN sync_status = 'synced' OR sync_status IS NULL THEN 'pending'
+              ELSE sync_status
+            END,
             sync_key = COALESCE(sync_key, ?),
             updated_at = ?
         WHERE local_id = ?
       `,
-        [syncKey, new Date().toISOString(), row.local_id]
+        [syncKey, nowIso, row.local_id]
       );
-      queued++;
     }
   });
 
   requestJsonlExport();
-  return queued;
+  return { queued, revived };
+}
+
+/**
+ * Backwards-compatible helper retained for tests/callers expecting a queued count.
+ */
+export function queueMissingCreateOutboxItems(limit: number = 200): number {
+  return repairCreateOutboxForUnsyncedIssues(limit).queued;
 }
 
 /**
