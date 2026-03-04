@@ -32,7 +32,14 @@ function createRepo(): string {
 
 async function runEval(
   cwd: string,
-  mode: "mapping" | "marker" | "orphan" | "update_before_create" | "orphan_parent" | "deps_retry"
+  mode:
+    | "mapping"
+    | "marker"
+    | "orphan"
+    | "update_before_create"
+    | "orphan_parent"
+    | "deps_retry"
+    | "legacy_placeholder_refs"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import { Database } from "bun:sqlite";
@@ -89,6 +96,18 @@ async function runEval(
         localId
       );
       markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9005");
+    } else if (mode === "legacy_placeholder_refs") {
+      const outboxId = queueOutboxItem(
+        "create",
+        {
+          title: "Replay guard issue",
+          priority: 2,
+          parentId: "undefined",
+          deps: "blocked-by:undefined,related:null,blocks:LIN-9006",
+        },
+        localId
+      );
+      markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9006");
     } else {
       const outboxId = queueOutboxItem(
         "create",
@@ -307,6 +326,42 @@ describe("outbox create replay protection", () => {
     expect(payload.mapping).toBe("LIN-9005");
     expect(payload.displayId).toBe("LIN-9005");
     expect(payload.row?.linear_identifier).toBe("LIN-9005");
+    expect(payload.row?.sync_status).toBe("synced");
+  });
+
+  test("drops legacy placeholder refs in create payloads and still finalizes mapping", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "legacy_placeholder_refs");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      result: { success: number; failed: number; deferred: number; remoteProcessed: number };
+      remaining: number;
+      pending: Array<{
+        id: number;
+        operation: string;
+        local_id: string | null;
+        payload: { issueId?: string; relatedIssueId?: string; type?: string };
+      }>;
+      mapping: string | null;
+      displayId: string;
+      row: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+    };
+
+    expect(payload.result.success).toBe(1);
+    expect(payload.result.failed).toBe(0);
+    expect(payload.result.deferred).toBe(0);
+    expect(payload.result.remoteProcessed).toBe(0);
+    expect(payload.remaining).toBe(1);
+    expect(payload.pending[0]?.operation).toBe("create_relation");
+    expect(payload.pending[0]?.payload?.type).toBe("blocks");
+    expect(payload.pending[0]?.payload?.issueId).toBe("LIN-9006");
+    expect(payload.pending[0]?.payload?.relatedIssueId).toBe("LIN-9006");
+    expect(payload.mapping).toBe("LIN-9006");
+    expect(payload.displayId).toBe("LIN-9006");
+    expect(payload.row?.linear_identifier).toBe("LIN-9006");
     expect(payload.row?.sync_status).toBe("synced");
   });
 });
