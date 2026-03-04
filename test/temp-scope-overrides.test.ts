@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { GraphQLClient } from "graphql-request";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
@@ -86,9 +87,50 @@ async function lbJson<T>(
 ): Promise<T> {
   const result = await lb(cwd, [...args, "--json"], envOverrides);
   if (result.exitCode !== 0) {
-    throw new Error(`lb ${args.join(" ")} failed:\nstdout=${result.stdout}\nstderr=${result.stderr}`);
+    throw new Error(
+      `lb ${args.join(" ")} failed:\nstdout=${result.stdout}\nstderr=${result.stderr}`
+    );
   }
   return JSON.parse(result.stdout) as T;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readLinearIdentifier(repoDir: string, localId: string): string | null {
+  try {
+    const db = new Database(join(repoDir, ".lb", "cache.db"), { readonly: true });
+    try {
+      const row = db
+        .query("SELECT linear_identifier FROM issues WHERE local_id = ? LIMIT 1")
+        .get(localId) as { linear_identifier: string | null } | null;
+      const identifier = row?.linear_identifier;
+      return identifier && identifier.trim().length > 0 ? identifier : null;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+async function waitForLinearIdentifier(
+  repoDir: string,
+  localId: string,
+  timeoutMs: number = 30000
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const identifier = readLinearIdentifier(repoDir, localId);
+    if (identifier) {
+      return identifier;
+    }
+    await sleep(300);
+  }
+
+  throw new Error(`Timed out waiting for remote identifier for ${localId}`);
 }
 
 async function getIssueSnapshot(issueId: string): Promise<IssueSnapshot | null> {
@@ -225,15 +267,7 @@ describe("temporary scope overrides", () => {
 
     const created = await lbJson<Array<{ id: string }>>(
       repoDir,
-      [
-        "--temp-name",
-        cliName,
-        "--temp-name-mode",
-        "project",
-        "create",
-        ` precedence`,
-        "--sync",
-      ],
+      ["--temp-name", cliName, "--temp-name-mode", "project", "create", ` precedence`, "--sync"],
       {
         LB_TEMP_NAME: envName,
         LB_TEMP_NAME_MODE: "label",
@@ -247,5 +281,35 @@ describe("temporary scope overrides", () => {
     expect(snapshot).toBeTruthy();
     expect(snapshot?.projectName).toBe(cliName);
     expect(snapshot?.labels).not.toContain(`repo:${envName}`);
+  });
+
+  test("queued create with CLI temp flags preserves scope in spawned worker", async () => {
+    const repoDir = createTempGitRepo("lb-temp-worker-propagation");
+    const baseName = `base-${Date.now()}`;
+    writeRepoConfig(repoDir, {
+      repo_name: baseName,
+      repo_scope: "label",
+    });
+
+    const tempName = `tmp-worker-project-${Date.now()}`;
+    const created = await lbJson<Array<{ id: string }>>(repoDir, [
+      "--temp-name",
+      tempName,
+      "--temp-name-mode",
+      "project",
+      "create",
+      `${TEST_PREFIX} queued-worker`,
+    ]);
+
+    const localId = created[0].id;
+    expect(localId.startsWith("LOCAL-")).toBe(true);
+
+    const remoteIdentifier = await waitForLinearIdentifier(repoDir, localId);
+    await trackIssue(remoteIdentifier);
+
+    const snapshot = await getIssueSnapshot(remoteIdentifier);
+    expect(snapshot).toBeTruthy();
+    expect(snapshot?.projectName).toBe(tempName);
+    expect(snapshot?.labels).not.toContain(`repo:${baseName}`);
   });
 });
