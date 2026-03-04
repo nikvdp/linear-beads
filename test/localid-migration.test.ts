@@ -139,6 +139,20 @@ describe("pre-localid fixture migrations", () => {
     expect(shown[0].title).toContain("Fixture issue previously replaced");
   });
 
+  test("resolves lowercase local aliases the same as uppercase", async () => {
+    const entry = manifest.fixtures.find(
+      (fixture) => fixture.name === "pre-localid-mapped-local-alias"
+    );
+    if (!entry) {
+      throw new Error("Missing fixture pre-localid-mapped-local-alias");
+    }
+
+    const repoDir = extractFixture(entry);
+    const shown = await lbJson<Array<{ id: string; title: string }>>(repoDir, "show", "local-0999");
+    expect(shown[0].id).toBe("LIN-9200");
+    expect(shown[0].title).toContain("Fixture issue previously replaced");
+  });
+
   test("keeps pending local issue/outbox linkage stable after migration", async () => {
     const entry = manifest.fixtures.find(
       (fixture) => fixture.name === "pre-localid-pending-outbox"
