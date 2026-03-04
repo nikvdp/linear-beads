@@ -4,6 +4,7 @@
  */
 
 import { Database } from "bun:sqlite";
+import { randomUUID } from "crypto";
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, statSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
 import { ensureRepoMinCliVersion, getDbPath, getTeamKey } from "./config.js";
@@ -246,6 +247,7 @@ function initSchema(db: Database, dbPath: string): void {
       CREATE TABLE IF NOT EXISTS issues (
         id TEXT PRIMARY KEY,
         identifier TEXT NOT NULL,
+        sync_key TEXT,
         title TEXT NOT NULL,
         description TEXT,
         status TEXT NOT NULL,
@@ -280,6 +282,7 @@ function initSchema(db: Database, dbPath: string): void {
         CREATE TABLE issues_new (
           id TEXT PRIMARY KEY,
           identifier TEXT NOT NULL,
+          sync_key TEXT,
           title TEXT NOT NULL,
           description TEXT,
           status TEXT NOT NULL,
@@ -296,6 +299,7 @@ function initSchema(db: Database, dbPath: string): void {
         INSERT INTO issues_new (
           id,
           identifier,
+          sync_key,
           title,
           description,
           status,
@@ -312,6 +316,7 @@ function initSchema(db: Database, dbPath: string): void {
         SELECT
           id,
           identifier,
+          NULL AS sync_key,
           title,
           description,
           status,
@@ -536,6 +541,7 @@ function initSchema(db: Database, dbPath: string): void {
           local_id TEXT PRIMARY KEY,
           linear_id TEXT,
           linear_identifier TEXT,
+          sync_key TEXT,
           title TEXT NOT NULL,
           description TEXT,
           status TEXT NOT NULL,
@@ -554,6 +560,7 @@ function initSchema(db: Database, dbPath: string): void {
           local_id,
           linear_id,
           linear_identifier,
+          sync_key,
           title,
           description,
           status,
@@ -574,6 +581,7 @@ function initSchema(db: Database, dbPath: string): void {
             WHEN UPPER(id) LIKE 'LOCAL-%' THEN NULL
             ELSE identifier
           END AS linear_identifier,
+          NULL AS sync_key,
           title,
           description,
           status,
@@ -614,6 +622,16 @@ function initSchema(db: Database, dbPath: string): void {
     );
 
     db.exec("PRAGMA user_version = 7");
+  }
+
+  if (currentVersion < 8) {
+    addColumnIfMissing(db, "issues", "sync_key", "ALTER TABLE issues ADD COLUMN sync_key TEXT");
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_sync_key
+      ON issues(sync_key)
+      WHERE sync_key IS NOT NULL;
+    `);
+    db.exec("PRAGMA user_version = 8");
   }
 
   ensureDependencyAliasIntegrity(db);
@@ -925,6 +943,7 @@ type CachedIssueInput = Issue & {
   local_id?: string;
   linear_id?: string;
   linear_identifier?: string;
+  sync_key?: string;
 };
 
 function toIssueDisplayId(localId: string, linearIdentifier?: string | null): string {
@@ -979,6 +998,7 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
         local_id,
         linear_id,
         linear_identifier,
+        sync_key,
         title,
         description,
         status,
@@ -992,10 +1012,11 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
         linear_state_id,
         cached_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(local_id) DO UPDATE SET
         linear_id = COALESCE(excluded.linear_id, issues.linear_id),
         linear_identifier = COALESCE(excluded.linear_identifier, issues.linear_identifier),
+        sync_key = COALESCE(excluded.sync_key, issues.sync_key),
         title = excluded.title,
         description = excluded.description,
         status = excluded.status,
@@ -1013,6 +1034,7 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
       localId,
       issue.linear_id || null,
       linearIdentifier,
+      issue.sync_key || null,
       issue.title,
       issue.description || null,
       issue.status,
@@ -1366,6 +1388,176 @@ export function queueOutboxItem(
   // Get last insert rowid
   const result = db.query("SELECT last_insert_rowid() as id").get() as { id: number };
   return result.id;
+}
+
+export function generateIssueSyncKey(): string {
+  return randomUUID();
+}
+
+export function getIssueSyncKey(localId: string): string | null {
+  const db = getDatabase();
+  const resolvedLocalId = resolveIssueLocalId(localId);
+  const row = db.query("SELECT sync_key FROM issues WHERE local_id = ?").get(resolvedLocalId) as {
+    sync_key: string | null;
+  } | null;
+  return row?.sync_key || null;
+}
+
+export function ensureIssueSyncKey(localId: string): string {
+  const db = getDatabase();
+  const resolvedLocalId = resolveIssueLocalId(localId);
+  const existing = getIssueSyncKey(resolvedLocalId);
+  if (existing) {
+    return existing;
+  }
+
+  const syncKey = generateIssueSyncKey();
+  runWithBusyRetry(() => {
+    db.run("UPDATE issues SET sync_key = ? WHERE local_id = ?", [syncKey, resolvedLocalId]);
+  });
+  return syncKey;
+}
+
+export function getSyncedIssueBySyncKey(syncKey: string): {
+  local_id: string;
+  linear_id: string | null;
+  linear_identifier: string;
+} | null {
+  const db = getDatabase();
+  const row = db
+    .query(
+      `
+      SELECT local_id, linear_id, linear_identifier
+      FROM issues
+      WHERE sync_key = ?
+        AND linear_identifier IS NOT NULL
+      LIMIT 1
+    `
+    )
+    .get(syncKey) as { local_id: string; linear_id: string | null; linear_identifier: string } | null;
+  return row;
+}
+
+type RebuildableIssueRow = {
+  local_id: string;
+  title: string;
+  description: string | null;
+  priority: number;
+  issue_type: string | null;
+  sync_key: string | null;
+};
+
+function buildCreatePayloadForIssue(db: Database, row: RebuildableIssueRow): Record<string, unknown> {
+  const parent = db
+    .query(
+      `
+      SELECT depends_on_id
+      FROM dependencies
+      WHERE issue_id = ? AND type = 'parent-child'
+      LIMIT 1
+    `
+    )
+    .get(row.local_id) as { depends_on_id: string } | null;
+
+  const outgoingDeps = db
+    .query(
+      `
+      SELECT type, depends_on_id
+      FROM dependencies
+      WHERE issue_id = ?
+        AND type IN ('blocks', 'related')
+      ORDER BY id ASC
+    `
+    )
+    .all(row.local_id) as Array<{ type: "blocks" | "related"; depends_on_id: string }>;
+
+  const blockedBy = db
+    .query(
+      `
+      SELECT issue_id
+      FROM dependencies
+      WHERE depends_on_id = ?
+        AND type = 'blocks'
+      ORDER BY id ASC
+    `
+    )
+    .all(row.local_id) as Array<{ issue_id: string }>;
+
+  const deps = [
+    ...outgoingDeps.map((dep) => `${dep.type}:${dep.depends_on_id}`),
+    ...blockedBy.map((dep) => `blocked-by:${dep.issue_id}`),
+  ];
+  const dedupedDeps = [...new Set(deps)];
+  const syncKey = row.sync_key || generateIssueSyncKey();
+
+  return {
+    title: row.title,
+    description: row.description || undefined,
+    priority: row.priority,
+    issueType: row.issue_type || undefined,
+    parentId: parent?.depends_on_id || undefined,
+    deps: dedupedDeps.length > 0 ? dedupedDeps.join(",") : undefined,
+    syncKey,
+  };
+}
+
+/**
+ * Rebuild missing create outbox rows from local unresolved issues.
+ * This is the key self-heal path for cross-machine/outbox-loss scenarios.
+ */
+export function queueMissingCreateOutboxItems(limit: number = 200): number {
+  const db = getDatabase();
+  const candidates = db
+    .query(
+      `
+      SELECT local_id, title, description, priority, issue_type, sync_key
+      FROM issues i
+      WHERE i.local_id LIKE 'LOCAL-%'
+        AND i.linear_identifier IS NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM outbox o
+          WHERE o.operation = 'create'
+            AND o.local_id = i.local_id
+        )
+      ORDER BY i.created_at ASC
+      LIMIT ?
+    `
+    )
+    .all(limit) as RebuildableIssueRow[];
+
+  if (candidates.length === 0) {
+    return 0;
+  }
+
+  let queued = 0;
+  runWithBusyRetry(() => {
+    for (const row of candidates) {
+      const payload = buildCreatePayloadForIssue(db, row);
+      const syncKey = typeof payload.syncKey === "string" ? payload.syncKey : generateIssueSyncKey();
+      db.run(
+        `
+        INSERT INTO outbox (operation, payload, local_id)
+        VALUES ('create', ?, ?)
+      `,
+        [JSON.stringify(payload), row.local_id]
+      );
+      db.run(
+        `
+        UPDATE issues
+        SET sync_status = 'pending',
+            sync_key = COALESCE(sync_key, ?),
+            updated_at = ?
+        WHERE local_id = ?
+      `,
+        [syncKey, new Date().toISOString(), row.local_id]
+      );
+      queued++;
+    }
+  });
+
+  requestJsonlExport();
+  return queued;
 }
 
 /**

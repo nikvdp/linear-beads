@@ -12,6 +12,9 @@ import {
   getIssueIdMapping,
   replaceIssueId,
   getLinearIdForLocalId,
+  ensureIssueSyncKey,
+  getIssueSyncKey,
+  getSyncedIssueBySyncKey,
   markOutboxCreateRemoteIssueIdentifier,
   getParentId,
   getChildIds,
@@ -30,6 +33,7 @@ import {
   deleteIssue,
   createRelation,
   deleteRelation,
+  findIssueBySyncKey,
 } from "./issue-backend.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
 
@@ -270,10 +274,32 @@ async function processResolvedItem(
         issueType?: IssueType;
         parentId?: string;
         deps?: string;
+        syncKey?: string;
       };
       let remoteIssueIdentifier = item.remote_issue_identifier || getIssueIdMapping(localId);
       let remoteIssueUuid = getLinearIdForLocalId(resolveIssueLocalId(localId)) || undefined;
       let usedRemoteBackend = false;
+      const syncKey =
+        (typeof createPayload.syncKey === "string" && createPayload.syncKey.trim()) ||
+        getIssueSyncKey(localId) ||
+        ensureIssueSyncKey(localId);
+
+      if (!remoteIssueIdentifier) {
+        const cachedBySyncKey = getSyncedIssueBySyncKey(syncKey);
+        if (cachedBySyncKey?.linear_identifier) {
+          remoteIssueIdentifier = cachedBySyncKey.linear_identifier;
+          remoteIssueUuid = cachedBySyncKey.linear_id || undefined;
+        }
+      }
+
+      if (!remoteIssueIdentifier) {
+        const remoteBySyncKey = await findIssueBySyncKey(teamId, syncKey);
+        if (remoteBySyncKey?.linear_identifier) {
+          remoteIssueIdentifier = remoteBySyncKey.linear_identifier;
+          remoteIssueUuid = remoteBySyncKey.linear_id;
+          usedRemoteBackend = true;
+        }
+      }
 
       if (!remoteIssueIdentifier) {
         const issue = await createIssue({
@@ -283,6 +309,7 @@ async function processResolvedItem(
           issueType: createPayload.issueType,
           parentId: createPayload.parentId,
           teamId,
+          syncKey,
         });
         remoteIssueIdentifier = issue.id;
         remoteIssueUuid = issue.linear_id;

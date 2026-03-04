@@ -14,6 +14,7 @@ import {
   resolveIssueId,
   isLocalId,
   runWithBusyRetry,
+  generateIssueSyncKey,
 } from "../utils/database.js";
 import {
   createIssue,
@@ -238,6 +239,7 @@ export const createCommand = new Command("create")
       // Local-only mode: create locally without Linear
       if (isLocalOnly()) {
         const localId = generateLocalId();
+        const syncKey = generateIssueSyncKey();
         const now = new Date().toISOString();
 
         const issue: Issue = {
@@ -251,7 +253,7 @@ export const createCommand = new Command("create")
           updated_at: now,
         };
 
-        cacheIssue(issue);
+        cacheIssue({ ...issue, sync_key: syncKey });
 
         // Handle parent relationship
         if (resolvedParent) {
@@ -295,6 +297,7 @@ export const createCommand = new Command("create")
       }
 
       if (options.sync) {
+        const syncKey = generateIssueSyncKey();
         if (resolvedParent && isLocalId(resolvedParent)) {
           console.error(`Parent not synced yet: ${options.parent}`);
           process.exit(1);
@@ -340,6 +343,7 @@ export const createCommand = new Command("create")
           teamId,
           parentId: resolvedParent,
           assigneeId,
+          syncKey,
         });
 
         // Handle deps after issue creation
@@ -375,6 +379,7 @@ export const createCommand = new Command("create")
         // The worker will resolve them when processing
 
         const localId = generateLocalId();
+        const syncKey = generateIssueSyncKey();
         const now = new Date().toISOString();
 
         const issue: Issue = {
@@ -400,6 +405,7 @@ export const createCommand = new Command("create")
           assign: options.assign,
           unassign: options.unassign || false,
           deps: depsString || undefined,
+          syncKey,
         };
         if (issueType) {
           payload.issueType = issueType;
@@ -407,7 +413,7 @@ export const createCommand = new Command("create")
 
         const db = getDatabase();
         const transaction = db.transaction(() => {
-          cacheIssue(issue);
+          cacheIssue({ ...issue, sync_key: syncKey });
 
           if (resolvedParent) {
             cacheDependency({

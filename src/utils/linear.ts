@@ -45,20 +45,55 @@ type LinearRelationNode = {
   type: string;
   relatedIssue: { id: string };
 };
+const SYNC_KEY_MARKER_RE = /<!--\s*lb:sync_key=([a-f0-9-]{8,})\s*-->/i;
+
+function splitDescriptionAndSyncKey(
+  description?: string | null
+): { description?: string; syncKey?: string } {
+  if (!description) {
+    return {};
+  }
+
+  const match = description.match(SYNC_KEY_MARKER_RE);
+  if (!match) {
+    return { description };
+  }
+
+  const syncKey = match[1];
+  const withoutMarker = description.replace(SYNC_KEY_MARKER_RE, "").trimEnd();
+  return {
+    description: withoutMarker || undefined,
+    syncKey,
+  };
+}
+
+function appendSyncKeyMarker(description: string | undefined, syncKey?: string): string | undefined {
+  if (!syncKey) {
+    return description;
+  }
+
+  const cleaned = splitDescriptionAndSyncKey(description).description;
+  const marker = `<!-- lb:sync_key=${syncKey} -->`;
+  if (!cleaned) {
+    return marker;
+  }
+  return `${cleaned}\n\n${marker}`;
+}
 
 /**
  * Convert Linear issue to bd-compatible issue
  */
-function linearToBdIssue(linear: LinearIssue): Issue & { linear_state_id: string } {
+function linearToBdIssue(linear: LinearIssue): Issue & { linear_state_id: string; sync_key?: string } {
   const labels = linear.labels.nodes.map((l) => l.name);
   const issueType = useTypes() ? labelToIssueType(labels) : undefined;
+  const parsedDescription = splitDescriptionAndSyncKey(linear.description);
 
-  const issue: Issue & { linear_state_id: string } = {
+  const issue: Issue & { linear_state_id: string; sync_key?: string } = {
     id: linear.identifier,
     linear_id: linear.id,
     linear_identifier: linear.identifier,
     title: linear.title,
-    description: linear.description || undefined,
+    description: parsedDescription.description,
     status: linearStateToStatus(linear.state.type),
     priority: linearToPriority(linear.priority),
     created_at: linear.createdAt,
@@ -70,6 +105,9 @@ function linearToBdIssue(linear: LinearIssue): Issue & { linear_state_id: string
 
   if (issueType) {
     issue.issue_type = issueType;
+  }
+  if (parsedDescription.syncKey) {
+    issue.sync_key = parsedDescription.syncKey;
   }
 
   return issue;
@@ -918,6 +956,81 @@ export async function fetchIssue(issueId: string): Promise<Issue | null> {
 }
 
 /**
+ * Find a scoped Linear issue by lb sync key marker in description.
+ */
+export async function findIssueBySyncKey(teamId: string, syncKey: string): Promise<Issue | null> {
+  const client = getGraphQLClient();
+  const scope = getRepoScope();
+
+  let scopeFilter: string;
+  const baseVariables: Record<string, string | undefined> = { teamId };
+
+  if (scope === "project") {
+    const projectName = getRepoName() || "unknown";
+    scopeFilter = `filter: { project: { name: { eq: $projectName } } }`;
+    baseVariables.projectName = projectName;
+  } else if (scope === "both") {
+    const repoLabel = getRepoLabel();
+    const projectName = getRepoName() || "unknown";
+    scopeFilter = `filter: { or: [{ labels: { name: { eq: $labelName } } }, { project: { name: { eq: $projectName } } }] }`;
+    baseVariables.labelName = repoLabel;
+    baseVariables.projectName = projectName;
+  } else {
+    const repoLabel = getRepoLabel();
+    scopeFilter = `filter: { labels: { name: { eq: $labelName } } }`;
+    baseVariables.labelName = repoLabel;
+  }
+
+  let cursor: string | undefined;
+  let hasMore = true;
+
+  while (hasMore) {
+    const variables = { ...baseVariables, cursor: cursor || null };
+    const varDecls = Object.entries(baseVariables)
+      .filter(([, v]) => v !== undefined)
+      .map(([k]) => `$${k}: String!`)
+      .concat(["$cursor: String"])
+      .join(", ");
+    const query = `
+      query FindIssueBySyncKey(${varDecls}) {
+        team(id: $teamId) {
+          issues(${scopeFilter}, first: 50, after: $cursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              ${ISSUE_FRAGMENT}
+            }
+          }
+        }
+      }
+    `;
+
+    const result = await client.request<{
+      team: {
+        issues: {
+          pageInfo: { hasNextPage: boolean; endCursor?: string };
+          nodes: LinearIssue[];
+        };
+      };
+    }>(query, variables);
+
+    for (const node of result.team.issues.nodes) {
+      const parsed = splitDescriptionAndSyncKey(node.description);
+      if (parsed.syncKey === syncKey) {
+        return linearToBdIssue(node);
+      }
+    }
+
+    hasMore = result.team.issues.pageInfo.hasNextPage;
+    cursor = result.team.issues.pageInfo.endCursor;
+  }
+
+  return null;
+}
+
+/**
  * Resolve issue identifier (e.g., LIN-123) to UUID
  */
 export async function resolveIssueId(issueId: string): Promise<string | null> {
@@ -953,6 +1066,7 @@ export async function createIssue(params: {
   parentId?: string;
   assigneeId?: string;
   status?: IssueStatus;
+  syncKey?: string;
 }): Promise<Issue> {
   const client = getGraphQLClient();
 
@@ -1001,7 +1115,7 @@ export async function createIssue(params: {
 
   const input: Record<string, unknown> = {
     title: params.title,
-    description: params.description,
+    description: appendSyncKeyMarker(params.description, params.syncKey),
     priority: priorityToLinear(params.priority),
     teamId: params.teamId,
     stateId,

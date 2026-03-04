@@ -14,6 +14,7 @@ const linearIssueBackend: IssueBackendAdapter = {
   fetchAllIssuesPaginated: linear.fetchAllIssuesPaginated,
   fetchAllUpdatedIssues: linear.fetchAllUpdatedIssues,
   fetchIssue: linear.fetchIssue,
+  findIssueBySyncKey: linear.findIssueBySyncKey,
   createIssue: linear.createIssue,
   updateIssue: linear.updateIssue,
   updateIssueParent: linear.updateIssueParent,
@@ -59,6 +60,9 @@ const localIssueBackend: IssueBackendAdapter = {
   },
   async fetchIssue() {
     throw localIssueBackendError("fetchIssue");
+  },
+  async findIssueBySyncKey() {
+    throw localIssueBackendError("findIssueBySyncKey");
   },
   async createIssue() {
     throw localIssueBackendError("createIssue");
@@ -147,6 +151,13 @@ export async function fetchAllUpdatedIssues(
 
 export async function fetchIssue(issueId: string): ReturnType<IssueBackendAdapter["fetchIssue"]> {
   return getIssueBackendAdapter().fetchIssue(issueId);
+}
+
+export async function findIssueBySyncKey(
+  teamId: string,
+  syncKey: string
+): ReturnType<IssueBackendAdapter["findIssueBySyncKey"]> {
+  return getIssueBackendAdapter().findIssueBySyncKey(teamId, syncKey);
 }
 
 export async function createIssue(

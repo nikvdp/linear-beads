@@ -16,6 +16,7 @@ export interface IssueBackendAdapter {
   fetchAllIssuesPaginated(teamId: string): Promise<{ issues: Issue[]; pruned: number }>;
   fetchAllUpdatedIssues(teamId: string, since: string): Promise<Issue[]>;
   fetchIssue(issueId: string): Promise<Issue | null>;
+  findIssueBySyncKey(teamId: string, syncKey: string): Promise<Issue | null>;
   createIssue(params: {
     title: string;
     description?: string;
@@ -25,6 +26,7 @@ export interface IssueBackendAdapter {
     parentId?: string;
     assigneeId?: string;
     status?: IssueStatus;
+    syncKey?: string;
   }): Promise<Issue>;
   updateIssue(
     issueId: string,
