@@ -807,9 +807,9 @@ export function isCacheStale(ttlSeconds: number = 120): boolean {
  */
 export function getLastSyncContext(): string | null {
   const db = getDatabase();
-  const row = db.query("SELECT value FROM metadata WHERE key = ?").get(
-    LAST_SYNC_CONTEXT_METADATA_KEY
-  ) as {
+  const row = db
+    .query("SELECT value FROM metadata WHERE key = ?")
+    .get(LAST_SYNC_CONTEXT_METADATA_KEY) as {
     value: string;
   } | null;
   return row?.value || null;
@@ -1486,7 +1486,11 @@ export function getSyncedIssueBySyncKey(syncKey: string): {
       LIMIT 1
     `
     )
-    .get(syncKey) as { local_id: string; linear_id: string | null; linear_identifier: string } | null;
+    .get(syncKey) as {
+    local_id: string;
+    linear_id: string | null;
+    linear_identifier: string;
+  } | null;
   return row;
 }
 
@@ -1500,7 +1504,10 @@ type RebuildableIssueRow = {
   sync_status: "synced" | "pending" | "failed" | null;
 };
 
-function buildCreatePayloadForIssue(db: Database, row: RebuildableIssueRow): Record<string, unknown> {
+function buildCreatePayloadForIssue(
+  db: Database,
+  row: RebuildableIssueRow
+): Record<string, unknown> {
   const parent = db
     .query(
       `

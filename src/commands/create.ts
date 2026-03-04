@@ -137,11 +137,7 @@ export const createCommand = new Command("create")
       const duplicateCandidates = getCachedIssues().filter(
         (issue) => issue.status === "open" || issue.status === "in_progress"
       );
-      const duplicateMatches = findDuplicateMatches(
-        duplicateCandidates,
-        title,
-        description
-      );
+      const duplicateMatches = findDuplicateMatches(duplicateCandidates, title, description);
 
       if (duplicateMatches.length > 0) {
         if (options.reuseIfDuplicate) {

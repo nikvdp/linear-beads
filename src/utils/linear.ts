@@ -50,9 +50,10 @@ type GraphqlRequestClient = {
 };
 const SYNC_KEY_MARKER_RE = /<!--\s*lb:sync_key=([a-f0-9-]{8,})\s*-->/i;
 
-function splitDescriptionAndSyncKey(
-  description?: string | null
-): { description?: string; syncKey?: string } {
+function splitDescriptionAndSyncKey(description?: string | null): {
+  description?: string;
+  syncKey?: string;
+} {
   if (!description) {
     return {};
   }
@@ -70,7 +71,10 @@ function splitDescriptionAndSyncKey(
   };
 }
 
-function appendSyncKeyMarker(description: string | undefined, syncKey?: string): string | undefined {
+function appendSyncKeyMarker(
+  description: string | undefined,
+  syncKey?: string
+): string | undefined {
   if (!syncKey) {
     return description;
   }
@@ -86,7 +90,9 @@ function appendSyncKeyMarker(description: string | undefined, syncKey?: string):
 /**
  * Convert Linear issue to bd-compatible issue
  */
-function linearToBdIssue(linear: LinearIssue): Issue & { linear_state_id: string; sync_key?: string } {
+function linearToBdIssue(
+  linear: LinearIssue
+): Issue & { linear_state_id: string; sync_key?: string } {
   const labels = linear.labels.nodes.map((l) => l.name);
   const issueType = useTypes() ? labelToIssueType(labels) : undefined;
   const parsedDescription = splitDescriptionAndSyncKey(linear.description);
@@ -119,9 +125,10 @@ function linearToBdIssue(linear: LinearIssue): Issue & { linear_state_id: string
 /**
  * Get or create repo label
  */
-async function fetchTeamLabels(client: GraphqlRequestClient, teamId: string): Promise<
-  Array<{ id: string; name: string }>
-> {
+async function fetchTeamLabels(
+  client: GraphqlRequestClient,
+  teamId: string
+): Promise<Array<{ id: string; name: string }>> {
   const labels: Array<{ id: string; name: string }> = [];
   let cursor: string | null = null;
   let hasNextPage = true;

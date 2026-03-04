@@ -54,7 +54,11 @@ function canonicalLocalId(id: string): string {
   return resolveIssueLocalId(id);
 }
 
-function queueRelationRetry(issueId: string, relatedIssueId: string, type: "blocks" | "related"): void {
+function queueRelationRetry(
+  issueId: string,
+  relatedIssueId: string,
+  type: "blocks" | "related"
+): void {
   queueOutboxItem("create_relation", {
     issueId,
     relatedIssueId,
@@ -343,7 +347,11 @@ async function processResolvedItem(
               queueRelationRetry(dep.targetId, createdIssueRef, "blocks");
             } else {
               const relationType = dep.type === "blocks" ? "blocks" : "related";
-              queueRelationRetry(createdIssueRef, dep.targetId, relationType as "blocks" | "related");
+              queueRelationRetry(
+                createdIssueRef,
+                dep.targetId,
+                relationType as "blocks" | "related"
+              );
             }
           }
         }
@@ -397,7 +405,11 @@ async function processResolvedItem(
               queueRelationRetry(dep.targetId, updatePayload.issueId, "blocks");
             } else {
               const relationType = dep.type === "blocks" ? "blocks" : "related";
-              queueRelationRetry(updatePayload.issueId, dep.targetId, relationType as "blocks" | "related");
+              queueRelationRetry(
+                updatePayload.issueId,
+                dep.targetId,
+                relationType as "blocks" | "related"
+              );
             }
           }
         }
@@ -569,12 +581,7 @@ export async function processOutboxQueue(
       const unresolvedLocals = new Set(claimedResolution.unresolvedLocalIds.map(canonicalLocalId));
       if (claimedResolution.primaryId) {
         const primaryLocalId = canonicalLocalId(claimedResolution.primaryId);
-        if (
-          !(
-            unresolvedLocals.has(primaryLocalId) &&
-            pendingCreateLocalIds.has(primaryLocalId)
-          )
-        ) {
+        if (!(unresolvedLocals.has(primaryLocalId) && pendingCreateLocalIds.has(primaryLocalId))) {
           addBlockedId(claimedResolution.primaryId);
         }
       }

@@ -58,9 +58,11 @@ export function looksLikeEscapedNewlineMistake(description: string | undefined):
 
 export function rewriteEscapedNewlines(description: string | undefined): string | undefined {
   if (description === undefined) return undefined;
-  return description
-    // Aggressive normalization for explicit auto-format mode.
-    .replace(/\\+n/g, "\n")
-    .replace(/\\+\r?\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n");
+  return (
+    description
+      // Aggressive normalization for explicit auto-format mode.
+      .replace(/\\+n/g, "\n")
+      .replace(/\\+\r?\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+  );
 }

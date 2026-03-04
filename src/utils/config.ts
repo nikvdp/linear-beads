@@ -381,7 +381,11 @@ export function getOption<K extends keyof LoadedConfig>(
   key: K,
   cliValue?: LoadedConfig[K]
 ): LoadedConfig[K] {
-  return cliValue ?? (runtimeOverrides[key] as LoadedConfig[K]) ?? (loadedConfig?.[key] as LoadedConfig[K]);
+  return (
+    cliValue ??
+    (runtimeOverrides[key] as LoadedConfig[K]) ??
+    (loadedConfig?.[key] as LoadedConfig[K])
+  );
 }
 
 /**
