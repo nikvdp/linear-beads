@@ -45,6 +45,9 @@ type LinearRelationNode = {
   type: string;
   relatedIssue: { id: string };
 };
+type GraphqlRequestClient = {
+  request<T>(query: string, variables?: Record<string, unknown>): Promise<T>;
+};
 const SYNC_KEY_MARKER_RE = /<!--\s*lb:sync_key=([a-f0-9-]{8,})\s*-->/i;
 
 function splitDescriptionAndSyncKey(
@@ -116,33 +119,68 @@ function linearToBdIssue(linear: LinearIssue): Issue & { linear_state_id: string
 /**
  * Get or create repo label
  */
-export async function ensureRepoLabel(teamId: string): Promise<string> {
-  const client = getGraphQLClient();
-  const repoLabel = getRepoLabel();
+async function fetchTeamLabels(client: GraphqlRequestClient, teamId: string): Promise<
+  Array<{ id: string; name: string }>
+> {
+  const labels: Array<{ id: string; name: string }> = [];
+  let cursor: string | null = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const query = `
+      query GetLabelsPage($teamId: String!, $cursor: String) {
+        team(id: $teamId) {
+          labels(first: 50, after: $cursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              id
+              name
+            }
+          }
+        }
+      }
+    `;
+
+    const result: {
+      team: {
+        labels: {
+          nodes: Array<{ id: string; name: string }>;
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        };
+      };
+    } = await client.request(query, { teamId, cursor });
+
+    labels.push(...result.team.labels.nodes);
+    hasNextPage = result.team.labels.pageInfo.hasNextPage;
+    cursor = result.team.labels.pageInfo.endCursor;
+  }
+
+  return labels;
+}
+
+function isDuplicateLabelNameError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const msg = error.message.toLowerCase();
+  return msg.includes("duplicate label name") || msg.includes("already exists");
+}
+
+export async function ensureRepoLabel(
+  teamId: string,
+  options: { client?: GraphqlRequestClient; repoLabel?: string } = {}
+): Promise<string> {
+  const client: GraphqlRequestClient =
+    options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
+  const repoLabel = options.repoLabel || getRepoLabel();
 
   // Check cache first
   const cachedId = getLabelIdByName(repoLabel);
   if (cachedId) return cachedId;
 
-  // Query existing labels
-  const query = `
-    query GetLabels($teamId: String!) {
-      team(id: $teamId) {
-        labels {
-          nodes {
-            id
-            name
-          }
-        }
-      }
-    }
-  `;
-
-  const result = await client.request<{
-    team: { labels: { nodes: Array<{ id: string; name: string }> } };
-  }>(query, { teamId });
-
-  const existing = result.team.labels.nodes.find((l) => l.name === repoLabel);
+  const existingLabels = await fetchTeamLabels(client, teamId);
+  const existing = existingLabels.find((l) => l.name === repoLabel);
   if (existing) {
     cacheLabel(existing.id, existing.name, teamId);
     return existing.id;
@@ -161,19 +199,43 @@ export async function ensureRepoLabel(teamId: string): Promise<string> {
     }
   `;
 
-  const createResult = await client.request<{
-    issueLabelCreate: {
-      success: boolean;
-      issueLabel: { id: string; name: string };
-    };
-  }>(createMutation, {
-    input: {
-      name: repoLabel,
-      teamId,
-    },
-  });
+  let createResult:
+    | {
+        issueLabelCreate: {
+          success: boolean;
+          issueLabel: { id: string; name: string };
+        };
+      }
+    | undefined;
 
-  if (!createResult.issueLabelCreate.success) {
+  try {
+    createResult = await client.request<{
+      issueLabelCreate: {
+        success: boolean;
+        issueLabel: { id: string; name: string };
+      };
+    }>(createMutation, {
+      input: {
+        name: repoLabel,
+        teamId,
+      },
+    });
+  } catch (error) {
+    if (!isDuplicateLabelNameError(error)) {
+      throw error;
+    }
+  }
+
+  if (!createResult || !createResult.issueLabelCreate.success) {
+    const labelsAfterCreate = await fetchTeamLabels(client, teamId);
+    const existingAfterCreate = labelsAfterCreate.find((label) => label.name === repoLabel);
+    if (existingAfterCreate) {
+      cacheLabel(existingAfterCreate.id, existingAfterCreate.name, teamId);
+      return existingAfterCreate.id;
+    }
+  }
+
+  if (!createResult || !createResult.issueLabelCreate.success) {
     throw new Error(`Failed to create repo label: ${repoLabel}`);
   }
 
