@@ -955,7 +955,8 @@ function findExistingLocalIdForIssue(
   db: Database,
   localId: string,
   linearId?: string,
-  linearIdentifier?: string
+  linearIdentifier?: string,
+  syncKey?: string
 ): string | null {
   const row = db
     .query(
@@ -965,6 +966,7 @@ function findExistingLocalIdForIssue(
       WHERE local_id = ?
          OR (? IS NOT NULL AND linear_id = ?)
          OR (? IS NOT NULL AND linear_identifier = ?)
+         OR (? IS NOT NULL AND sync_key = ?)
       LIMIT 1
     `
     )
@@ -973,7 +975,9 @@ function findExistingLocalIdForIssue(
       linearId || null,
       linearId || null,
       linearIdentifier || null,
-      linearIdentifier || null
+      linearIdentifier || null,
+      syncKey || null,
+      syncKey || null
     ) as { local_id: string } | null;
 
   return row?.local_id || null;
@@ -988,7 +992,8 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
     db,
     providedLocalId,
     issue.linear_id,
-    inferredLinearIdentifier
+    inferredLinearIdentifier,
+    issue.sync_key
   );
   const localId = existingLocalId || providedLocalId;
   const linearIdentifier = inferredLinearIdentifier || (isLocalId(localId) ? null : localId);

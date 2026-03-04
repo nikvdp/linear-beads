@@ -310,6 +310,7 @@ async function processResolvedItem(
           parentId: createPayload.parentId,
           teamId,
           syncKey,
+          skipCache: true,
         });
         remoteIssueIdentifier = issue.id;
         remoteIssueUuid = issue.linear_id;

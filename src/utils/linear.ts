@@ -1129,6 +1129,7 @@ export async function createIssue(params: {
   assigneeId?: string;
   status?: IssueStatus;
   syncKey?: string;
+  skipCache?: boolean;
 }): Promise<Issue> {
   const client = getGraphQLClient();
 
@@ -1207,7 +1208,9 @@ export async function createIssue(params: {
   }
 
   const issue = linearToBdIssue(result.issueCreate.issue);
-  cacheIssue(issue);
+  if (!params.skipCache) {
+    cacheIssue(issue);
+  }
   return issue;
 }
 

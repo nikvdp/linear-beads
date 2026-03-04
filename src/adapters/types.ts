@@ -27,6 +27,7 @@ export interface IssueBackendAdapter {
     assigneeId?: string;
     status?: IssueStatus;
     syncKey?: string;
+    skipCache?: boolean;
   }): Promise<Issue>;
   updateIssue(
     issueId: string,
