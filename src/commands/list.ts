@@ -15,7 +15,7 @@ import { formatIssuesListJson, formatIssuesListHuman, output } from "../utils/ou
 import { getViewer } from "../utils/issue-backend.js";
 import type { IssueStatus } from "../types.js";
 import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
-import { useTypes, isLocalOnly } from "../utils/config.js";
+import { useTypes, isLocalOnly, getRepoName, getRepoScope } from "../utils/config.js";
 
 const VALID_STATUSES: IssueStatus[] = ["open", "in_progress", "closed"];
 
@@ -109,6 +109,10 @@ export const listCommand = new Command("list")
       } else {
         if (issues.length === 0) {
           output("No issues found.");
+          if (!options.all && !localOnly) {
+            output("Hint: list defaults to issues assigned to you (or unassigned). Try --all.");
+            output(`Scope checked: ${getRepoScope()}:${getRepoName() || "unknown"}`);
+          }
           return;
         }
 

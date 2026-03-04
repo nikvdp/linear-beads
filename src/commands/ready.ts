@@ -14,7 +14,7 @@ import {
 } from "../utils/database.js";
 import { formatReadyJson, output } from "../utils/output.js";
 import { getViewer } from "../utils/issue-backend.js";
-import { isLocalOnly } from "../utils/config.js";
+import { isLocalOnly, getRepoName, getRepoScope } from "../utils/config.js";
 
 export const readyCommand = new Command("ready")
   .description("List unblocked issues ready to work on")
@@ -61,6 +61,10 @@ export const readyCommand = new Command("ready")
       } else {
         if (readyIssues.length === 0) {
           output("No ready issues.");
+          if (!options.all && !localOnly) {
+            output("Hint: ready defaults to issues assigned to you (or unassigned). Try --all.");
+            output(`Scope checked: ${getRepoScope()}:${getRepoName() || "unknown"}`);
+          }
           return;
         }
 

@@ -5,12 +5,14 @@
 import { Issue } from "../types.js";
 import {
   isCacheStale,
+  hasSyncContextChanged,
   getIncrementalSyncTimestamp,
   incrementSyncRunCount,
   needsFullSync,
   getLastSync,
   getOutboxStats,
   repairCreateOutboxForUnsyncedIssues,
+  updateLastSyncContext,
 } from "./database.js";
 import {
   fetchIssues,
@@ -23,6 +25,7 @@ import { isWorkerRunning } from "./pid-manager.js";
 import { ensureOutboxProcessed } from "./spawn-worker.js";
 import { processOutboxQueue } from "./outbox-processor.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
+import { getRepoName, getRepoScope, getTeamKey } from "./config.js";
 
 /**
  * Process outbox queue - push pending mutations to Linear
@@ -69,6 +72,14 @@ export async function pushOutbox(teamId: string): Promise<{ success: number; fai
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildSyncContextKey(teamKeyOverride?: string): string {
+  return JSON.stringify({
+    teamKey: teamKeyOverride || getTeamKey() || "__auto__",
+    repoScope: getRepoScope(),
+    repoName: getRepoName() || "unknown",
+  });
 }
 
 /**
@@ -187,6 +198,8 @@ export async function smartSync(
   pruned?: number;
   type: "incremental" | "full" | "skipped";
 }> {
+  const contextKey = buildSyncContextKey(teamKey);
+
   // Check if we should do a full sync
   const shouldFullSync = forceFullSync || needsFullSync();
 
@@ -196,6 +209,7 @@ export async function smartSync(
     // Do incremental in foreground, worker will handle full sync
     const result = await incrementalSync(teamKey);
     if (result) {
+      updateLastSyncContext(contextKey);
       return { ...result, type: "incremental" };
     }
     // If first run, do full sync anyway
@@ -203,15 +217,20 @@ export async function smartSync(
 
   if (shouldFullSync || !getLastSync()) {
     // Full sync
-    return fullSyncPaginated(teamKey);
+    const result = await fullSyncPaginated(teamKey);
+    updateLastSyncContext(contextKey);
+    return result;
   } else {
     // Incremental sync
     const result = await incrementalSync(teamKey);
     if (result) {
+      updateLastSyncContext(contextKey);
       return result;
     } else {
       // Fallback to full if incremental isn't possible (first run edge case)
-      return fullSyncPaginated(teamKey);
+      const fullResult = await fullSyncPaginated(teamKey);
+      updateLastSyncContext(contextKey);
+      return fullResult;
     }
   }
 }
@@ -231,10 +250,13 @@ export function scheduleBackgroundFullSyncIfNeeded(): void {
  * Check if sync is needed and optionally perform it
  */
 export async function ensureFresh(teamKey?: string, force: boolean = false): Promise<boolean> {
-  if (!force && !isCacheStale()) {
+  const contextKey = buildSyncContextKey(teamKey);
+  const contextChanged = hasSyncContextChanged(contextKey);
+
+  if (!force && !contextChanged && !isCacheStale()) {
     return false; // Cache is fresh
   }
 
-  await smartSync(teamKey, force);
+  await smartSync(teamKey, force || contextChanged);
   return true; // Synced
 }

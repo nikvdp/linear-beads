@@ -80,6 +80,7 @@ const DEPENDENCY_ALIAS_INTEGRITY_METADATA_KEY = "dependency_alias_integrity_v1";
 const SCHEMA_INIT_LOCK_TTL_MS = 10 * 60 * 1000;
 const SCHEMA_INIT_LOCK_POLL_MS = 50;
 const SCHEMA_INIT_LOCK_WAIT_MS = 60 * 1000;
+const LAST_SYNC_CONTEXT_METADATA_KEY = "last_sync_context";
 
 function isDatabaseLockedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -799,6 +800,51 @@ export function isCacheStale(ttlSeconds: number = 120): boolean {
   const diffSeconds = (now.getTime() - lastSync.getTime()) / 1000;
 
   return diffSeconds > ttlSeconds;
+}
+
+/**
+ * Get last sync context fingerprint (team/scope/repo).
+ */
+export function getLastSyncContext(): string | null {
+  const db = getDatabase();
+  const row = db.query("SELECT value FROM metadata WHERE key = ?").get(
+    LAST_SYNC_CONTEXT_METADATA_KEY
+  ) as {
+    value: string;
+  } | null;
+  return row?.value || null;
+}
+
+/**
+ * Update sync context fingerprint after a successful sync.
+ */
+export function updateLastSyncContext(contextKey: string): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [
+      LAST_SYNC_CONTEXT_METADATA_KEY,
+      contextKey,
+    ]);
+  });
+}
+
+/**
+ * Returns true when current sync context differs from the most recent sync.
+ */
+export function hasSyncContextChanged(contextKey: string): boolean {
+  const lastContext = getLastSyncContext();
+  return !lastContext || lastContext !== contextKey;
+}
+
+/**
+ * Cache is stale if TTL expired or if sync context changed (team/scope/repo).
+ */
+export function isCacheStaleForContext(contextKey: string, ttlSeconds: number = 120): boolean {
+  if (isCacheStale(ttlSeconds)) {
+    return true;
+  }
+
+  return hasSyncContextChanged(contextKey);
 }
 
 /**
