@@ -1904,12 +1904,29 @@ export function cacheLabel(id: string, name: string, teamId?: string): void {
   });
 }
 
+function looksLikeUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  );
+}
+
 /**
  * Get label ID by name
  */
-export function getLabelIdByName(name: string): string | null {
+export function getLabelIdByName(name: string, teamId?: string): string | null {
   const db = getDatabase();
-  const row = db.query("SELECT id FROM labels WHERE name = ?").get(name) as { id: string } | null;
+  const row = teamId
+    ? (db.query("SELECT id FROM labels WHERE name = ? AND team_id = ?").get(name, teamId) as {
+        id: string;
+      } | null)
+    : (db.query("SELECT id FROM labels WHERE name = ?").get(name) as { id: string } | null);
+  if (row?.id && !looksLikeUuid(row.id)) {
+    // Defensive cleanup for bad cached IDs from prior versions/manual edits.
+    runWithBusyRetry(() => {
+      db.run("DELETE FROM labels WHERE id = ?", [row.id]);
+    });
+    return null;
+  }
   return row?.id || null;
 }
 
@@ -1932,9 +1949,20 @@ export function cacheProject(id: string, name: string, teamId?: string): void {
 /**
  * Get project ID by name
  */
-export function getProjectIdByName(name: string): string | null {
+export function getProjectIdByName(name: string, teamId?: string): string | null {
   const db = getDatabase();
-  const row = db.query("SELECT id FROM projects WHERE name = ?").get(name) as { id: string } | null;
+  const row = teamId
+    ? (db.query("SELECT id FROM projects WHERE name = ? AND team_id = ?").get(name, teamId) as {
+        id: string;
+      } | null)
+    : (db.query("SELECT id FROM projects WHERE name = ?").get(name) as { id: string } | null);
+  if (row?.id && !looksLikeUuid(row.id)) {
+    // Defensive cleanup for bad cached IDs from prior versions/manual edits.
+    runWithBusyRetry(() => {
+      db.run("DELETE FROM projects WHERE id = ?", [row.id]);
+    });
+    return null;
+  }
   return row?.id || null;
 }
 

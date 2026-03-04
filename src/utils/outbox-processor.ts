@@ -613,7 +613,7 @@ export async function processOutboxQueue(
       success++;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      if (isPermanentEntityError(errorMsg)) {
+      if (isPermanentEntityError(errorMsg) && item.operation !== "create") {
         // Legacy queue rows can reference deleted/trashed entities forever.
         // Drop these rows so sync converges instead of retrying indefinitely.
         removeOutboxItem(item.id);

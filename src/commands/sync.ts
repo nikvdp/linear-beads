@@ -24,6 +24,14 @@ function isNetworkError(error: unknown): boolean {
   );
 }
 
+function summarizeOutboxError(error: string): string {
+  const compact = error.replace(/\s+/g, " ").trim();
+  if (compact.length <= 180) {
+    return compact;
+  }
+  return `${compact.slice(0, 177)}...`;
+}
+
 export const syncCommand = new Command("sync")
   .description("Sync with Linear (push pending changes, pull latest)")
   .option("--team <team>", "Team key (overrides config)")
@@ -55,6 +63,18 @@ export const syncCommand = new Command("sync")
       } else {
         if (result.pushed.success > 0 || result.pushed.failed > 0) {
           output(`Pushed: ${result.pushed.success} succeeded, ${result.pushed.failed} failed`);
+          if (result.pushed.failed > 0) {
+            const failedItems = getPendingOutboxItems()
+              .filter((item) => item.last_error)
+              .slice(0, 3);
+            if (failedItems.length > 0) {
+              output("Recent push errors:");
+              for (const item of failedItems) {
+                const subject = item.local_id || item.operation;
+                output(`  - ${subject}: ${summarizeOutboxError(item.last_error || "")}`);
+              }
+            }
+          }
         }
         const typeLabel = result.type === "full" ? " (full sync)" : "";
         output(`Pulled: ${result.pulled} issues${typeLabel}`);

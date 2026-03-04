@@ -176,14 +176,15 @@ function isDuplicateLabelNameError(error: unknown): boolean {
 
 export async function ensureRepoLabel(
   teamId: string,
-  options: { client?: GraphqlRequestClient; repoLabel?: string } = {}
+  options: { client?: GraphqlRequestClient; repoLabel?: string; forceRefresh?: boolean } = {}
 ): Promise<string> {
   const client: GraphqlRequestClient =
     options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
   const repoLabel = options.repoLabel || getRepoLabel();
+  const forceRefresh = options.forceRefresh === true;
 
   // Check cache first
-  const cachedId = getLabelIdByName(repoLabel);
+  const cachedId = forceRefresh ? null : getLabelIdByName(repoLabel, teamId);
   if (cachedId) return cachedId;
 
   const existingLabels = await fetchTeamLabels(client, teamId);
@@ -258,31 +259,44 @@ export async function ensureRepoLabel(
 /**
  * Get or create repo project (for project-based scoping)
  */
-export async function ensureRepoProject(teamId: string): Promise<string> {
+export async function ensureRepoProject(
+  teamId: string,
+  options: { forceRefresh?: boolean } = {}
+): Promise<string> {
   const client = getGraphQLClient();
   const projectName = getRepoName() || "unknown";
+  const forceRefresh = options.forceRefresh === true;
 
   // Check cache first
-  const cachedId = getProjectIdByName(projectName);
+  const cachedId = forceRefresh ? null : getProjectIdByName(projectName, teamId);
   if (cachedId) return cachedId;
 
-  // Query existing projects by name
+  // Query existing projects by name and matching team.
   const query = `
     query GetProjects($name: String!) {
       projects(filter: { name: { eq: $name } }, first: 10) {
         nodes {
           id
           name
+          teams {
+            nodes {
+              id
+            }
+          }
         }
       }
     }
   `;
 
   const result = await client.request<{
-    projects: { nodes: Array<{ id: string; name: string }> };
+    projects: {
+      nodes: Array<{ id: string; name: string; teams?: { nodes: Array<{ id: string }> } | null }>;
+    };
   }>(query, { name: projectName });
 
-  const existing = result.projects.nodes.find((p) => p.name === projectName);
+  const existing = result.projects.nodes.find(
+    (p) => p.name === projectName && p.teams?.nodes.some((team) => team.id === teamId)
+  );
   if (existing) {
     cacheProject(existing.id, existing.name, teamId);
     return existing.id;
@@ -330,14 +344,19 @@ export async function ensureRepoProject(teamId: string): Promise<string> {
  * Ensure issue type label exists in label group
  * Uses Linear label groups for proper categorization
  */
-export async function ensureTypeLabel(teamId: string, type: IssueType): Promise<string> {
+export async function ensureTypeLabel(
+  teamId: string,
+  type: IssueType,
+  options: { forceRefresh?: boolean } = {}
+): Promise<string> {
   const client = getGraphQLClient();
   const groupName = "Type";
   // Label names are capitalized (e.g., "Bug", "Feature")
   const labelName = type.charAt(0).toUpperCase() + type.slice(1);
+  const forceRefresh = options.forceRefresh === true;
 
   // Check cache first
-  const cachedId = getLabelIdByName(labelName);
+  const cachedId = forceRefresh ? null : getLabelIdByName(labelName, teamId);
   if (cachedId) return cachedId;
 
   // Query existing labels and label groups
@@ -1140,27 +1159,6 @@ export async function createIssue(params: {
 }): Promise<Issue> {
   const client = getGraphQLClient();
 
-  // Build label IDs based on scoping mode
-  const labelIds: string[] = [];
-
-  // Add repo label if using label or both scoping
-  if (useLabelScope()) {
-    const repoLabelId = await ensureRepoLabel(params.teamId);
-    labelIds.push(repoLabelId);
-  }
-
-  // Add type label if types are enabled and type is provided
-  if (useTypes() && params.issueType) {
-    const typeLabelId = await ensureTypeLabel(params.teamId, params.issueType);
-    labelIds.push(typeLabelId);
-  }
-
-  // Get project ID if using project or both scoping
-  let projectId: string | undefined;
-  if (useProjectScope()) {
-    projectId = await ensureRepoProject(params.teamId);
-  }
-
   const stateId = await getWorkflowStateId(params.teamId, params.status || "open");
 
   // Resolve parentId if provided (identifier -> UUID)
@@ -1183,32 +1181,80 @@ export async function createIssue(params: {
     }
   `;
 
-  const input: Record<string, unknown> = {
-    title: params.title,
-    description: appendSyncKeyMarker(params.description, params.syncKey),
-    priority: priorityToLinear(params.priority),
-    teamId: params.teamId,
-    stateId,
-    parentId: parentUuid,
+  const buildInput = async (forceRefreshScopeBindings: boolean): Promise<Record<string, unknown>> => {
+    const labelIds: string[] = [];
+
+    if (useLabelScope()) {
+      const repoLabelId = await ensureRepoLabel(params.teamId, {
+        forceRefresh: forceRefreshScopeBindings,
+      });
+      labelIds.push(repoLabelId);
+    }
+
+    if (useTypes() && params.issueType) {
+      const typeLabelId = await ensureTypeLabel(params.teamId, params.issueType, {
+        forceRefresh: forceRefreshScopeBindings,
+      });
+      labelIds.push(typeLabelId);
+    }
+
+    let projectId: string | undefined;
+    if (useProjectScope()) {
+      projectId = await ensureRepoProject(params.teamId, {
+        forceRefresh: forceRefreshScopeBindings,
+      });
+    }
+
+    const input: Record<string, unknown> = {
+      title: params.title,
+      description: appendSyncKeyMarker(params.description, params.syncKey),
+      priority: priorityToLinear(params.priority),
+      teamId: params.teamId,
+      stateId,
+      parentId: parentUuid,
+    };
+
+    if (labelIds.length > 0) {
+      input.labelIds = labelIds;
+    }
+
+    if (projectId) {
+      input.projectId = projectId;
+    }
+
+    if (params.assigneeId) {
+      input.assigneeId = params.assigneeId;
+    }
+
+    return input;
   };
 
-  // Only include labelIds if we have labels
-  if (labelIds.length > 0) {
-    input.labelIds = labelIds;
-  }
+  const shouldRetryWithRefreshedBindings = (error: unknown): boolean => {
+    if (!(error instanceof Error)) return false;
+    const msg = error.message.toLowerCase();
+    return msg.includes("labelids") || msg.includes("projectid");
+  };
 
-  // Add projectId if using project scoping
-  if (projectId) {
-    input.projectId = projectId;
-  }
+  let result:
+    | {
+        issueCreate: { success: boolean; issue: LinearIssue | null };
+      }
+    | undefined;
+  try {
+    const input = await buildInput(false);
+    result = await client.request<{
+      issueCreate: { success: boolean; issue: LinearIssue | null };
+    }>(mutation, { input });
+  } catch (error) {
+    if (!shouldRetryWithRefreshedBindings(error)) {
+      throw error;
+    }
 
-  if (params.assigneeId) {
-    input.assigneeId = params.assigneeId;
+    const input = await buildInput(true);
+    result = await client.request<{
+      issueCreate: { success: boolean; issue: LinearIssue | null };
+    }>(mutation, { input });
   }
-
-  const result = await client.request<{
-    issueCreate: { success: boolean; issue: LinearIssue | null };
-  }>(mutation, { input });
 
   if (!result.issueCreate.success || !result.issueCreate.issue) {
     throw new Error("Failed to create issue");
