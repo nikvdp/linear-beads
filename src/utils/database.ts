@@ -2264,6 +2264,7 @@ export function replaceIssueId(localId: string, linearIdentifier: string, linear
   const db = getDatabase();
   const resolvedLocalId = resolveIssueLocalId(localId);
   const sourceLocalId = localId;
+  const nowIso = new Date().toISOString();
 
   runWithBusyRetry(() => {
     const existingForLinear = db
@@ -2271,15 +2272,27 @@ export function replaceIssueId(localId: string, linearIdentifier: string, linear
       .get(linearIdentifier, resolvedLocalId) as { local_id: string } | null;
 
     if (existingForLinear?.local_id) {
+      const mergedAliasLocalId = existingForLinear.local_id;
       db.run("UPDATE dependencies SET issue_id = ? WHERE issue_id = ?", [
         resolvedLocalId,
-        existingForLinear.local_id,
+        mergedAliasLocalId,
       ]);
       db.run("UPDATE dependencies SET depends_on_id = ? WHERE depends_on_id = ?", [
         resolvedLocalId,
-        existingForLinear.local_id,
+        mergedAliasLocalId,
       ]);
-      db.run("DELETE FROM issues WHERE local_id = ?", [existingForLinear.local_id]);
+      db.run(
+        `
+        INSERT OR REPLACE INTO issue_id_map (local_id, linear_id, created_at)
+        VALUES (?, ?, ?)
+      `,
+        [mergedAliasLocalId, linearIdentifier, nowIso]
+      );
+      db.run("UPDATE outbox SET local_id = ? WHERE local_id = ?", [
+        resolvedLocalId,
+        mergedAliasLocalId,
+      ]);
+      db.run("DELETE FROM issues WHERE local_id = ?", [mergedAliasLocalId]);
     }
 
     if (linearIdentifier !== resolvedLocalId) {
@@ -2315,7 +2328,7 @@ export function replaceIssueId(localId: string, linearIdentifier: string, linear
           updated_at = ?
       WHERE local_id = ?
     `,
-      [linearIdentifier, linearId || null, new Date().toISOString(), resolvedLocalId]
+      [linearIdentifier, linearId || null, nowIso, resolvedLocalId]
     );
 
     db.run(
@@ -2323,7 +2336,7 @@ export function replaceIssueId(localId: string, linearIdentifier: string, linear
       INSERT OR REPLACE INTO issue_id_map (local_id, linear_id, created_at)
       VALUES (?, ?, ?)
     `,
-      [resolvedLocalId, linearIdentifier, new Date().toISOString()]
+      [resolvedLocalId, linearIdentifier, nowIso]
     );
 
     db.run("UPDATE outbox SET local_id = ? WHERE local_id = ? OR local_id = ?", [
