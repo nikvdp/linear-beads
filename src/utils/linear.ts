@@ -91,8 +91,12 @@ function stripMarkdownUrlWrapper(rawUrl: string): string {
 function normalizeIssueToken(raw: string): string {
   const [prefix, number] = raw.split("-", 2);
   if (!prefix || !number) return raw;
+  const normalizedPrefix = prefix.toUpperCase();
+  if (normalizedPrefix === "LOCAL") {
+    return `${normalizedPrefix}-${number}`;
+  }
   const normalizedNumber = number.replace(/^0+(?=\d)/, "") || "0";
-  return `${prefix.toUpperCase()}-${normalizedNumber}`;
+  return `${normalizedPrefix}-${normalizedNumber}`;
 }
 
 function collectMarkdownLinks(text: string): MarkdownLinkMatch[] {
