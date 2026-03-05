@@ -34,6 +34,7 @@ async function runEval(cwd: string): Promise<{ stdout: string; stderr: string; e
   const script = `
     import { ensureRepoLabel } from ${JSON.stringify(LINEAR_UTILS_PATH)};
 
+    const LABEL_ID = "123e4567-e89b-12d3-a456-426614174000";
     let labelQueryCalls = 0;
     let createCalls = 0;
 
@@ -53,12 +54,12 @@ async function runEval(cwd: string): Promise<{ stdout: string; stderr: string; e
           }
           return {
             team: {
-              labels: {
-                pageInfo: { hasNextPage: false, endCursor: null },
-                nodes: [{ id: "lbl-1", name: "repo:neomux" }],
+                labels: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [{ id: LABEL_ID, name: "repo:neomux" }],
+                },
               },
-            },
-          };
+            };
         }
 
         if (query.includes("CreateLabel")) {
@@ -116,8 +117,8 @@ describe("ensureRepoLabel duplicate handling", () => {
       createCalls: number;
     };
 
-    expect(payload.first).toBe("lbl-1");
-    expect(payload.second).toBe("lbl-1");
+    expect(payload.first).toBe("123e4567-e89b-12d3-a456-426614174000");
+    expect(payload.second).toBe("123e4567-e89b-12d3-a456-426614174000");
     expect(payload.createCalls).toBe(1);
     expect(payload.labelQueryCalls).toBe(2);
   });
