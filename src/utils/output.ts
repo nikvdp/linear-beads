@@ -6,13 +6,21 @@
 import type { Issue, Dependency } from "../types.js";
 import { renderIssueLinksAsPlainText } from "./linear.js";
 
+export function normalizeIssueDescriptionForOutput(description: unknown): string | undefined {
+  if (typeof description !== "string") {
+    return undefined;
+  }
+  return renderIssueLinksAsPlainText(description);
+}
+
 function issueWithPlainDescription(issue: Issue): Issue {
-  if (issue.description === undefined) {
+  const normalizedDescription = normalizeIssueDescriptionForOutput((issue as { description?: unknown }).description);
+  if (normalizedDescription === undefined) {
     return issue;
   }
   return {
     ...issue,
-    description: renderIssueLinksAsPlainText(issue.description),
+    description: normalizedDescription,
   };
 }
 
