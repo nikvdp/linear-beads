@@ -40,6 +40,7 @@ async function runEval(
     | "orphan_parent"
     | "deps_retry"
     | "legacy_placeholder_refs"
+    | "alias_merge_resolution"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import { Database } from "bun:sqlite";
@@ -49,6 +50,8 @@ async function runEval(
       getDisplayId,
       getIssueIdMapping,
       getPendingOutboxItems,
+      resolveIssueId,
+      resolveIssueLocalId,
       markOutboxCreateRemoteIssueIdentifier,
       queueOutboxItem,
       setIssueIdMapping,
@@ -58,6 +61,21 @@ async function runEval(
     const mode = process.argv[1];
     const localId = generateLocalId();
     const now = new Date().toISOString();
+    const aliasLocalId = mode === "alias_merge_resolution" ? generateLocalId() : null;
+
+    if (aliasLocalId) {
+      cacheIssue({
+        id: aliasLocalId,
+        title: "Alias local issue",
+        status: "open",
+        priority: 2,
+        sync_status: "synced",
+        linear_identifier: "LIN-9007",
+        created_at: now,
+        updated_at: now,
+      });
+    }
+
     if (mode !== "orphan") {
       cacheIssue({
         id: localId,
@@ -108,6 +126,41 @@ async function runEval(
         localId
       );
       markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9006");
+    } else if (mode === "alias_merge_resolution") {
+      if (!aliasLocalId) {
+        throw new Error("Expected aliasLocalId for alias_merge_resolution mode");
+      }
+
+      const relatedLocalId = generateLocalId();
+      cacheIssue({
+        id: relatedLocalId,
+        title: "Related issue",
+        status: "open",
+        priority: 2,
+        sync_status: "pending",
+        created_at: now,
+        updated_at: now,
+      });
+
+      const relatedOutboxId = queueOutboxItem(
+        "create",
+        { title: "Related issue", priority: 2 },
+        relatedLocalId
+      );
+      markOutboxCreateRemoteIssueIdentifier(relatedOutboxId, "LIN-9008");
+
+      const outboxId = queueOutboxItem(
+        "create",
+        { title: "Replay guard issue", priority: 2 },
+        localId
+      );
+      markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9007");
+
+      queueOutboxItem(
+        "create_relation",
+        { issueId: aliasLocalId, relatedIssueId: relatedLocalId, type: "blocks" },
+        aliasLocalId
+      );
     } else {
       const outboxId = queueOutboxItem(
         "create",
@@ -131,12 +184,20 @@ async function runEval(
     const remaining = pending.length;
     const mapping = getIssueIdMapping(localId);
     const displayId = getDisplayId(localId);
+    const alias = aliasLocalId
+      ? {
+          local_id: aliasLocalId,
+          mapping: getIssueIdMapping(aliasLocalId),
+          resolved_remote_id: resolveIssueId(aliasLocalId),
+          resolved_local_id: resolveIssueLocalId(aliasLocalId),
+        }
+      : null;
     const db = new Database(".lb/cache.db", { readonly: true });
     const row = db.query(
       "SELECT local_id, linear_identifier, sync_status FROM issues WHERE local_id = ? LIMIT 1"
     ).get(localId) as { local_id: string; linear_identifier: string | null; sync_status: string } | null;
     db.close();
-    console.log(JSON.stringify({ result, remaining, pending, mapping, displayId, row }));
+    console.log(JSON.stringify({ result, remaining, pending, mapping, displayId, row, alias }));
   `;
 
   const proc = Bun.spawn(["bun", "--eval", script, mode], {
@@ -327,6 +388,38 @@ describe("outbox create replay protection", () => {
     expect(payload.displayId).toBe("LIN-9005");
     expect(payload.row?.linear_identifier).toBe("LIN-9005");
     expect(payload.row?.sync_status).toBe("synced");
+  });
+
+  test("preserves alias LOCAL mappings when replacing duplicate LIN identifiers", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "alias_merge_resolution");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      result: { success: number; failed: number; deferred: number; remoteProcessed: number };
+      remaining: number;
+      pending: Array<{ id: number; operation: string; local_id: string | null; payload: unknown }>;
+      mapping: string | null;
+      displayId: string;
+      row: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+      alias: {
+        local_id: string;
+        mapping: string | null;
+        resolved_remote_id: string;
+        resolved_local_id: string;
+      } | null;
+    };
+
+    expect(payload.result.success).toBeGreaterThanOrEqual(2);
+    expect(payload.result.failed).toBe(0);
+    expect(payload.mapping).toBe("LIN-9007");
+    expect(payload.row?.linear_identifier).toBe("LIN-9007");
+    expect(payload.alias).not.toBeNull();
+    expect(payload.alias?.mapping).toBe("LIN-9007");
+    expect(payload.alias?.resolved_remote_id).toBe("LIN-9007");
+    expect(payload.alias?.resolved_local_id).toBe(payload.row?.local_id);
   });
 
   test("drops legacy placeholder refs in create payloads and still finalizes mapping", async () => {
