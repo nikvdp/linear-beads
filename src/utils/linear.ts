@@ -62,8 +62,6 @@ const LB_REF_HOST = "lb-ref.invalid";
 const LB_REF_PATH = "/issue";
 const LINEAR_ISSUE_PATH_RE =
   /^(?:\/[^/]+)?\/issue\/([a-z][a-z0-9]{1,14}-\d+)(?:\/[^/?#]+)?\/?$/i;
-const DEBUG_DISABLE_DESCRIPTION_REF_CODEC =
-  process.env.LB_DEBUG_DISABLE_DESCRIPTION_REF_CODEC === "1";
 
 export type DescriptionRefRewrite = {
   text: string;
@@ -197,6 +195,64 @@ export function extractIssueIdentifierFromLinearUrl(rawUrl: string): string | nu
   }
 
   return normalizeIssueToken(match[1]);
+}
+
+function issueIdentifierToLinearUrl(identifier: string): string {
+  return `https://linear.app/issue/${normalizeIssueToken(identifier)}`;
+}
+
+function rewriteIssueTokenForLinearDescription(token: string): DescriptionRefRewrite | null {
+  const normalized = normalizeIssueToken(token);
+  if (normalized.startsWith("LOCAL-")) {
+    const localId = resolveIssueLocalId(normalized);
+    const syncKey = getIssueSyncKey(localId);
+    if (!syncKey) {
+      return null;
+    }
+    const linearIdentifier = getLinearIdentifierForLocalId(localId);
+    if (linearIdentifier) {
+      return {
+        text: normalized,
+        url: issueIdentifierToLinearUrl(linearIdentifier),
+      };
+    }
+    return {
+      text: normalized,
+      url: buildLbRefUrl(syncKey, normalized),
+    };
+  }
+
+  if (CANONICAL_ISSUE_TOKEN_RE.test(normalized)) {
+    return {
+      text: normalized,
+      url: issueIdentifierToLinearUrl(normalized),
+    };
+  }
+
+  return null;
+}
+
+function upgradeDescriptionLbRefsToLinearUrls(description: string): string {
+  return (
+    upgradeLbRefLinks(description, (ref) => {
+      const synced = getSyncedIssueBySyncKey(ref.syncKey);
+      if (!synced?.linear_identifier) {
+        return null;
+      }
+      return issueIdentifierToLinearUrl(synced.linear_identifier);
+    }) || description
+  );
+}
+
+function toLinearRichDescription(description: string | undefined): string | undefined {
+  if (description === undefined) {
+    return undefined;
+  }
+  const encoded = encodeIssueRefsInDescription(description, rewriteIssueTokenForLinearDescription);
+  if (encoded === undefined) {
+    return undefined;
+  }
+  return upgradeDescriptionLbRefsToLinearUrls(encoded);
 }
 
 export function encodeIssueRefsInDescription(
