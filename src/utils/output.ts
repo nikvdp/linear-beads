@@ -5,6 +5,23 @@
 
 import type { Issue, Dependency } from "../types.js";
 
+const ISSUE_ID_RE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
+const LINEAR_ISSUE_MARKDOWN_LINK_RE =
+  /\[([^\]]+)\]\(\s*<?(https?:\/\/linear\.app\/(?:[^/\s)>]+\/)?issue\/([A-Za-z][A-Za-z0-9]*-\d+)[^)\s>]*)>?\s*\)/g;
+
+function normalizeLinearIssueLinksForHuman(description: string): string {
+  return description.replace(
+    LINEAR_ISSUE_MARKDOWN_LINK_RE,
+    (_full, text: string, _url: string, issueIdFromUrl: string) => {
+      const trimmedText = text.trim();
+      if (ISSUE_ID_RE.test(trimmedText)) {
+        return trimmedText.toUpperCase();
+      }
+      return issueIdFromUrl.toUpperCase();
+    }
+  );
+}
+
 /**
  * Format issues for JSON output (always returns array)
  */
@@ -116,7 +133,7 @@ export function formatIssueHuman(issue: Issue, displayId?: string): string {
     lines.push(`  Assignee: ${issue.assignee}`);
   }
   if (issue.description) {
-    lines.push(`  Description: ${issue.description}`);
+    lines.push(`  Description: ${normalizeLinearIssueLinksForHuman(issue.description)}`);
   }
   return lines.join("\n");
 }
