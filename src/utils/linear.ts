@@ -119,6 +119,39 @@ export function linkifyIssueReferencesForLinear(description?: string): string | 
   return result;
 }
 
+async function applyDescriptionAutoHealIfNeeded(
+  issueId: string,
+  input: Record<string, unknown>,
+  client: GraphqlRequestClient
+): Promise<void> {
+  if (input.description !== undefined) {
+    return;
+  }
+
+  const query = `
+    query GetIssueDescriptionForHeal($id: String!) {
+      issue(id: $id) {
+        description
+      }
+    }
+  `;
+
+  try {
+    const result = await client.request<{ issue: { description?: string | null } | null }>(query, {
+      id: issueId,
+    });
+
+    const currentDescription = result.issue?.description ?? undefined;
+    const healedDescription = linkifyIssueReferencesForLinear(currentDescription);
+
+    if (currentDescription && healedDescription && healedDescription !== currentDescription) {
+      input.description = healedDescription;
+    }
+  } catch {
+    // Best-effort healing only; do not block update/close on a failed read.
+  }
+}
+
 /**
  * Convert Linear issue to bd-compatible issue
  */
@@ -1355,9 +1388,11 @@ export async function updateIssue(
     priority?: Priority;
     assigneeId?: string | null;
   },
-  teamId: string
+  teamId: string,
+  options: { client?: GraphqlRequestClient } = {}
 ): Promise<Issue> {
-  const client = getGraphQLClient();
+  const client: GraphqlRequestClient =
+    options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
 
   // Build input
   const input: Record<string, unknown> = {};
@@ -1367,11 +1402,12 @@ export async function updateIssue(
   }
   if (updates.priority !== undefined) input.priority = priorityToLinear(updates.priority);
   if (updates.status) {
-    input.stateId = await getWorkflowStateId(teamId, updates.status);
+    input.stateId = await getWorkflowStateId(teamId, updates.status, { client });
   }
   if (updates.assigneeId !== undefined) {
     input.assigneeId = updates.assigneeId;
   }
+  await applyDescriptionAutoHealIfNeeded(issueId, input, client);
 
   const mutation = `
     mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
@@ -1427,12 +1463,19 @@ export async function updateIssueParent(issueId: string, parentId: string | null
 /**
  * Close issue in Linear
  */
-export async function closeIssue(issueId: string, teamId: string, reason?: string): Promise<Issue> {
-  const client = getGraphQLClient();
-  const stateId = await getWorkflowStateId(teamId, "closed");
+export async function closeIssue(
+  issueId: string,
+  teamId: string,
+  reason?: string,
+  options: { client?: GraphqlRequestClient } = {}
+): Promise<Issue> {
+  const client: GraphqlRequestClient =
+    options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
+  const stateId = await getWorkflowStateId(teamId, "closed", { client });
 
   // Build input - add reason as comment if provided
   const input: Record<string, unknown> = { stateId };
+  await applyDescriptionAutoHealIfNeeded(issueId, input, client);
 
   const mutation = `
     mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
