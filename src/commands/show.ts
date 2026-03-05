@@ -16,6 +16,7 @@ import {
 import { fetchIssue } from "../utils/issue-backend.js";
 import { formatShowJson, formatIssueHuman, output, outputError } from "../utils/output.js";
 import { isLocalOnly } from "../utils/config.js";
+import { renderIssueLinksAsPlainText } from "../utils/linear.js";
 
 export const showCommand = new Command("show")
   .description("Show issue details")
@@ -86,6 +87,7 @@ export const showCommand = new Command("show")
       if (options.json) {
         const jsonOutput = {
           ...issue,
+          description: renderIssueLinksAsPlainText(issue.description),
           parent: parent || null,
           children: children.length > 0 ? children : undefined,
           blocks: blocks.length > 0 ? blocks : undefined,

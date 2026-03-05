@@ -4,36 +4,30 @@
  */
 
 import type { Issue, Dependency } from "../types.js";
+import { renderIssueLinksAsPlainText } from "./linear.js";
 
-const ISSUE_ID_RE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
-const LINEAR_ISSUE_MARKDOWN_LINK_RE =
-  /\[([^\]]+)\]\(\s*<?(https?:\/\/linear\.app\/(?:[^/\s)>]+\/)?issue\/([A-Za-z][A-Za-z0-9]*-\d+)[^)\s>]*)>?\s*\)/g;
-
-function normalizeLinearIssueLinksForHuman(description: string): string {
-  return description.replace(
-    LINEAR_ISSUE_MARKDOWN_LINK_RE,
-    (_full, text: string, _url: string, issueIdFromUrl: string) => {
-      const trimmedText = text.trim();
-      if (ISSUE_ID_RE.test(trimmedText)) {
-        return trimmedText.toUpperCase();
-      }
-      return issueIdFromUrl.toUpperCase();
-    }
-  );
+function issueWithPlainDescription(issue: Issue): Issue {
+  if (issue.description === undefined) {
+    return issue;
+  }
+  return {
+    ...issue,
+    description: renderIssueLinksAsPlainText(issue.description),
+  };
 }
 
 /**
  * Format issues for JSON output (always returns array)
  */
 export function formatIssuesJson(issues: Issue[]): string {
-  return JSON.stringify(issues, null, 2);
+  return JSON.stringify(issues.map(issueWithPlainDescription), null, 2);
 }
 
 /**
  * Format single issue for JSON output (returns array with one element)
  */
 export function formatIssueJson(issue: Issue): string {
-  return JSON.stringify([issue], null, 2);
+  return JSON.stringify([issueWithPlainDescription(issue)], null, 2);
 }
 
 /**
@@ -89,19 +83,20 @@ export function formatReadyJson(
  * Format issue for show output (with description)
  */
 export function formatShowJson(issue: Issue, dependencies?: Dependency[]): string {
+  const plainIssue = issueWithPlainDescription(issue);
   const formatted = {
-    id: issue.id,
-    title: issue.title,
-    description: issue.description,
-    status: issue.status,
-    priority: issue.priority,
+    id: plainIssue.id,
+    title: plainIssue.title,
+    description: plainIssue.description,
+    status: plainIssue.status,
+    priority: plainIssue.priority,
     // Only include issue_type if set
-    ...(issue.issue_type ? { issue_type: issue.issue_type } : {}),
-    created_at: issue.created_at,
-    updated_at: issue.updated_at,
-    closed_at: issue.closed_at,
+    ...(plainIssue.issue_type ? { issue_type: plainIssue.issue_type } : {}),
+    created_at: plainIssue.created_at,
+    updated_at: plainIssue.updated_at,
+    closed_at: plainIssue.closed_at,
     // bd-style: only include assignee if non-null
-    ...(issue.assignee ? { assignee: issue.assignee } : {}),
+    ...(plainIssue.assignee ? { assignee: plainIssue.assignee } : {}),
     ...(dependencies && dependencies.length > 0 ? { dependencies } : {}),
   };
   return JSON.stringify([formatted], null, 2);
@@ -122,18 +117,19 @@ const PRIORITY_LABELS: Record<number, string> = {
  * Format issue for human-readable output
  */
 export function formatIssueHuman(issue: Issue, displayId?: string): string {
+  const plainIssue = issueWithPlainDescription(issue);
   const lines: string[] = [];
-  lines.push(`${displayId || issue.id}: ${issue.title}`);
-  lines.push(`  Status: ${issue.status}`);
-  lines.push(`  Priority: ${PRIORITY_LABELS[issue.priority] || issue.priority}`);
-  if (issue.issue_type) {
-    lines.push(`  Type: ${issue.issue_type}`);
+  lines.push(`${displayId || plainIssue.id}: ${plainIssue.title}`);
+  lines.push(`  Status: ${plainIssue.status}`);
+  lines.push(`  Priority: ${PRIORITY_LABELS[plainIssue.priority] || plainIssue.priority}`);
+  if (plainIssue.issue_type) {
+    lines.push(`  Type: ${plainIssue.issue_type}`);
   }
-  if (issue.assignee) {
-    lines.push(`  Assignee: ${issue.assignee}`);
+  if (plainIssue.assignee) {
+    lines.push(`  Assignee: ${plainIssue.assignee}`);
   }
-  if (issue.description) {
-    lines.push(`  Description: ${normalizeLinearIssueLinksForHuman(issue.description)}`);
+  if (plainIssue.description) {
+    lines.push(`  Description: ${plainIssue.description}`);
   }
   return lines.join("\n");
 }
