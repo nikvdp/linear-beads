@@ -51,6 +51,9 @@ export type GraphqlRequestClient = {
 const SYNC_KEY_MARKER_RE = /<!--\s*lb:sync_key=([a-f0-9-]{8,})\s*-->/i;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MARKDOWN_LINK_RE = /\[[^\]]+\]\([^)]+\)/g;
+const ISSUE_IDENTIFIER_RE = /\b([A-Za-z][A-Za-z0-9]*-\d+)\b/g;
+const LOCAL_PREFIX = "LOCAL";
 
 function splitDescriptionAndSyncKey(description?: string | null): {
   description?: string;
@@ -76,6 +79,44 @@ function splitDescriptionAndSyncKey(description?: string | null): {
 function isUuid(value: string | undefined): value is string {
   if (!value) return false;
   return UUID_RE.test(value.trim());
+}
+
+function linkifyIssueIdentifiersInPlainText(text: string): string {
+  return text.replace(ISSUE_IDENTIFIER_RE, (fullMatch, identifier: string, offset: number) => {
+    const normalized = identifier.toUpperCase();
+    const prefix = normalized.split("-")[0];
+
+    if (prefix === LOCAL_PREFIX) {
+      return fullMatch;
+    }
+
+    // Avoid rewriting issue IDs that are part of URL paths.
+    const prevChar = offset > 0 ? text[offset - 1] : "";
+    if (prevChar === "/") {
+      return fullMatch;
+    }
+
+    return `[${normalized}](https://linear.app/issue/${normalized})`;
+  });
+}
+
+export function linkifyIssueReferencesForLinear(description?: string): string | undefined {
+  if (!description) {
+    return description;
+  }
+
+  let result = "";
+  let lastIndex = 0;
+
+  for (const match of description.matchAll(MARKDOWN_LINK_RE)) {
+    const matchStart = match.index ?? 0;
+    result += linkifyIssueIdentifiersInPlainText(description.slice(lastIndex, matchStart));
+    result += match[0];
+    lastIndex = matchStart + match[0].length;
+  }
+
+  result += linkifyIssueIdentifiersInPlainText(description.slice(lastIndex));
+  return result;
 }
 
 /**
@@ -1238,7 +1279,7 @@ export async function createIssue(params: {
 
     const input: Record<string, unknown> = {
       title: params.title,
-      description: params.description,
+      description: linkifyIssueReferencesForLinear(params.description),
       priority: priorityToLinear(params.priority),
       teamId: params.teamId,
       stateId,
@@ -1321,7 +1362,9 @@ export async function updateIssue(
   // Build input
   const input: Record<string, unknown> = {};
   if (updates.title) input.title = updates.title;
-  if (updates.description !== undefined) input.description = updates.description;
+  if (updates.description !== undefined) {
+    input.description = linkifyIssueReferencesForLinear(updates.description);
+  }
   if (updates.priority !== undefined) input.priority = priorityToLinear(updates.priority);
   if (updates.status) {
     input.stateId = await getWorkflowStateId(teamId, updates.status);
