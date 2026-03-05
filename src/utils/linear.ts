@@ -29,6 +29,10 @@ import {
   pruneStaleIssues,
   cacheViewer,
   getCachedViewer,
+  getIssueSyncKey,
+  getLinearIdentifierForLocalId,
+  getSyncedIssueBySyncKey,
+  resolveIssueLocalId,
 } from "./database.js";
 import type { Issue, IssueType, Priority, LinearIssue, IssueStatus } from "../types.js";
 import {
@@ -51,9 +55,193 @@ export type GraphqlRequestClient = {
 const SYNC_KEY_MARKER_RE = /<!--\s*lb:sync_key=([a-f0-9-]{8,})\s*-->/i;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const MARKDOWN_LINK_RE = /\[[^\]]+\]\([^)]+\)/g;
-const ISSUE_IDENTIFIER_RE = /\b([A-Za-z][A-Za-z0-9]*-\d+)\b/g;
-const LOCAL_PREFIX = "LOCAL";
+const ISSUE_LINK_RE = /\[([^\]]+)\]\(([^)\s]+)\)/g;
+const ISSUE_TOKEN_RE = /\b([a-z][a-z0-9]{1,14}-\d+)\b/gi;
+const CANONICAL_ISSUE_TOKEN_RE = /^[A-Z][A-Z0-9]{1,14}-\d+$/;
+const LB_REF_HOST = "lb-ref.invalid";
+const LB_REF_PATH = "/issue";
+const LINEAR_ISSUE_PATH_RE =
+  /^(?:\/[^/]+)?\/issue\/([a-z][a-z0-9]{1,14}-\d+)(?:\/[^/?#]+)?\/?$/i;
+const DEBUG_DISABLE_DESCRIPTION_REF_CODEC =
+  process.env.LB_DEBUG_DISABLE_DESCRIPTION_REF_CODEC === "1";
+
+export type DescriptionRefRewrite = {
+  text: string;
+  url: string;
+};
+
+type MarkdownLinkMatch = {
+  full: string;
+  text: string;
+  url: string;
+  index: number;
+};
+
+export type LbRefLink = {
+  syncKey: string;
+  hint?: string;
+};
+
+function stripMarkdownUrlWrapper(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (trimmed.startsWith("<") && trimmed.endsWith(">") && trimmed.length > 2) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function normalizeIssueToken(raw: string): string {
+  const [prefix, number] = raw.split("-", 2);
+  if (!prefix || !number) return raw;
+  const normalizedNumber = number.replace(/^0+(?=\d)/, "") || "0";
+  return `${prefix.toUpperCase()}-${normalizedNumber}`;
+}
+
+function collectMarkdownLinks(text: string): MarkdownLinkMatch[] {
+  const links: MarkdownLinkMatch[] = [];
+  for (const match of text.matchAll(ISSUE_LINK_RE)) {
+    if (match.index === undefined) continue;
+    links.push({
+      full: match[0],
+      text: match[1],
+      url: match[2],
+      index: match.index,
+    });
+  }
+  return links;
+}
+
+function rewriteOutsideMarkdownLinks(
+  text: string,
+  rewriteToken: (token: string) => DescriptionRefRewrite | null
+): string {
+  const links = collectMarkdownLinks(text);
+  if (links.length === 0) {
+    return text.replace(ISSUE_TOKEN_RE, (full) => {
+      const rewrite = rewriteToken(full);
+      return rewrite ? `[${rewrite.text}](${rewrite.url})` : full;
+    });
+  }
+
+  let cursor = 0;
+  let output = "";
+  for (const link of links) {
+    if (link.index > cursor) {
+      const chunk = text.slice(cursor, link.index);
+      output += chunk.replace(ISSUE_TOKEN_RE, (full) => {
+        const rewrite = rewriteToken(full);
+        return rewrite ? `[${rewrite.text}](${rewrite.url})` : full;
+      });
+    }
+    output += link.full;
+    cursor = link.index + link.full.length;
+  }
+
+  if (cursor < text.length) {
+    const tail = text.slice(cursor);
+    output += tail.replace(ISSUE_TOKEN_RE, (full) => {
+      const rewrite = rewriteToken(full);
+      return rewrite ? `[${rewrite.text}](${rewrite.url})` : full;
+    });
+  }
+
+  return output;
+}
+
+export function buildLbRefUrl(syncKey: string, hint?: string): string {
+  const url = new URL(`https://${LB_REF_HOST}${LB_REF_PATH}`);
+  url.searchParams.set("sync_key", syncKey);
+  if (hint) {
+    url.searchParams.set("hint", hint);
+  }
+  return url.toString();
+}
+
+export function parseLbRefUrl(rawUrl: string): LbRefLink | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(stripMarkdownUrlWrapper(rawUrl));
+  } catch {
+    return null;
+  }
+
+  if (parsed.hostname.toLowerCase() !== LB_REF_HOST || parsed.pathname !== LB_REF_PATH) {
+    return null;
+  }
+
+  const syncKey = parsed.searchParams.get("sync_key")?.trim();
+  if (!syncKey || !isUuid(syncKey)) {
+    return null;
+  }
+
+  const hint = parsed.searchParams.get("hint")?.trim() || undefined;
+  return { syncKey, hint };
+}
+
+export function extractIssueIdentifierFromLinearUrl(rawUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(stripMarkdownUrlWrapper(rawUrl));
+  } catch {
+    return null;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (host !== "linear.app" && !host.endsWith(".linear.app")) {
+    return null;
+  }
+
+  const match = parsed.pathname.match(LINEAR_ISSUE_PATH_RE);
+  if (!match) {
+    return null;
+  }
+
+  return normalizeIssueToken(match[1]);
+}
+
+export function encodeIssueRefsInDescription(
+  description: string | undefined,
+  rewriteToken: (token: string) => DescriptionRefRewrite | null
+): string | undefined {
+  if (description === undefined) return undefined;
+  return rewriteOutsideMarkdownLinks(description, (token) => rewriteToken(normalizeIssueToken(token)));
+}
+
+export function upgradeLbRefLinks(
+  description: string | undefined,
+  resolveSyncKeyToUrl: (ref: LbRefLink, label: string) => string | null
+): string | undefined {
+  if (description === undefined) return undefined;
+
+  return description.replace(ISSUE_LINK_RE, (full, label: string, url: string) => {
+    const ref = parseLbRefUrl(url);
+    if (!ref) return full;
+    const nextUrl = resolveSyncKeyToUrl(ref, label);
+    if (!nextUrl) return full;
+    return `[${label}](${nextUrl})`;
+  });
+}
+
+export function renderIssueLinksAsPlainText(description: string | undefined): string | undefined {
+  if (description === undefined) return undefined;
+
+  return description.replace(ISSUE_LINK_RE, (full, label: string, url: string) => {
+    if (parseLbRefUrl(url)) {
+      return normalizeIssueToken(label);
+    }
+
+    const linearIdentifier = extractIssueIdentifierFromLinearUrl(url);
+    if (linearIdentifier) {
+      const normalizedLabel = normalizeIssueToken(label);
+      if (CANONICAL_ISSUE_TOKEN_RE.test(normalizedLabel)) {
+        return normalizedLabel;
+      }
+      return linearIdentifier;
+    }
+
+    return full;
+  });
+}
 
 function splitDescriptionAndSyncKey(description?: string | null): {
   description?: string;
@@ -81,42 +269,65 @@ function isUuid(value: string | undefined): value is string {
   return UUID_RE.test(value.trim());
 }
 
-function linkifyIssueIdentifiersInPlainText(text: string): string {
-  return text.replace(ISSUE_IDENTIFIER_RE, (fullMatch, identifier: string, offset: number) => {
-    const normalized = identifier.toUpperCase();
-    const prefix = normalized.split("-")[0];
-
-    if (prefix === LOCAL_PREFIX) {
-      return fullMatch;
-    }
-
-    // Avoid rewriting issue IDs that are part of URL paths.
-    const prevChar = offset > 0 ? text[offset - 1] : "";
-    if (prevChar === "/") {
-      return fullMatch;
-    }
-
-    return `[${normalized}](https://linear.app/issue/${normalized})`;
-  });
+function issueIdentifierToLinearUrl(identifier: string): string {
+  return `https://linear.app/issue/${normalizeIssueToken(identifier)}`;
 }
 
-export function linkifyIssueReferencesForLinear(description?: string): string | undefined {
-  if (!description) {
+function rewriteIssueTokenForLinearDescription(token: string): DescriptionRefRewrite | null {
+  const normalized = normalizeIssueToken(token);
+  if (normalized.startsWith("LOCAL-")) {
+    const localId = resolveIssueLocalId(normalized);
+    const syncKey = getIssueSyncKey(localId);
+    if (!syncKey) {
+      return null;
+    }
+    const linearIdentifier = getLinearIdentifierForLocalId(localId);
+    if (linearIdentifier) {
+      return {
+        text: normalized,
+        url: issueIdentifierToLinearUrl(linearIdentifier),
+      };
+    }
+    return {
+      text: normalized,
+      url: buildLbRefUrl(syncKey, normalized),
+    };
+  }
+
+  if (CANONICAL_ISSUE_TOKEN_RE.test(normalized)) {
+    return {
+      text: normalized,
+      url: issueIdentifierToLinearUrl(normalized),
+    };
+  }
+
+  return null;
+}
+
+function upgradeDescriptionLbRefsToLinearUrls(description: string): string {
+  return (
+    upgradeLbRefLinks(description, (ref) => {
+      const synced = getSyncedIssueBySyncKey(ref.syncKey);
+      if (!synced?.linear_identifier) {
+        return null;
+      }
+      return issueIdentifierToLinearUrl(synced.linear_identifier);
+    }) || description
+  );
+}
+
+export function toLinearRichDescription(description: string | undefined): string | undefined {
+  if (description === undefined) {
+    return undefined;
+  }
+  if (DEBUG_DISABLE_DESCRIPTION_REF_CODEC) {
     return description;
   }
-
-  let result = "";
-  let lastIndex = 0;
-
-  for (const match of description.matchAll(MARKDOWN_LINK_RE)) {
-    const matchStart = match.index ?? 0;
-    result += linkifyIssueIdentifiersInPlainText(description.slice(lastIndex, matchStart));
-    result += match[0];
-    lastIndex = matchStart + match[0].length;
+  const encoded = encodeIssueRefsInDescription(description, rewriteIssueTokenForLinearDescription);
+  if (encoded === undefined) {
+    return undefined;
   }
-
-  result += linkifyIssueIdentifiersInPlainText(description.slice(lastIndex));
-  return result;
+  return upgradeDescriptionLbRefsToLinearUrls(encoded);
 }
 
 async function applyDescriptionAutoHealIfNeeded(
@@ -142,7 +353,7 @@ async function applyDescriptionAutoHealIfNeeded(
     });
 
     const currentDescription = result.issue?.description ?? undefined;
-    const healedDescription = linkifyIssueReferencesForLinear(currentDescription);
+    const healedDescription = toLinearRichDescription(currentDescription);
 
     if (currentDescription && healedDescription && healedDescription !== currentDescription) {
       input.description = healedDescription;
@@ -1312,7 +1523,7 @@ export async function createIssue(params: {
 
     const input: Record<string, unknown> = {
       title: params.title,
-      description: linkifyIssueReferencesForLinear(params.description),
+      description: toLinearRichDescription(params.description),
       priority: priorityToLinear(params.priority),
       teamId: params.teamId,
       stateId,
@@ -1398,7 +1609,7 @@ export async function updateIssue(
   const input: Record<string, unknown> = {};
   if (updates.title) input.title = updates.title;
   if (updates.description !== undefined) {
-    input.description = linkifyIssueReferencesForLinear(updates.description);
+    input.description = toLinearRichDescription(updates.description);
   }
   if (updates.priority !== undefined) input.priority = priorityToLinear(updates.priority);
   if (updates.status) {
