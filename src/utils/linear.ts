@@ -248,7 +248,7 @@ function upgradeDescriptionLbRefsToLinearUrls(description: string): string {
   );
 }
 
-function toLinearRichDescription(description: string | undefined): string | undefined {
+export function toLinearRichDescription(description: string | undefined): string | undefined {
   if (description === undefined) {
     return undefined;
   }
