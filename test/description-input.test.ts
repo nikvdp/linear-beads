@@ -43,8 +43,8 @@ describe("issue reference codec helpers", () => {
     });
   });
 
-  test("encodes plain TEAM refs without hardcoding LIN", () => {
-    const encoded = encodeIssueRefsInDescription("depends on ABC-42 and LIN-7", (token) => ({
+  test("encodes plain TEAM refs without hardcoding LIN", async () => {
+    const encoded = await encodeIssueRefsInDescription("depends on ABC-42 and LIN-7", (token) => ({
       text: token,
       url: `https://linear.app/issue/${token}`,
     }));

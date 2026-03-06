@@ -37,8 +37,7 @@ async function runEval(
     | "local_alias_immediate_resolution"
     | "local_alias_deferred_upgrade"
     | "local_alias_update_flow"
-    | "local_alias_status_only_auto_heal",
-  envOverrides: Record<string, string> = {}
+    | "local_alias_status_only_auto_heal"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import { toLinearRichDescription, updateIssue } from ${JSON.stringify(LINEAR_UTILS_PATH)};
@@ -94,6 +93,17 @@ async function runEval(
               team: {
                 states: {
                   nodes: [openState],
+                },
+              },
+            };
+          }
+
+          if (query.includes("GetWorkspaceUrlKey")) {
+            return {
+              viewer: {
+                url: "https://linear.app/linear-beads",
+                organization: {
+                  urlKey: "linear-beads",
                 },
               },
             };
@@ -224,7 +234,6 @@ async function runEval(
       ...process.env,
       LB_TEAM_KEY: "",
       LINEAR_API_KEY: "",
-      ...envOverrides,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -286,7 +295,9 @@ describe("toLinearRichDescription", () => {
   });
 
   test("keeps undefined descriptions unchanged", async () => {
-    expect(await toLinearRichDescription(undefined, { workspaceUrlKey: "linear-beads" })).toBeUndefined();
+    expect(
+      await toLinearRichDescription(undefined, { workspaceUrlKey: "linear-beads" })
+    ).toBeUndefined();
   });
 
   test("immediately upgrades LOCAL aliases when a LIN mapping is already known", async () => {
@@ -326,26 +337,7 @@ describe("toLinearRichDescription", () => {
     );
   });
 
-  test("proof: status-only updates do not auto-heal resolved LOCAL refs when the temporary fix is disabled", async () => {
-    const repoDir = createRepo();
-    const result = await runEval(repoDir, "local_alias_status_only_auto_heal", {
-      LB_DISABLE_DEFERRED_LOCAL_REF_HEAL: "1",
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
-
-    const payload = JSON.parse(result.stdout) as {
-      unresolvedDescription: string;
-      capturedDescription?: string;
-      capturedStateId: string;
-    };
-    expect(payload.unresolvedDescription).toContain("https://lb-ref.invalid/issue?");
-    expect(payload.capturedDescription).toBeUndefined();
-    expect(payload.capturedStateId).toBe("state-started");
-  });
-
-  test("proof: status-only updates auto-heal previously unresolved LOCAL refs after alias reconciliation", async () => {
+  test("status-only updates auto-heal previously unresolved LOCAL refs after alias reconciliation", async () => {
     const repoDir = createRepo();
     const result = await runEval(repoDir, "local_alias_status_only_auto_heal");
 
