@@ -14,7 +14,9 @@ export function normalizeIssueDescriptionForOutput(description: unknown): string
 }
 
 function issueWithPlainDescription(issue: Issue): Issue {
-  const normalizedDescription = normalizeIssueDescriptionForOutput((issue as { description?: unknown }).description);
+  const normalizedDescription = normalizeIssueDescriptionForOutput(
+    (issue as { description?: unknown }).description
+  );
   if (normalizedDescription === undefined) {
     return issue;
   }

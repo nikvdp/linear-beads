@@ -53,13 +53,15 @@ describe("issue reference codec helpers", () => {
   });
 
   test("preserves unresolved lb-ref links when sync key is unknown", () => {
-    const unresolved = "[LOCAL-001](https://lb-ref.invalid/issue?sync_key=123e4567-e89b-12d3-a456-426614174000&hint=LOCAL-001)";
+    const unresolved =
+      "[LOCAL-001](https://lb-ref.invalid/issue?sync_key=123e4567-e89b-12d3-a456-426614174000&hint=LOCAL-001)";
     const upgraded = upgradeLbRefLinks(unresolved, () => null);
     expect(upgraded).toBe(unresolved);
   });
 
   test("upgrades lb-ref links when sync key resolves to a Linear issue URL", () => {
-    const unresolved = "[LOCAL-001](https://lb-ref.invalid/issue?sync_key=123e4567-e89b-12d3-a456-426614174000&hint=LOCAL-001)";
+    const unresolved =
+      "[LOCAL-001](https://lb-ref.invalid/issue?sync_key=123e4567-e89b-12d3-a456-426614174000&hint=LOCAL-001)";
     const upgraded = upgradeLbRefLinks(unresolved, () => "https://linear.app/issue/LIN-1234");
     expect(upgraded).toBe("[LOCAL-001](https://linear.app/issue/LIN-1234)");
   });
