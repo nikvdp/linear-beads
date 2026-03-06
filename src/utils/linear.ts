@@ -64,6 +64,7 @@ const LINEAR_ISSUE_PATH_RE = /^(?:\/[^/]+)?\/issue\/([a-z][a-z0-9]{1,14}-\d+)(?:
 export type DescriptionRefRewrite = {
   text: string;
   url: string;
+  format?: "markdown" | "url";
 };
 
 type MarkdownLinkMatch = {
@@ -77,6 +78,12 @@ export type LbRefLink = {
   syncKey: string;
   hint?: string;
 };
+
+let workspaceUrlKeyCache: string | null = null;
+
+function isDeferredLocalRefAutoHealEnabled(): boolean {
+  return process.env.LB_DISABLE_DEFERRED_LOCAL_REF_HEAL !== "1";
+}
 
 function stripMarkdownUrlWrapper(rawUrl: string): string {
   const trimmed = rawUrl.trim();
@@ -115,12 +122,25 @@ function rewriteOutsideMarkdownLinks(
   text: string,
   rewriteToken: (token: string) => DescriptionRefRewrite | null
 ): string {
+  const rewriteChunk = (chunk: string): string =>
+    chunk.replace(
+      ISSUE_TOKEN_RE,
+      (full, _token: string, offset: number, source: string): string => {
+        const prevChar = offset > 0 ? source[offset - 1] : "";
+        if (prevChar === "/" || prevChar === ":") {
+          return full;
+        }
+
+        const rewrite = rewriteToken(full);
+        if (!rewrite) return full;
+        if (rewrite.format === "url") return rewrite.url;
+        return `[${rewrite.text}](${rewrite.url})`;
+      }
+    );
+
   const links = collectMarkdownLinks(text);
   if (links.length === 0) {
-    return text.replace(ISSUE_TOKEN_RE, (full) => {
-      const rewrite = rewriteToken(full);
-      return rewrite ? `[${rewrite.text}](${rewrite.url})` : full;
-    });
+    return rewriteChunk(text);
   }
 
   let cursor = 0;
@@ -128,10 +148,7 @@ function rewriteOutsideMarkdownLinks(
   for (const link of links) {
     if (link.index > cursor) {
       const chunk = text.slice(cursor, link.index);
-      output += chunk.replace(ISSUE_TOKEN_RE, (full) => {
-        const rewrite = rewriteToken(full);
-        return rewrite ? `[${rewrite.text}](${rewrite.url})` : full;
-      });
+      output += rewriteChunk(chunk);
     }
     output += link.full;
     cursor = link.index + link.full.length;
@@ -139,10 +156,7 @@ function rewriteOutsideMarkdownLinks(
 
   if (cursor < text.length) {
     const tail = text.slice(cursor);
-    output += tail.replace(ISSUE_TOKEN_RE, (full) => {
-      const rewrite = rewriteToken(full);
-      return rewrite ? `[${rewrite.text}](${rewrite.url})` : full;
-    });
+    output += rewriteChunk(tail);
   }
 
   return output;
@@ -199,11 +213,55 @@ export function extractIssueIdentifierFromLinearUrl(rawUrl: string): string | nu
   return normalizeIssueToken(match[1]);
 }
 
-function issueIdentifierToLinearUrl(identifier: string): string {
-  return `https://linear.app/issue/${normalizeIssueToken(identifier)}`;
+function issueIdentifierToLinearUrl(identifier: string, workspaceUrlKey: string): string {
+  return `https://linear.app/${workspaceUrlKey}/issue/${normalizeIssueToken(identifier)}`;
 }
 
-function rewriteIssueTokenForLinearDescription(token: string): DescriptionRefRewrite | null {
+async function getWorkspaceUrlKey(
+  client: GraphqlRequestClient = getGraphQLClient() as unknown as GraphqlRequestClient
+): Promise<string | null> {
+  if (workspaceUrlKeyCache) {
+    return workspaceUrlKeyCache;
+  }
+
+  const query = `
+    query GetWorkspaceUrlKey {
+      viewer {
+        url
+        organization {
+          urlKey
+        }
+      }
+    }
+  `;
+
+  try {
+    const result = await client.request<{
+      viewer: { url?: string | null; organization?: { urlKey?: string | null } | null };
+    }>(query);
+
+    const orgKey = result.viewer.organization?.urlKey?.trim();
+    if (orgKey) {
+      workspaceUrlKeyCache = orgKey;
+      return workspaceUrlKeyCache;
+    }
+
+    const viewerUrl = result.viewer.url?.trim();
+    if (!viewerUrl) return null;
+    const parsed = new URL(viewerUrl);
+    const slug = parsed.pathname.split("/").filter(Boolean)[0]?.trim();
+    if (!slug) return null;
+    workspaceUrlKeyCache = slug;
+    return workspaceUrlKeyCache;
+  } catch {
+    return null;
+  }
+}
+
+async function rewriteIssueTokenForLinearDescription(
+  token: string,
+  workspaceUrlKey: string | null
+): Promise<DescriptionRefRewrite | null> {
   const normalized = normalizeIssueToken(token);
   if (normalized.startsWith("LOCAL-")) {
     const localId = resolveIssueLocalId(normalized);
@@ -212,10 +270,11 @@ function rewriteIssueTokenForLinearDescription(token: string): DescriptionRefRew
       return null;
     }
     const linearIdentifier = getLinearIdentifierForLocalId(localId);
-    if (linearIdentifier) {
+    if (linearIdentifier && workspaceUrlKey) {
       return {
         text: normalized,
-        url: issueIdentifierToLinearUrl(linearIdentifier),
+        url: issueIdentifierToLinearUrl(linearIdentifier, workspaceUrlKey),
+        format: "url",
       };
     }
     return {
@@ -224,10 +283,11 @@ function rewriteIssueTokenForLinearDescription(token: string): DescriptionRefRew
     };
   }
 
-  if (CANONICAL_ISSUE_TOKEN_RE.test(normalized)) {
+  if (CANONICAL_ISSUE_TOKEN_RE.test(normalized) && workspaceUrlKey) {
     return {
       text: normalized,
-      url: issueIdentifierToLinearUrl(normalized),
+      url: issueIdentifierToLinearUrl(normalized, workspaceUrlKey),
+      format: "url",
     };
   }
 
@@ -235,36 +295,100 @@ function rewriteIssueTokenForLinearDescription(token: string): DescriptionRefRew
 }
 
 function upgradeDescriptionLbRefsToLinearUrls(description: string): string {
-  return (
-    upgradeLbRefLinks(description, (ref) => {
-      const synced = getSyncedIssueBySyncKey(ref.syncKey);
-      if (!synced?.linear_identifier) {
-        return null;
-      }
-      return issueIdentifierToLinearUrl(synced.linear_identifier);
-    }) || description
-  );
+  return description.replace(ISSUE_LINK_RE, (full, _label: string, url: string) => {
+    const ref = parseLbRefUrl(url);
+    if (!ref) return full;
+
+    const synced = getSyncedIssueBySyncKey(ref.syncKey);
+    if (!synced?.linear_identifier) {
+      return full;
+    }
+
+    const workspaceUrlKey = workspaceUrlKeyCache;
+    if (!workspaceUrlKey) {
+      return full;
+    }
+
+    return issueIdentifierToLinearUrl(synced.linear_identifier, workspaceUrlKey);
+  });
 }
 
-export function toLinearRichDescription(description: string | undefined): string | undefined {
+export async function toLinearRichDescription(
+  description: string | undefined,
+  options: { client?: GraphqlRequestClient; workspaceUrlKey?: string | null } = {}
+): Promise<string | undefined> {
   if (description === undefined) {
     return undefined;
   }
-  const encoded = encodeIssueRefsInDescription(description, rewriteIssueTokenForLinearDescription);
+  const workspaceUrlKey =
+    options.workspaceUrlKey !== undefined
+      ? options.workspaceUrlKey
+      : await getWorkspaceUrlKey(options.client);
+
+  const encoded = await encodeIssueRefsInDescription(description, (token) =>
+    rewriteIssueTokenForLinearDescription(token, workspaceUrlKey)
+  );
   if (encoded === undefined) {
     return undefined;
   }
   return upgradeDescriptionLbRefsToLinearUrls(encoded);
 }
 
-export function encodeIssueRefsInDescription(
+export async function encodeIssueRefsInDescription(
   description: string | undefined,
-  rewriteToken: (token: string) => DescriptionRefRewrite | null
-): string | undefined {
+  rewriteToken: (token: string) => Promise<DescriptionRefRewrite | null> | DescriptionRefRewrite | null
+): Promise<string | undefined> {
   if (description === undefined) return undefined;
-  return rewriteOutsideMarkdownLinks(description, (token) =>
-    rewriteToken(normalizeIssueToken(token))
-  );
+  const links = collectMarkdownLinks(description);
+  const rewriteChunk = async (chunk: string): Promise<string> => {
+    const matches = [...chunk.matchAll(ISSUE_TOKEN_RE)];
+    if (matches.length === 0) return chunk;
+
+    let cursor = 0;
+    let output = "";
+    for (const match of matches) {
+      const index = match.index ?? 0;
+      const full = match[0];
+      output += chunk.slice(cursor, index);
+
+      const prevChar = index > 0 ? chunk[index - 1] : "";
+      if (prevChar === "/" || prevChar === ":") {
+        output += full;
+      } else {
+        const rewrite = await rewriteToken(normalizeIssueToken(full));
+        if (!rewrite) {
+          output += full;
+        } else if (rewrite.format === "url") {
+          output += rewrite.url;
+        } else {
+          output += `[${rewrite.text}](${rewrite.url})`;
+        }
+      }
+      cursor = index + full.length;
+    }
+    output += chunk.slice(cursor);
+    return output;
+  };
+
+  if (links.length === 0) {
+    return await rewriteChunk(description);
+  }
+
+  let cursor = 0;
+  let output = "";
+  for (const link of links) {
+    if (link.index > cursor) {
+      output += await rewriteChunk(description.slice(cursor, link.index));
+    }
+    output += link.full;
+    cursor = link.index + link.full.length;
+  }
+
+  if (cursor < description.length) {
+    output += await rewriteChunk(description.slice(cursor));
+  }
+
+  return output;
 }
 
 export function upgradeLbRefLinks(
@@ -1585,7 +1709,7 @@ export async function createIssue(params: {
 
     const input: Record<string, unknown> = {
       title: params.title,
-      description: toLinearRichDescription(params.description),
+      description: await toLinearRichDescription(params.description, { client }),
       priority: priorityToLinear(params.priority),
       teamId: params.teamId,
       stateId,
@@ -1671,7 +1795,9 @@ export async function updateIssue(
   const input: Record<string, unknown> = {};
   if (updates.title) input.title = updates.title;
   if (updates.description !== undefined) {
-    input.description = toLinearRichDescription(updates.description);
+    input.description = await toLinearRichDescription(updates.description, { client });
+  } else if (isDeferredLocalRefAutoHealEnabled()) {
+    await applyDeferredDescriptionAutoHeal(issueId, input, client);
   }
   if (updates.priority !== undefined) input.priority = priorityToLinear(updates.priority);
   if (updates.status) {
@@ -1704,6 +1830,40 @@ export async function updateIssue(
   const issue = linearToBdIssue(result.issueUpdate.issue);
   cacheIssue(issue);
   return issue;
+}
+
+async function applyDeferredDescriptionAutoHeal(
+  issueId: string,
+  input: Record<string, unknown>,
+  client: GraphqlRequestClient
+): Promise<void> {
+  const query = `
+    query GetIssueDescriptionForHeal($id: String!) {
+      issue(id: $id) {
+        description
+      }
+    }
+  `;
+
+  try {
+    const result = await client.request<{
+      issue: {
+        description?: string | null;
+      } | null;
+    }>(query, { id: issueId });
+
+    const currentDescription = result.issue?.description ?? undefined;
+    if (currentDescription === undefined) {
+      return;
+    }
+
+    const healedDescription = await toLinearRichDescription(currentDescription, { client });
+    if (healedDescription !== undefined && healedDescription !== currentDescription) {
+      input.description = healedDescription;
+    }
+  } catch {
+    // Best effort only. Update should still proceed even if description heal lookup fails.
+  }
 }
 
 /**
