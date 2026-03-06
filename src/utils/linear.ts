@@ -224,8 +224,12 @@ function rewriteIssueTokenForLinearDescription(token: string): DescriptionRefRew
     };
   }
 
-  // Keep canonical remote IDs as plain literals for Linear-native parsing.
-  if (CANONICAL_ISSUE_TOKEN_RE.test(normalized)) return null;
+  if (CANONICAL_ISSUE_TOKEN_RE.test(normalized)) {
+    return {
+      text: normalized,
+      url: issueIdentifierToLinearUrl(normalized),
+    };
+  }
 
   return null;
 }
