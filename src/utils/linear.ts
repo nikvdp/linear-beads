@@ -81,10 +81,6 @@ export type LbRefLink = {
 
 let workspaceUrlKeyCache: string | null = null;
 
-function isDeferredLocalRefAutoHealEnabled(): boolean {
-  return process.env.LB_DISABLE_DEFERRED_LOCAL_REF_HEAL !== "1";
-}
-
 function stripMarkdownUrlWrapper(rawUrl: string): string {
   const trimmed = rawUrl.trim();
   if (trimmed.startsWith("<") && trimmed.endsWith(">") && trimmed.length > 2) {
@@ -336,7 +332,9 @@ export async function toLinearRichDescription(
 
 export async function encodeIssueRefsInDescription(
   description: string | undefined,
-  rewriteToken: (token: string) => Promise<DescriptionRefRewrite | null> | DescriptionRefRewrite | null
+  rewriteToken: (
+    token: string
+  ) => Promise<DescriptionRefRewrite | null> | DescriptionRefRewrite | null
 ): Promise<string | undefined> {
   if (description === undefined) return undefined;
   const links = collectMarkdownLinks(description);
@@ -1796,7 +1794,7 @@ export async function updateIssue(
   if (updates.title) input.title = updates.title;
   if (updates.description !== undefined) {
     input.description = await toLinearRichDescription(updates.description, { client });
-  } else if (isDeferredLocalRefAutoHealEnabled()) {
+  } else {
     await applyDeferredDescriptionAutoHeal(issueId, input, client);
   }
   if (updates.priority !== undefined) input.priority = priorityToLinear(updates.priority);
