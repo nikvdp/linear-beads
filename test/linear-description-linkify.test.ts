@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { toLinearRichDescription } from "../src/utils/linear.js";
 
+const CLI_PATH = join(import.meta.dir, "..", "src", "cli.ts");
 const LINEAR_UTILS_PATH = join(import.meta.dir, "..", "src", "utils", "linear.ts");
 const DATABASE_UTILS_PATH = join(import.meta.dir, "..", "src", "utils", "database.ts");
 const tempDirs: string[] = [];
@@ -38,10 +39,26 @@ async function runEval(
     | "local_alias_deferred_upgrade"
     | "local_alias_update_flow"
     | "local_alias_status_only_auto_heal"
+    | "seed_cli_queue_fixture"
+    | "inspect_cli_queue_fixture"
+    | "resolve_cli_queue_alias"
+    | "drain_cli_queue_fixture"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
-    import { toLinearRichDescription, updateIssue } from ${JSON.stringify(LINEAR_UTILS_PATH)};
-    import { cacheIssue, replaceIssueId, generateIssueSyncKey } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+    import {
+      toCanonicalLocalDescription,
+      toLinearRichDescription,
+      renderIssueLinksAsPlainText,
+      updateIssue
+    } from ${JSON.stringify(LINEAR_UTILS_PATH)};
+    import {
+      cacheIssue,
+      getCachedIssue,
+      getPendingOutboxItems,
+      queueOutboxItem,
+      replaceIssueId,
+      generateIssueSyncKey
+    } from ${JSON.stringify(DATABASE_UTILS_PATH)};
 
     const mode = process.argv[1];
     const now = "2026-03-06T00:00:00.000Z";
@@ -226,9 +243,150 @@ async function runEval(
       console.log(JSON.stringify(payload));
       process.exit(0);
     }
+
+    if (mode === "seed_cli_queue_fixture") {
+      const parentSyncKey = generateIssueSyncKey();
+      const childSyncKey = generateIssueSyncKey();
+
+      cacheIssue({
+        id: "LOCAL-100",
+        linear_identifier: "LIN-5000",
+        linear_id: "uuid-parent",
+        title: "Parent issue",
+        description: "parent",
+        status: "open",
+        priority: 2,
+        created_at: now,
+        updated_at: now,
+        sync_key: parentSyncKey,
+        sync_status: "synced",
+      });
+
+      cacheIssue({
+        id: "LOCAL-036",
+        title: "Queued child",
+        description: "child",
+        status: "open",
+        priority: 2,
+        created_at: now,
+        updated_at: now,
+        sync_key: childSyncKey,
+        sync_status: "pending",
+      });
+
+      payload.childSyncKey = childSyncKey;
+      console.log(JSON.stringify(payload));
+      process.exit(0);
+    }
+
+    if (mode === "inspect_cli_queue_fixture") {
+      const parent = getCachedIssue("LIN-5000");
+      const outbox = getPendingOutboxItems().find((item) => item.operation === "update");
+      payload.cachedDescription = parent?.description;
+      payload.renderedDescription = renderIssueLinksAsPlainText(parent?.description);
+      payload.outboxDescription = outbox?.payload?.description;
+      console.log(JSON.stringify(payload));
+      process.exit(0);
+    }
+
+    if (mode === "resolve_cli_queue_alias") {
+      replaceIssueId("LOCAL-036", "LIN-4471", "uuid-4471");
+      const parent = getCachedIssue("LIN-5000");
+      payload.renderedDescription = renderIssueLinksAsPlainText(parent?.description);
+      console.log(JSON.stringify(payload));
+      process.exit(0);
+    }
+
+    if (mode === "drain_cli_queue_fixture") {
+      const outbox = getPendingOutboxItems().find((item) => item.operation === "update");
+      const description = typeof outbox?.payload?.description === "string"
+        ? outbox.payload.description
+        : undefined;
+
+      const openState = { id: "state-open", name: "Todo", type: "unstarted" };
+      const capturedInputs = [];
+      const fakeClient = {
+        async request(query, variables = {}) {
+          if (query.includes("GetWorkflowStates")) {
+            return {
+              team: {
+                states: {
+                  nodes: [openState],
+                },
+              },
+            };
+          }
+
+          if (query.includes("GetWorkspaceUrlKey")) {
+            return {
+              viewer: {
+                url: "https://linear.app/linear-beads",
+                organization: {
+                  urlKey: "linear-beads",
+                },
+              },
+            };
+          }
+
+          if (query.includes("mutation UpdateIssue")) {
+            capturedInputs.push(variables.input || {});
+            return {
+              issueUpdate: {
+                success: true,
+                issue: {
+                  id: "uuid-parent",
+                  identifier: "LIN-5000",
+                  title: "Parent issue",
+                  description: variables.input?.description || null,
+                  priority: 2,
+                  createdAt: now,
+                  updatedAt: now,
+                  completedAt: null,
+                  canceledAt: null,
+                  state: openState,
+                  labels: { nodes: [] },
+                  assignee: null,
+                  parent: null,
+                },
+              },
+            };
+          }
+
+          throw new Error("Unexpected query: " + query.slice(0, 80));
+        },
+      };
+
+      await updateIssue("LIN-5000", { description }, "team-1", { client: fakeClient });
+
+      payload.outboundDescription = capturedInputs[0]?.description;
+      payload.canonicalDescription = description;
+      console.log(JSON.stringify(payload));
+      process.exit(0);
+    }
   `;
 
   const proc = Bun.spawn(["bun", "--eval", script, mode], {
+    cwd,
+    env: {
+      ...process.env,
+      LB_TEAM_KEY: "",
+      LINEAR_API_KEY: "",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+  return { stdout, stderr, exitCode };
+}
+
+async function runCli(
+  cwd: string,
+  args: string[]
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn(["bun", "run", CLI_PATH, ...args], {
     cwd,
     env: {
       ...process.env,
@@ -256,11 +414,11 @@ describe("toLinearRichDescription", () => {
   });
 
   test("does not rewrite unresolved LOCAL IDs", async () => {
-    const output = await toLinearRichDescription("Depends on LOCAL-001 before LIN-4274", {
+    const output = await toLinearRichDescription("Depends on LOCAL-99999 before LIN-4274", {
       workspaceUrlKey: "linear-beads",
     });
     expect(output).toBe(
-      "Depends on LOCAL-001 before https://linear.app/linear-beads/issue/LIN-4274"
+      "Depends on LOCAL-99999 before https://linear.app/linear-beads/issue/LIN-4274"
     );
   });
 
@@ -354,5 +512,75 @@ describe("toLinearRichDescription", () => {
       "test reference to https://linear.app/linear-beads/issue/LIN-4465"
     );
     expect(payload.capturedStateId).toBe("state-started");
+  });
+
+  test("queued CLI updates canonicalize fresh LOCAL refs to stable local identity before sync", async () => {
+    const repoDir = createRepo();
+    const seeded = await runEval(repoDir, "seed_cli_queue_fixture");
+    expect(seeded.exitCode).toBe(0);
+
+    const seedPayload = JSON.parse(seeded.stdout) as { childSyncKey: string };
+    const cli = await runCli(repoDir, [
+      "update",
+      "LIN-5000",
+      "-d",
+      "the final test to LOCAL-036 let us see now",
+    ]);
+
+    expect(cli.exitCode).toBe(0);
+
+    const inspected = await runEval(repoDir, "inspect_cli_queue_fixture");
+    expect(inspected.exitCode).toBe(0);
+
+    const payload = JSON.parse(inspected.stdout) as {
+      cachedDescription: string;
+      renderedDescription: string;
+      outboxDescription: string;
+    };
+    expect(payload.cachedDescription).toContain("https://lb-ref.invalid/issue?");
+    expect(payload.cachedDescription).toContain(seedPayload.childSyncKey);
+    expect(payload.outboxDescription).toContain(seedPayload.childSyncKey);
+    expect(payload.renderedDescription).toBe("the final test to LOCAL-036 let us see now");
+  });
+
+  test("resolved aliases render as LIN identifiers from canonical local descriptions after reconciliation", async () => {
+    const repoDir = createRepo();
+    await runEval(repoDir, "seed_cli_queue_fixture");
+    await runCli(repoDir, [
+      "update",
+      "LIN-5000",
+      "-d",
+      "the final test to LOCAL-036 let us see now",
+    ]);
+
+    const resolved = await runEval(repoDir, "resolve_cli_queue_alias");
+    expect(resolved.exitCode).toBe(0);
+
+    const payload = JSON.parse(resolved.stdout) as { renderedDescription: string };
+    expect(payload.renderedDescription).toBe("the final test to LIN-4471 let us see now");
+  });
+
+  test("queued canonical local descriptions upgrade to resolved Linear URLs on outbound send", async () => {
+    const repoDir = createRepo();
+    await runEval(repoDir, "seed_cli_queue_fixture");
+    await runCli(repoDir, [
+      "update",
+      "LIN-5000",
+      "-d",
+      "the final test to LOCAL-036 let us see now",
+    ]);
+    await runEval(repoDir, "resolve_cli_queue_alias");
+
+    const drained = await runEval(repoDir, "drain_cli_queue_fixture");
+    expect(drained.exitCode).toBe(0);
+
+    const payload = JSON.parse(drained.stdout) as {
+      canonicalDescription: string;
+      outboundDescription: string;
+    };
+    expect(payload.canonicalDescription).toContain("https://lb-ref.invalid/issue?");
+    expect(payload.outboundDescription).toBe(
+      "the final test to https://linear.app/linear-beads/issue/LIN-4471 let us see now"
+    );
   });
 });
