@@ -36,6 +36,7 @@ import {
   findIssueBySyncKey,
 } from "./issue-backend.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
+import { toCanonicalLocalDescription } from "./linear.js";
 
 type ResolutionContext = {
   pendingCreateLocalIds: Set<string>;
@@ -168,6 +169,9 @@ function resolveOutboxItem(item: OutboxItem, context: ResolutionContext): Resolu
 
   switch (item.operation) {
     case "create": {
+      if (typeof payload.description === "string") {
+        payload.description = toCanonicalLocalDescription(payload.description);
+      }
       resolveField("parentId", { dropFieldIfOrphan: true });
       if (typeof payload.deps === "string") {
         payload.deps = resolveDepsString(payload.deps, unresolvedLocalIds, referencedIds, context);
@@ -175,6 +179,9 @@ function resolveOutboxItem(item: OutboxItem, context: ResolutionContext): Resolu
       break;
     }
     case "update": {
+      if (typeof payload.description === "string") {
+        payload.description = toCanonicalLocalDescription(payload.description);
+      }
       resolveField("issueId", { dropOperationIfOrphan: true });
       resolveField("parentId", { dropFieldIfOrphan: true });
       if (typeof payload.deps === "string") {

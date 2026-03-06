@@ -23,6 +23,7 @@ import {
   getUserByEmail,
   createRelation,
 } from "../utils/issue-backend.js";
+import { toCanonicalLocalDescription } from "../utils/linear.js";
 import { formatIssueJson, formatIssueHuman, output, outputError } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Priority, IssueStatus } from "../types.js";
@@ -145,6 +146,7 @@ export const updateCommand = new Command("update")
         }
       }
       warnOnLikelyEscapedNewlineDescription(description);
+      const canonicalDescription = toCanonicalLocalDescription(description);
       const updates: {
         title?: string;
         description?: string;
@@ -154,7 +156,7 @@ export const updateCommand = new Command("update")
       } = {};
 
       if (options.title) updates.title = options.title;
-      if (description !== undefined) updates.description = description;
+      if (canonicalDescription !== undefined) updates.description = canonicalDescription;
 
       if (options.status) {
         const validStatuses = ["open", "in_progress", "closed"];

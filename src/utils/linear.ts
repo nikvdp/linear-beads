@@ -213,6 +213,27 @@ function issueIdentifierToLinearUrl(identifier: string, workspaceUrlKey: string)
   return `https://linear.app/${workspaceUrlKey}/issue/${normalizeIssueToken(identifier)}`;
 }
 
+type TrackedIssueRef = {
+  localId: string;
+  syncKey: string;
+  linearIdentifier: string | null;
+};
+
+function resolveTrackedIssueRef(token: string): TrackedIssueRef | null {
+  const normalized = normalizeIssueToken(token);
+  const localId = resolveIssueLocalId(normalized);
+  const syncKey = getIssueSyncKey(localId);
+  if (!syncKey) {
+    return null;
+  }
+
+  return {
+    localId,
+    syncKey,
+    linearIdentifier: getLinearIdentifierForLocalId(localId),
+  };
+}
+
 async function getWorkspaceUrlKey(
   client: GraphqlRequestClient = getGraphQLClient() as unknown as GraphqlRequestClient
 ): Promise<string | null> {
@@ -259,27 +280,26 @@ async function rewriteIssueTokenForLinearDescription(
   workspaceUrlKey: string | null
 ): Promise<DescriptionRefRewrite | null> {
   const normalized = normalizeIssueToken(token);
-  if (normalized.startsWith("LOCAL-")) {
-    const localId = resolveIssueLocalId(normalized);
-    const syncKey = getIssueSyncKey(localId);
-    if (!syncKey) {
-      return null;
-    }
-    const linearIdentifier = getLinearIdentifierForLocalId(localId);
-    if (linearIdentifier && workspaceUrlKey) {
+  const trackedRef = resolveTrackedIssueRef(normalized);
+  if (trackedRef) {
+    if (trackedRef.linearIdentifier && workspaceUrlKey) {
       return {
         text: normalized,
-        url: issueIdentifierToLinearUrl(linearIdentifier, workspaceUrlKey),
+        url: issueIdentifierToLinearUrl(trackedRef.linearIdentifier, workspaceUrlKey),
         format: "url",
       };
     }
     return {
       text: normalized,
-      url: buildLbRefUrl(syncKey, normalized),
+      url: buildLbRefUrl(trackedRef.syncKey, normalized),
     };
   }
 
-  if (CANONICAL_ISSUE_TOKEN_RE.test(normalized) && workspaceUrlKey) {
+  if (
+    !normalized.startsWith("LOCAL-") &&
+    CANONICAL_ISSUE_TOKEN_RE.test(normalized) &&
+    workspaceUrlKey
+  ) {
     return {
       text: normalized,
       url: issueIdentifierToLinearUrl(normalized, workspaceUrlKey),
@@ -290,7 +310,10 @@ async function rewriteIssueTokenForLinearDescription(
   return null;
 }
 
-function upgradeDescriptionLbRefsToLinearUrls(description: string): string {
+function upgradeDescriptionLbRefsToLinearUrls(
+  description: string,
+  workspaceUrlKey: string | null
+): string {
   return description.replace(ISSUE_LINK_RE, (full, _label: string, url: string) => {
     const ref = parseLbRefUrl(url);
     if (!ref) return full;
@@ -300,12 +323,30 @@ function upgradeDescriptionLbRefsToLinearUrls(description: string): string {
       return full;
     }
 
-    const workspaceUrlKey = workspaceUrlKeyCache;
     if (!workspaceUrlKey) {
       return full;
     }
 
     return issueIdentifierToLinearUrl(synced.linear_identifier, workspaceUrlKey);
+  });
+}
+
+export function toCanonicalLocalDescription(description: string | undefined): string | undefined {
+  if (description === undefined) {
+    return undefined;
+  }
+
+  return rewriteOutsideMarkdownLinks(description, (token) => {
+    const normalized = normalizeIssueToken(token);
+    const trackedRef = resolveTrackedIssueRef(normalized);
+    if (!trackedRef) {
+      return null;
+    }
+
+    return {
+      text: normalized,
+      url: buildLbRefUrl(trackedRef.syncKey, normalized),
+    };
   });
 }
 
@@ -316,18 +357,19 @@ export async function toLinearRichDescription(
   if (description === undefined) {
     return undefined;
   }
+  const canonicalLocalDescription = toCanonicalLocalDescription(description);
   const workspaceUrlKey =
     options.workspaceUrlKey !== undefined
       ? options.workspaceUrlKey
       : await getWorkspaceUrlKey(options.client);
 
-  const encoded = await encodeIssueRefsInDescription(description, (token) =>
+  const encoded = await encodeIssueRefsInDescription(canonicalLocalDescription, (token) =>
     rewriteIssueTokenForLinearDescription(token, workspaceUrlKey)
   );
   if (encoded === undefined) {
     return undefined;
   }
-  return upgradeDescriptionLbRefsToLinearUrls(encoded);
+  return upgradeDescriptionLbRefsToLinearUrls(encoded, workspaceUrlKey);
 }
 
 export async function encodeIssueRefsInDescription(
@@ -408,7 +450,12 @@ export function renderIssueLinksAsPlainText(description: string | undefined): st
   if (description === undefined) return undefined;
 
   return description.replace(ISSUE_LINK_RE, (full, label: string, url: string) => {
-    if (parseLbRefUrl(url)) {
+    const ref = parseLbRefUrl(url);
+    if (ref) {
+      const synced = getSyncedIssueBySyncKey(ref.syncKey);
+      if (synced?.linear_identifier) {
+        return synced.linear_identifier;
+      }
       return normalizeIssueToken(label);
     }
 

@@ -23,6 +23,7 @@ import {
   getUserByEmail,
   createRelation,
 } from "../utils/issue-backend.js";
+import { toCanonicalLocalDescription } from "../utils/linear.js";
 import { formatIssueJson, formatIssueHuman, output, outputError } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Issue, IssueType } from "../types.js";
@@ -133,6 +134,7 @@ export const createCommand = new Command("create")
         description = rewriteEscapedNewlines(description);
       }
       warnOnLikelyEscapedNewlineDescription(description);
+      const canonicalDescription = toCanonicalLocalDescription(description);
 
       const duplicateCandidates = getCachedIssues().filter(
         (issue) => issue.status === "open" || issue.status === "in_progress"
@@ -241,7 +243,7 @@ export const createCommand = new Command("create")
         const issue: Issue = {
           id: localId,
           title,
-          description,
+          description: canonicalDescription,
           status: "open",
           priority,
           issue_type: issueType,
@@ -333,7 +335,7 @@ export const createCommand = new Command("create")
 
         const issue = await createIssue({
           title,
-          description,
+          description: canonicalDescription,
           priority,
           issueType, // undefined if types disabled
           teamId,
@@ -381,7 +383,7 @@ export const createCommand = new Command("create")
         const issue: Issue = {
           id: localId,
           title,
-          description: options.description,
+          description: canonicalDescription,
           status: "open",
           priority,
           issue_type: issueType,
@@ -395,7 +397,7 @@ export const createCommand = new Command("create")
 
         const payload: Record<string, unknown> = {
           title,
-          description,
+          description: canonicalDescription,
           priority,
           parentId: resolvedParent,
           assign: options.assign,
