@@ -53,15 +53,13 @@ export type GraphqlRequestClient = {
   request<T>(query: string, variables?: Record<string, unknown>): Promise<T>;
 };
 const SYNC_KEY_MARKER_RE = /<!--\s*lb:sync_key=([a-f0-9-]{8,})\s*-->/i;
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ISSUE_LINK_RE = /\[([^\]]+)\]\(([^)\s]+)\)/g;
 const ISSUE_TOKEN_RE = /\b([a-z][a-z0-9]{1,14}-\d+)\b/gi;
 const CANONICAL_ISSUE_TOKEN_RE = /^[A-Z][A-Z0-9]{1,14}-\d+$/;
 const LB_REF_HOST = "lb-ref.invalid";
 const LB_REF_PATH = "/issue";
-const LINEAR_ISSUE_PATH_RE =
-  /^(?:\/[^/]+)?\/issue\/([a-z][a-z0-9]{1,14}-\d+)(?:\/[^/?#]+)?\/?$/i;
+const LINEAR_ISSUE_PATH_RE = /^(?:\/[^/]+)?\/issue\/([a-z][a-z0-9]{1,14}-\d+)(?:\/[^/?#]+)?\/?$/i;
 
 export type DescriptionRefRewrite = {
   text: string;
@@ -226,12 +224,8 @@ function rewriteIssueTokenForLinearDescription(token: string): DescriptionRefRew
     };
   }
 
-  if (CANONICAL_ISSUE_TOKEN_RE.test(normalized)) {
-    return {
-      text: normalized,
-      url: issueIdentifierToLinearUrl(normalized),
-    };
-  }
+  // Keep canonical remote IDs as plain literals for Linear-native parsing.
+  if (CANONICAL_ISSUE_TOKEN_RE.test(normalized)) return null;
 
   return null;
 }
@@ -264,7 +258,9 @@ export function encodeIssueRefsInDescription(
   rewriteToken: (token: string) => DescriptionRefRewrite | null
 ): string | undefined {
   if (description === undefined) return undefined;
-  return rewriteOutsideMarkdownLinks(description, (token) => rewriteToken(normalizeIssueToken(token)));
+  return rewriteOutsideMarkdownLinks(description, (token) =>
+    rewriteToken(normalizeIssueToken(token))
+  );
 }
 
 export function upgradeLbRefLinks(
@@ -1556,7 +1552,9 @@ export async function createIssue(params: {
     }
   `;
 
-  const buildInput = async (forceRefreshScopeBindings: boolean): Promise<Record<string, unknown>> => {
+  const buildInput = async (
+    forceRefreshScopeBindings: boolean
+  ): Promise<Record<string, unknown>> => {
     const labelIds: string[] = [];
 
     if (useLabelScope()) {
