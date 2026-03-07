@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  createLinearPaginationGuard,
   computeRetryDelayMs,
+  getLinearPaginationPolicy,
   getLinearRequestPolicy,
   linearFetchWithRetry,
   parseRetryAfterMs,
@@ -32,6 +34,73 @@ describe("linear GraphQL retry policy helpers", () => {
     expect(policy.maxRetries).toBe(7);
     expect(policy.retryBaseMs).toBe(250);
     expect(policy.jitterRatio).toBe(0.5);
+  });
+});
+
+describe("linear GraphQL pagination guard", () => {
+  test("loads pagination policy from env with sane defaults", () => {
+    const policy = getLinearPaginationPolicy({
+      LB_LINEAR_PAGINATION_MAX_PAGES: "321",
+      LB_LINEAR_PAGINATION_MAX_DURATION_MS: "4567",
+    });
+    expect(policy.maxPages).toBe(321);
+    expect(policy.maxDurationMs).toBe(4567);
+  });
+
+  test("throws when hasNextPage is true and endCursor is missing", () => {
+    const guard = createLinearPaginationGuard("test-missing-cursor", {
+      policy: { maxPages: 10, maxDurationMs: 10_000 },
+    });
+    expect(() => guard.nextCursor({ hasNextPage: true, endCursor: null }, null)).toThrow(
+      "missing endCursor"
+    );
+  });
+
+  test("throws when cursor stalls at the same value", () => {
+    const guard = createLinearPaginationGuard("test-cursor-stall", {
+      policy: { maxPages: 10, maxDurationMs: 10_000 },
+    });
+    expect(() =>
+      guard.nextCursor({ hasNextPage: true, endCursor: "cursor-1" }, "cursor-1")
+    ).toThrow("cursor stalled");
+  });
+
+  test("throws when a cursor repeats across pages", () => {
+    const guard = createLinearPaginationGuard("test-cursor-repeat", {
+      policy: { maxPages: 10, maxDurationMs: 10_000 },
+    });
+    expect(guard.nextCursor({ hasNextPage: true, endCursor: "cursor-1" }, null)).toBe("cursor-1");
+    expect(guard.nextCursor({ hasNextPage: true, endCursor: "cursor-2" }, "cursor-1")).toBe(
+      "cursor-2"
+    );
+    expect(() =>
+      guard.nextCursor({ hasNextPage: true, endCursor: "cursor-1" }, "cursor-2")
+    ).toThrow("cursor repeated");
+  });
+
+  test("throws when page limit is exceeded", () => {
+    const guard = createLinearPaginationGuard("test-max-pages", {
+      policy: { maxPages: 2, maxDurationMs: 10_000 },
+    });
+    expect(guard.nextCursor({ hasNextPage: true, endCursor: "c1" }, null)).toBe("c1");
+    expect(guard.nextCursor({ hasNextPage: true, endCursor: "c2" }, "c1")).toBe("c2");
+    expect(() => guard.nextCursor({ hasNextPage: true, endCursor: "c3" }, "c2")).toThrow(
+      "exceeded max pages"
+    );
+  });
+
+  test("throws when duration limit is exceeded", () => {
+    const nowValues = [0, 3, 11];
+    let nowIndex = 0;
+    const guard = createLinearPaginationGuard("test-max-duration", {
+      policy: { maxPages: 10, maxDurationMs: 10 },
+      now: () => nowValues[Math.min(nowIndex++, nowValues.length - 1)],
+    });
+
+    expect(guard.nextCursor({ hasNextPage: true, endCursor: "c1" }, null)).toBe("c1");
+    expect(() => guard.nextCursor({ hasNextPage: true, endCursor: "c2" }, "c1")).toThrow(
+      "exceeded max duration"
+    );
   });
 });
 
