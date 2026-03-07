@@ -3,7 +3,7 @@
  */
 
 import { Command } from "commander";
-import { ensureFresh } from "../utils/sync.js";
+import { ensureFresh, ensureFreshBestEffort } from "../utils/sync.js";
 import {
   getCachedIssues,
   getCachedIssue,
@@ -42,7 +42,11 @@ export const blockedCommand = new Command("blocked")
     try {
       // Ensure cache is fresh (skip in local-only mode)
       if (!isLocalOnly()) {
-        await ensureFresh(options.team, options.sync);
+        if (options.sync) {
+          await ensureFresh(options.team, true);
+        } else {
+          await ensureFreshBestEffort(options.team);
+        }
       }
 
       // Get all blocked issue IDs

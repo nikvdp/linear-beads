@@ -3,7 +3,7 @@
  */
 
 import { Command } from "commander";
-import { ensureFresh } from "../utils/sync.js";
+import { ensureFresh, ensureFreshBestEffort } from "../utils/sync.js";
 import {
   getCachedIssues,
   getDependencies,
@@ -38,10 +38,11 @@ export const listCommand = new Command("list")
       const localOnly = isLocalOnly();
 
       if (!localOnly) {
-        try {
-          await ensureFresh(options.team, options.sync);
-        } catch {
-          syncFailed = true;
+        if (options.sync) {
+          await ensureFresh(options.team, true);
+        } else {
+          const freshness = await ensureFreshBestEffort(options.team);
+          syncFailed = freshness.timedOut || Boolean(freshness.error);
         }
       }
 

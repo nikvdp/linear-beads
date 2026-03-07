@@ -3,7 +3,7 @@
  */
 
 import { Command } from "commander";
-import { ensureFresh } from "../utils/sync.js";
+import { ensureFresh, ensureFreshBestEffort } from "../utils/sync.js";
 import {
   getCachedIssue,
   getDependencies,
@@ -36,7 +36,11 @@ export const showCommand = new Command("show")
 
       // Ensure cache is fresh (skip in local-only mode)
       if (!localOnly) {
-        await ensureFresh(options.team, options.sync);
+        if (options.sync) {
+          await ensureFresh(options.team, true);
+        } else {
+          await ensureFreshBestEffort(options.team);
+        }
       }
 
       let issue;
