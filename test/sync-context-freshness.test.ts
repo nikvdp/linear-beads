@@ -33,12 +33,16 @@ function createRepo(): string {
 
 async function runEnsureFresh(
   cwd: string,
-  mode: "same_context" | "changed_context"
+  mode: "same_context" | "changed_context" | "best_effort_timeout" | "strict_timeout"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import { setRuntimeOverrides } from ${JSON.stringify(CONFIG_UTILS_PATH)};
     import { updateLastSync, updateLastSyncContext } from ${JSON.stringify(DATABASE_UTILS_PATH)};
-    import { ensureFresh } from ${JSON.stringify(SYNC_UTILS_PATH)};
+    import {
+      __setSmartSyncRunnerForTests,
+      ensureFresh,
+      ensureFreshBestEffort,
+    } from ${JSON.stringify(SYNC_UTILS_PATH)};
 
     const mode = process.argv[1];
     const baseContext = JSON.stringify({
@@ -51,17 +55,40 @@ async function runEnsureFresh(
     updateLastSync();
     updateLastSyncContext(baseContext);
 
-    if (mode === "changed_context") {
+    if (mode !== "same_context") {
       setRuntimeOverrides({ repo_name: "other-repo", repo_scope: "label" });
     }
 
+    if (mode === "best_effort_timeout" || mode === "strict_timeout") {
+      __setSmartSyncRunnerForTests(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return {
+          pushed: { success: 0, failed: 0 },
+          pulled: 0,
+          type: "incremental",
+        };
+      });
+    }
+
     try {
-      const synced = await ensureFresh(undefined, false);
-      console.log(JSON.stringify({ synced, error: null }));
+      if (mode === "best_effort_timeout") {
+        const result = await ensureFreshBestEffort(undefined);
+        console.log(
+          JSON.stringify({
+            synced: result.synced,
+            timedOut: result.timedOut,
+            error: result.error ? result.error.message : null,
+          })
+        );
+      } else {
+        const synced = await ensureFresh(undefined, false);
+        console.log(JSON.stringify({ synced, timedOut: false, error: null }));
+      }
     } catch (error) {
       console.log(
         JSON.stringify({
           synced: null,
+          timedOut: false,
           error: error instanceof Error ? error.message : String(error),
         })
       );
@@ -74,6 +101,8 @@ async function runEnsureFresh(
       ...process.env,
       LINEAR_API_KEY: "",
       LB_TEAM_KEY: "",
+      ...(mode === "best_effort_timeout" ? { LB_SYNC_BEST_EFFORT_TIMEOUT_MS: "10" } : {}),
+      ...(mode === "strict_timeout" ? { LB_SYNC_STRICT_TIMEOUT_MS: "10" } : {}),
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -94,7 +123,11 @@ describe("sync context freshness", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
 
-    const payload = JSON.parse(result.stdout) as { synced: boolean | null; error: string | null };
+    const payload = JSON.parse(result.stdout) as {
+      synced: boolean | null;
+      timedOut: boolean;
+      error: string | null;
+    };
     expect(payload.error).toBeNull();
     expect(payload.synced).toBe(false);
   });
@@ -106,8 +139,45 @@ describe("sync context freshness", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
 
-    const payload = JSON.parse(result.stdout) as { synced: boolean | null; error: string | null };
+    const payload = JSON.parse(result.stdout) as {
+      synced: boolean | null;
+      timedOut: boolean;
+      error: string | null;
+    };
     expect(payload.error).toBeNull();
     expect(payload.synced).toBe(true);
+  });
+
+  test("best-effort mode falls back when sync exceeds timeout", async () => {
+    const repoDir = createRepo();
+    const result = await runEnsureFresh(repoDir, "best_effort_timeout");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      synced: boolean | null;
+      timedOut: boolean;
+      error: string | null;
+    };
+    expect(payload.synced).toBe(false);
+    expect(payload.timedOut).toBe(true);
+    expect(payload.error).toContain("timed out");
+  });
+
+  test("strict mode surfaces timeout error", async () => {
+    const repoDir = createRepo();
+    const result = await runEnsureFresh(repoDir, "strict_timeout");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      synced: boolean | null;
+      timedOut: boolean;
+      error: string | null;
+    };
+    expect(payload.synced).toBeNull();
+    expect(payload.error).toContain("timed out");
   });
 });
