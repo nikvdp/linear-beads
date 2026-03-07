@@ -1,5 +1,5 @@
 import { addComment } from "../utils/issue-backend.js";
-import { getGraphQLClient } from "../utils/graphql.js";
+import { createLinearPaginationGuard, getGraphQLClient } from "../utils/graphql.js";
 import {
   getAgentByHandle,
   getAgentById,
@@ -173,8 +173,10 @@ async function fetchLinearMailComments(
   const comments: LinearCommentNode[] = [];
   let after: string | null = null;
   let newestCursor: string | null = sinceCursor;
+  const paginationGuard = createLinearPaginationGuard("linearMail.fetchLinearMailComments");
 
   while (comments.length < limit) {
+    const requestCursor = after;
     const query = `
       query LinearMailComments($after: String, $since: DateTimeOrDuration) {
         comments(
@@ -220,10 +222,11 @@ async function fetchLinearMailComments(
       }
     }
 
-    if (!result.comments.pageInfo.hasNextPage || !result.comments.pageInfo.endCursor) {
+    const nextCursor = paginationGuard.nextCursor(result.comments.pageInfo, requestCursor);
+    if (!nextCursor) {
       break;
     }
-    after = result.comments.pageInfo.endCursor;
+    after = nextCursor;
   }
 
   return {

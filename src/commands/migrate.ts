@@ -3,7 +3,7 @@
  */
 
 import { Command } from "commander";
-import { getGraphQLClient } from "../utils/graphql.js";
+import { createLinearPaginationGuard, getGraphQLClient } from "../utils/graphql.js";
 import { getTeamId, fetchIssues } from "../utils/issue-backend.js";
 import { getRepoLabel, getRepoName, getRepoScope } from "../utils/config.js";
 import { output } from "../utils/output.js";
@@ -238,6 +238,7 @@ async function fetchIssuesByRepoLabel(
   const issues: RepoLabelIssue[] = [];
   let hasNextPage = true;
   let after: string | null = null;
+  const paginationGuard = createLinearPaginationGuard("migrate.fetchIssuesByRepoLabel");
 
   const query = `
     query GetIssuesByRepoLabel($teamId: String!, $labelName: String!, $after: String) {
@@ -267,6 +268,7 @@ async function fetchIssuesByRepoLabel(
   `;
 
   while (hasNextPage) {
+    const requestCursor = after;
     const page: RepoLabelIssuesPage = await client.request(query, {
       teamId,
       labelName: repoLabel,
@@ -275,7 +277,7 @@ async function fetchIssuesByRepoLabel(
 
     issues.push(...page.team.issues.nodes);
     hasNextPage = page.team.issues.pageInfo.hasNextPage;
-    after = page.team.issues.pageInfo.endCursor;
+    after = paginationGuard.nextCursor(page.team.issues.pageInfo, requestCursor);
   }
 
   return issues;

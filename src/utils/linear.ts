@@ -2,7 +2,12 @@
  * Linear API operations
  */
 
-import { getGraphQLClient, ISSUE_FRAGMENT, ISSUE_WITH_RELATIONS_FRAGMENT } from "./graphql.js";
+import {
+  createLinearPaginationGuard,
+  getGraphQLClient,
+  ISSUE_FRAGMENT,
+  ISSUE_WITH_RELATIONS_FRAGMENT,
+} from "./graphql.js";
 import {
   getRepoLabel,
   getRepoName,
@@ -637,8 +642,10 @@ async function fetchTeamLabels(
   const labels: Array<{ id: string; name: string }> = [];
   let cursor: string | null = null;
   let hasNextPage = true;
+  const paginationGuard = createLinearPaginationGuard("fetchTeamLabels");
 
   while (hasNextPage) {
+    const requestCursor = cursor;
     const query = `
       query GetLabelsPage($teamId: String!, $cursor: String) {
         team(id: $teamId) {
@@ -667,7 +674,7 @@ async function fetchTeamLabels(
 
     labels.push(...result.team.labels.nodes);
     hasNextPage = result.team.labels.pageInfo.hasNextPage;
-    cursor = result.team.labels.pageInfo.endCursor;
+    cursor = paginationGuard.nextCursor(result.team.labels.pageInfo, requestCursor);
   }
 
   return labels;
@@ -1198,8 +1205,10 @@ export async function fetchAllIssuesPaginated(
   const allIssueIds = new Set<string>();
   let cursor: string | undefined;
   let hasMore = true;
+  const paginationGuard = createLinearPaginationGuard("fetchAllIssuesPaginated");
 
   while (hasMore) {
+    const requestCursor = cursor || null;
     // Always include cursor in variables (null for first page)
     const variables = { ...baseVariables, cursor: cursor || null };
 
@@ -1262,7 +1271,7 @@ export async function fetchAllIssuesPaginated(
 
     allIssues.push(...issues);
     hasMore = result.team.issues.pageInfo.hasNextPage;
-    cursor = result.team.issues.pageInfo.endCursor;
+    cursor = paginationGuard.nextCursor(result.team.issues.pageInfo, requestCursor) || undefined;
   }
 
   // Prune stale issues that are no longer in remote
@@ -1380,12 +1389,21 @@ export async function fetchAllUpdatedIssues(teamId: string, since: string): Prom
   const allIssues: Issue[] = [];
   let cursor: string | undefined;
   let hasMore = true;
+  const paginationGuard = createLinearPaginationGuard("fetchAllUpdatedIssues");
 
   while (hasMore) {
+    const requestCursor = cursor || null;
     const result = await fetchUpdatedIssues(teamId, since, cursor);
     allIssues.push(...result.issues);
     hasMore = result.hasMore;
-    cursor = result.endCursor;
+    cursor =
+      paginationGuard.nextCursor(
+        {
+          hasNextPage: result.hasMore,
+          endCursor: result.endCursor,
+        },
+        requestCursor
+      ) || undefined;
   }
 
   return allIssues;
@@ -1613,8 +1631,10 @@ export async function findIssueBySyncKey(
 
   let cursor: string | undefined;
   let hasMore = true;
+  const paginationGuard = createLinearPaginationGuard("findIssueBySyncKey");
 
   while (hasMore) {
+    const requestCursor = cursor || null;
     const variables = { ...baseVariables, cursor: cursor || null };
     const varDecls = Object.entries(baseVariables)
       .filter(([, v]) => v !== undefined)
@@ -1654,7 +1674,7 @@ export async function findIssueBySyncKey(
     }
 
     hasMore = result.team.issues.pageInfo.hasNextPage;
-    cursor = result.team.issues.pageInfo.endCursor;
+    cursor = paginationGuard.nextCursor(result.team.issues.pageInfo, requestCursor) || undefined;
   }
 
   return null;

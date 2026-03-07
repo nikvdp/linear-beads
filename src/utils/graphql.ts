@@ -10,6 +10,8 @@ const LINEAR_DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 const LINEAR_DEFAULT_MAX_RETRIES = 5;
 const LINEAR_DEFAULT_RETRY_BASE_MS = 500;
 const LINEAR_DEFAULT_JITTER_RATIO = 0.2;
+const LINEAR_DEFAULT_PAGINATION_MAX_PAGES = 2000;
+const LINEAR_DEFAULT_PAGINATION_MAX_DURATION_MS = 120000;
 const TIMEOUT_ABORT_REASON = "lb-linear-request-timeout";
 
 let client: GraphQLClient | null = null;
@@ -19,6 +21,21 @@ export type LinearRequestPolicy = {
   maxRetries: number;
   retryBaseMs: number;
   jitterRatio: number;
+};
+
+export type LinearPaginationPolicy = {
+  maxPages: number;
+  maxDurationMs: number;
+};
+
+export type LinearPageInfo = {
+  hasNextPage: boolean;
+  endCursor?: string | null;
+};
+
+type LinearPaginationGuardOptions = {
+  policy?: LinearPaginationPolicy;
+  now?: () => number;
 };
 
 type LinearFetchOptions = {
@@ -61,6 +78,73 @@ export function getLinearRequestPolicy(env: NodeJS.ProcessEnv = process.env): Li
       0,
       1
     ),
+  };
+}
+
+export function getLinearPaginationPolicy(
+  env: NodeJS.ProcessEnv = process.env
+): LinearPaginationPolicy {
+  return {
+    maxPages: parsePositiveInt(
+      env.LB_LINEAR_PAGINATION_MAX_PAGES,
+      LINEAR_DEFAULT_PAGINATION_MAX_PAGES
+    ),
+    maxDurationMs: parsePositiveInt(
+      env.LB_LINEAR_PAGINATION_MAX_DURATION_MS,
+      LINEAR_DEFAULT_PAGINATION_MAX_DURATION_MS
+    ),
+  };
+}
+
+export function createLinearPaginationGuard(
+  context: string,
+  options: LinearPaginationGuardOptions = {}
+): {
+  nextCursor: (pageInfo: LinearPageInfo, requestCursor?: string | null) => string | null;
+} {
+  const policy = options.policy || getLinearPaginationPolicy();
+  const now = options.now || Date.now;
+  const startedAt = now();
+  const seenCursors = new Set<string>();
+  let pageCount = 0;
+
+  const fail = (reason: string): never => {
+    throw new Error(`Linear pagination guard (${context}): ${reason}`);
+  };
+
+  return {
+    nextCursor: (pageInfo: LinearPageInfo, requestCursor?: string | null): string | null => {
+      pageCount += 1;
+      if (pageCount > policy.maxPages) {
+        fail(`exceeded max pages (${policy.maxPages})`);
+      }
+
+      const elapsedMs = now() - startedAt;
+      if (elapsedMs > policy.maxDurationMs) {
+        fail(`exceeded max duration (${policy.maxDurationMs}ms)`);
+      }
+
+      if (!pageInfo.hasNextPage) {
+        return null;
+      }
+
+      const endCursor = typeof pageInfo.endCursor === "string" ? pageInfo.endCursor.trim() : "";
+      if (!endCursor) {
+        fail("received hasNextPage=true with missing endCursor");
+      }
+
+      const normalizedRequestCursor = typeof requestCursor === "string" ? requestCursor.trim() : "";
+      if (normalizedRequestCursor && normalizedRequestCursor === endCursor) {
+        fail(`cursor stalled at '${endCursor}'`);
+      }
+
+      if (seenCursors.has(endCursor)) {
+        fail(`cursor repeated without progress ('${endCursor}')`);
+      }
+
+      seenCursors.add(endCursor);
+      return endCursor;
+    },
   };
 }
 

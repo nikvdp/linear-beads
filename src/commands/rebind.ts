@@ -3,7 +3,7 @@
  */
 
 import { Command, InvalidArgumentError } from "commander";
-import { getGraphQLClient } from "../utils/graphql.js";
+import { createLinearPaginationGuard, getGraphQLClient } from "../utils/graphql.js";
 import { getTeamId } from "../utils/issue-backend.js";
 import { getRepoName, getRepoScope, type RepoScopeMode, writeRepoConfig } from "../utils/config.js";
 import { output } from "../utils/output.js";
@@ -90,6 +90,7 @@ async function fetchIssuesByBinding(
   const issues: RebindIssue[] = [];
   let hasNextPage = true;
   let after: string | null = null;
+  const paginationGuard = createLinearPaginationGuard("rebind.fetchIssuesByBinding");
 
   const sourceLabel = repoLabelFor(sourceName);
   const { filter, variableDecls } = buildSourceFilter(sourceScope);
@@ -121,6 +122,7 @@ async function fetchIssuesByBinding(
   `;
 
   while (hasNextPage) {
+    const requestCursor = after;
     const variables: Record<string, string | null> = {
       teamId,
       after,
@@ -147,7 +149,7 @@ async function fetchIssuesByBinding(
 
     issues.push(...result.team.issues.nodes);
     hasNextPage = result.team.issues.pageInfo.hasNextPage;
-    after = result.team.issues.pageInfo.endCursor;
+    after = paginationGuard.nextCursor(result.team.issues.pageInfo, requestCursor);
   }
 
   return issues;
