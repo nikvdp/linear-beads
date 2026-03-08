@@ -34,6 +34,10 @@ import {
   resolveDescriptionInput,
   rewriteEscapedNewlines,
 } from "../utils/description-input.js";
+import {
+  cachePreparedDescriptionMedia,
+  planDescriptionMediaInput,
+} from "../utils/media-input.js";
 
 const VALID_DEP_TYPES = ["blocks", "blocked-by", "related"];
 
@@ -87,6 +91,24 @@ function warnOnLikelyEscapedNewlineDescription(description: string | undefined):
   outputError("");
 }
 
+async function loadCurrentDescriptionForUpdate(issueId: string): Promise<string | undefined> {
+  const cached = getCachedIssue(issueId);
+  if (cached) {
+    return cached.description;
+  }
+
+  if (isLocalId(issueId)) {
+    return undefined;
+  }
+
+  try {
+    const fetched = await fetchIssue(issueId);
+    return fetched?.description;
+  } catch {
+    return undefined;
+  }
+}
+
 export const updateCommand = new Command("update")
   .description("Update an issue")
   .argument("<id>", "Issue ID")
@@ -94,6 +116,8 @@ export const updateCommand = new Command("update")
   .option("-d, --description <desc>", "New description")
   .option("--description-file <path>", "Read new description from file")
   .option("--description-stdin", "Read new description from stdin")
+  .option("--media <path>", "Attach media from a local file (repeatable)", collect)
+  .option("--media-id <id>", "Media id to pair with --media by position (repeatable)", collect)
   .option(
     "--auto-format-escaped-newlines",
     "Rewrite literal \\\\n sequences in description content into real line breaks"
@@ -120,24 +144,14 @@ export const updateCommand = new Command("update")
         descriptionStdin: !!options.descriptionStdin,
       });
       const hadExplicitDescriptionInput = description !== undefined;
+      const requestedMediaPaths = options.media as string[] | undefined;
+      const requestedMediaIds = options.mediaId as string[] | undefined;
+      const hasRequestedMedia = (requestedMediaPaths?.length || 0) > 0;
       if (options.autoFormatEscapedNewlines) {
         if (description !== undefined) {
           description = rewriteEscapedNewlines(description);
         } else {
-          let currentDescription: string | undefined;
-          const cached = getCachedIssue(resolvedId);
-          if (cached) {
-            currentDescription = cached.description;
-          } else if (!isLocalId(resolvedId)) {
-            try {
-              const fetched = await fetchIssue(resolvedId);
-              if (fetched) {
-                currentDescription = fetched.description;
-              }
-            } catch {
-              // Fall through and let existing validations handle missing issue cases later.
-            }
-          }
+          const currentDescription = await loadCurrentDescriptionForUpdate(resolvedId);
           const rewritten = rewriteEscapedNewlines(currentDescription);
           if (rewritten !== currentDescription) {
             description = rewritten;
@@ -145,7 +159,16 @@ export const updateCommand = new Command("update")
           }
         }
       }
+      if (hasRequestedMedia && description === undefined) {
+        description = await loadCurrentDescriptionForUpdate(resolvedId);
+      }
       warnOnLikelyEscapedNewlineDescription(description);
+      const preparedMedia = await planDescriptionMediaInput({
+        description,
+        mediaPaths: requestedMediaPaths,
+        mediaIds: requestedMediaIds,
+      });
+      description = preparedMedia.description;
       const canonicalDescription = toCanonicalLocalDescription(description);
       const updates: {
         title?: string;
@@ -248,6 +271,7 @@ export const updateCommand = new Command("update")
         const now = new Date().toISOString();
         const updated = { ...issue, ...updates, updated_at: now };
         cacheIssue(updated);
+        cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);
 
         // Handle parent
         if (options.parent) {
@@ -309,6 +333,10 @@ export const updateCommand = new Command("update")
         // Sync mode: update directly in Linear
         const teamId = await getTeamId(options.team);
         let issue = null;
+
+        if (preparedMedia.mediaItems.length > 0) {
+          cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);
+        }
 
         if (Object.keys(updates).length > 0) {
           issue = await updateIssue(resolvedId, updates, teamId);
@@ -407,6 +435,7 @@ export const updateCommand = new Command("update")
         delete payload.assigneeId;
 
         queueOutboxItem("update", payload, resolvedId);
+        cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);
 
         // Spawn background worker if not already running
         ensureOutboxProcessed();

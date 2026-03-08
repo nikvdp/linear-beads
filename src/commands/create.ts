@@ -5,12 +5,14 @@
 import { Command } from "commander";
 import {
   queueOutboxItem,
+  deleteMediaItems,
   generateLocalId,
   cacheIssue,
   cacheDependency,
   getDatabase,
   getCachedIssues,
   getDisplayId,
+  reassignMediaItemsToIssue,
   resolveIssueId,
   isLocalId,
   runWithBusyRetry,
@@ -35,6 +37,10 @@ import {
   resolveDescriptionInput,
   rewriteEscapedNewlines,
 } from "../utils/description-input.js";
+import {
+  cachePreparedDescriptionMedia,
+  planDescriptionMediaInput,
+} from "../utils/media-input.js";
 
 const VALID_DEP_TYPES = ["blocks", "related", "discovered-from"];
 
@@ -100,6 +106,8 @@ export const createCommand = new Command("create")
   .option("-d, --description <desc>", "Issue description")
   .option("--description-file <path>", "Read issue description from file")
   .option("--description-stdin", "Read issue description from stdin")
+  .option("--media <path>", "Attach media from a local file (repeatable)", collect)
+  .option("--media-id <id>", "Media id to pair with --media by position (repeatable)", collect)
   .option(
     "--auto-format-escaped-newlines",
     "Rewrite literal \\\\n sequences in description content into real line breaks"
@@ -134,6 +142,12 @@ export const createCommand = new Command("create")
         description = rewriteEscapedNewlines(description);
       }
       warnOnLikelyEscapedNewlineDescription(description);
+      const preparedMedia = await planDescriptionMediaInput({
+        description,
+        mediaPaths: options.media as string[] | undefined,
+        mediaIds: options.mediaId as string[] | undefined,
+      });
+      description = preparedMedia.description;
       const canonicalDescription = toCanonicalLocalDescription(description);
 
       const duplicateCandidates = getCachedIssues().filter(
@@ -252,6 +266,7 @@ export const createCommand = new Command("create")
         };
 
         cacheIssue({ ...issue, sync_key: syncKey });
+        cachePreparedDescriptionMedia(localId, preparedMedia.mediaItems);
 
         // Handle parent relationship
         if (resolvedParent) {
@@ -296,6 +311,7 @@ export const createCommand = new Command("create")
 
       if (options.sync) {
         const syncKey = generateIssueSyncKey();
+        const stagedMediaOwnerId = `MEDIA-STAGING-${generateIssueSyncKey()}`;
         if (resolvedParent && isLocalId(resolvedParent)) {
           console.error(`Parent not synced yet: ${options.parent}`);
           process.exit(1);
@@ -333,16 +349,30 @@ export const createCommand = new Command("create")
           assigneeId = viewer.id;
         }
 
-        const issue = await createIssue({
-          title,
-          description: canonicalDescription,
-          priority,
-          issueType, // undefined if types disabled
-          teamId,
-          parentId: resolvedParent,
-          assigneeId,
-          syncKey,
-        });
+        if (preparedMedia.mediaItems.length > 0) {
+          cachePreparedDescriptionMedia(stagedMediaOwnerId, preparedMedia.mediaItems);
+        }
+
+        let issue;
+        try {
+          issue = await createIssue({
+            title,
+            description: canonicalDescription,
+            priority,
+            issueType, // undefined if types disabled
+            teamId,
+            parentId: resolvedParent,
+            assigneeId,
+            syncKey,
+          });
+        } catch (error) {
+          deleteMediaItems(preparedMedia.mediaItems.map((item) => item.id));
+          throw error;
+        }
+
+        if (preparedMedia.mediaItems.length > 0) {
+          reassignMediaItemsToIssue(stagedMediaOwnerId, issue.local_id || issue.id);
+        }
 
         // Handle deps after issue creation
         if (resolvedDeps.length > 0) {
@@ -412,6 +442,7 @@ export const createCommand = new Command("create")
         const db = getDatabase();
         const transaction = db.transaction(() => {
           cacheIssue({ ...issue, sync_key: syncKey });
+          cachePreparedDescriptionMedia(localId, preparedMedia.mediaItems);
 
           if (resolvedParent) {
             cacheDependency({

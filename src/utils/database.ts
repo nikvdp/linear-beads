@@ -1439,6 +1439,35 @@ export function listMediaItemsForIssue(issueId: string): MediaItem[] {
   return rows.map((row) => rowToMediaItem(row));
 }
 
+export function reassignMediaItemsToIssue(fromIssueId: string, toIssueId: string): void {
+  const db = getDatabase();
+  const resolvedFromId = resolveIssueLocalId(fromIssueId);
+  const resolvedToId = resolveIssueLocalId(toIssueId);
+  if (resolvedFromId === resolvedToId) {
+    return;
+  }
+
+  runWithBusyRetry(() => {
+    db.run("UPDATE media_items SET issue_local_id = ? WHERE issue_local_id = ?", [
+      resolvedToId,
+      resolvedFromId,
+    ]);
+  });
+}
+
+export function deleteMediaItems(mediaIds: string[]): void {
+  if (mediaIds.length === 0) {
+    return;
+  }
+
+  const db = getDatabase();
+  const uniqueIds = [...new Set(mediaIds)];
+  const placeholders = uniqueIds.map(() => "?").join(", ");
+  runWithBusyRetry(() => {
+    db.query(`DELETE FROM media_items WHERE media_id IN (${placeholders})`).run(...uniqueIds);
+  });
+}
+
 /**
  * Cache a dependency
  */
