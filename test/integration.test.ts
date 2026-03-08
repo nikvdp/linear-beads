@@ -27,6 +27,7 @@ import { join } from "path";
 setDefaultTimeout(30000);
 
 const TEAM_KEY = process.env.LB_TEAM_KEY || "LIN";
+const WORKSPACE_SLUG = "linear-beads";
 const TEST_PREFIX = `[test-${Date.now()}]`;
 
 // Track all test issue IDs for cleanup
@@ -400,6 +401,74 @@ describe("lb CLI Integration Tests", () => {
       >("update", issueId, "-p", "1", "--sync");
 
       expect(updateResult[0].priority).toBe(1);
+    });
+  });
+
+  describe("touch", () => {
+    test("should heal malformed Linear links while preserving backticked literals", async () => {
+      const client = new GraphQLClient("https://api.linear.app/graphql", {
+        headers: { Authorization: process.env.LINEAR_API_KEY! },
+      });
+
+      const targetResult = await lbJson<Array<{ id: string }>>(
+        "create",
+        `${TEST_PREFIX} Touch target`,
+        "--sync"
+      );
+      const targetId = targetResult[0].id;
+
+      const subjectResult = await lbJson<Array<{ id: string }>>(
+        "create",
+        `${TEST_PREFIX} Touch subject`,
+        "--sync"
+      );
+      const subjectId = subjectResult[0].id;
+
+      const badDescription = [
+        `Broken [https://linear.app/${WORKSPACE_SLUG}/issue/${targetId}:](<https://linear.app/${WORKSPACE_SLUG}/issue/${targetId}:>)`,
+        `Keep \`${targetId}\` literal`,
+      ].join("\n\n");
+
+      await client.request(
+        `mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
+          issueUpdate(id: $id, input: $input) {
+            success
+          }
+        }`,
+        {
+          id: subjectId,
+          input: {
+            description: badDescription,
+          },
+        }
+      );
+
+      const touchResult = await lbJson<Array<{ id: string; description?: string }>>(
+        "touch",
+        subjectId
+      );
+      expect(touchResult[0].id).toBe(subjectId);
+      expect(touchResult[0].description).toContain(`Broken ${targetId}:`);
+      expect(touchResult[0].description).toContain(`Keep \`${targetId}\` literal`);
+
+      const fetched = await client.request<{
+        issue: { description: string | null };
+      }>(
+        `query GetIssue($id: String!) {
+          issue(id: $id) {
+            description
+          }
+        }`,
+        { id: subjectId }
+      );
+
+      expect(fetched.issue.description).toContain(
+        `[${targetId}](https://linear.app/${WORKSPACE_SLUG}/issue/${targetId}):`
+      );
+      expect(fetched.issue.description).toContain(`\`${targetId}\` literal`);
+      expect(fetched.issue.description).not.toContain(
+        `[https://linear.app/${WORKSPACE_SLUG}/issue/${targetId}:]`
+      );
     });
   });
 

@@ -34,7 +34,9 @@ async function runEval(
   mode:
     | "update_auto_heals"
     | "update_skips_when_already_rich"
+    | "update_skips_backticked_generic_link"
     | "update_heals_generic_link_fallback"
+    | "update_heals_malformed_raw_url_link"
     | "close_auto_heals"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
@@ -50,9 +52,13 @@ async function runEval(
 
     const existingDescription =
       mode === "update_skips_when_already_rich"
-        ? "Already rich https://linear.app/linear-beads/issue/LIN-4274"
+        ? "Already rich [LIN-4274](https://linear.app/linear-beads/issue/LIN-4274)"
+        : mode === "update_skips_backticked_generic_link"
+          ? ${JSON.stringify("Keep `[LIN-4274](https://linear.app/issue/LIN-4274)` literal")}
         : mode === "update_heals_generic_link_fallback"
           ? "Already fallback [LIN-4274](https://linear.app/issue/LIN-4274)"
+          : mode === "update_heals_malformed_raw_url_link"
+            ? "Broken [https://linear.app/linear-beads/issue/LIN-4274:](<https://linear.app/linear-beads/issue/LIN-4274:>)"
           : "Legacy literal LIN-4274 reference";
 
     const fakeClient = {
@@ -159,7 +165,7 @@ describe("Linear description auto-heal on update paths", () => {
 
     expect(payload.healReadCalls).toBe(1);
     expect(payload.capturedInputs[0]?.description).toBe(
-      "Legacy literal https://linear.app/linear-beads/issue/LIN-4274 reference"
+      "Legacy literal <https://linear.app/linear-beads/issue/LIN-4274> reference"
     );
   });
 
@@ -193,7 +199,41 @@ describe("Linear description auto-heal on update paths", () => {
 
     expect(payload.healReadCalls).toBe(1);
     expect(payload.capturedInputs[0]?.description).toBe(
-      "Already fallback https://linear.app/linear-beads/issue/LIN-4274"
+      "Already fallback <https://linear.app/linear-beads/issue/LIN-4274>"
+    );
+  });
+
+  test("does not heal generic Linear markdown links inside backticks", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "update_skips_backticked_generic_link");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      capturedInputs: Array<{ description?: string }>;
+      healReadCalls: number;
+    };
+
+    expect(payload.healReadCalls).toBe(1);
+    expect(payload.capturedInputs[0]?.description).toBeUndefined();
+  });
+
+  test("auto-heals malformed raw-url labels into safe mention URLs", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "update_heals_malformed_raw_url_link");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      capturedInputs: Array<{ description?: string }>;
+      healReadCalls: number;
+    };
+
+    expect(payload.healReadCalls).toBe(1);
+    expect(payload.capturedInputs[0]?.description).toBe(
+      "Broken <https://linear.app/linear-beads/issue/LIN-4274>:"
     );
   });
 
@@ -212,7 +252,7 @@ describe("Linear description auto-heal on update paths", () => {
     expect(payload.healReadCalls).toBe(1);
     expect(payload.capturedInputs[0]?.stateId).toBe("state-closed");
     expect(payload.capturedInputs[0]?.description).toBe(
-      "Legacy literal https://linear.app/linear-beads/issue/LIN-4274 reference"
+      "Legacy literal <https://linear.app/linear-beads/issue/LIN-4274> reference"
     );
   });
 });

@@ -404,12 +404,12 @@ async function runCli(
 }
 
 describe("toLinearRichDescription", () => {
-  test("rewrites literal team issue IDs to workspace-scoped Linear URLs", async () => {
+  test("rewrites literal team issue IDs to safe Linear mention URLs", async () => {
     const output = await toLinearRichDescription("Discuss LIN-4274 and ABC-99", {
       workspaceUrlKey: "linear-beads",
     });
     expect(output).toBe(
-      "Discuss https://linear.app/linear-beads/issue/LIN-4274 and https://linear.app/linear-beads/issue/ABC-99"
+      "Discuss <https://linear.app/linear-beads/issue/LIN-4274> and <https://linear.app/linear-beads/issue/ABC-99>"
     );
   });
 
@@ -418,7 +418,7 @@ describe("toLinearRichDescription", () => {
       workspaceUrlKey: "linear-beads",
     });
     expect(output).toBe(
-      "Depends on LOCAL-99999 before https://linear.app/linear-beads/issue/LIN-4274"
+      "Depends on LOCAL-99999 before <https://linear.app/linear-beads/issue/LIN-4274>"
     );
   });
 
@@ -429,7 +429,7 @@ describe("toLinearRichDescription", () => {
       workspaceUrlKey: "linear-beads",
     });
     expect(output).toBe(
-      "Already linked [LIN-4274](https://linear.app/linear-beads/issue/LIN-4274/some-slug) and raw https://linear.app/linear-beads/issue/LIN-4387"
+      "Already linked [LIN-4274](https://linear.app/linear-beads/issue/LIN-4274/some-slug) and raw <https://linear.app/linear-beads/issue/LIN-4387>"
     );
   });
 
@@ -440,7 +440,7 @@ describe("toLinearRichDescription", () => {
       workspaceUrlKey: "linear-beads",
     });
     expect(output).toBe(
-      "Already [LIN-4274](<https://linear.app/linear-beads/issue/LIN-4274/some-slug>) plus raw https://linear.app/linear-beads/issue/LIN-4387"
+      "Already [LIN-4274](<https://linear.app/linear-beads/issue/LIN-4274/some-slug>) plus raw <https://linear.app/linear-beads/issue/LIN-4387>"
     );
   });
 
@@ -452,6 +452,16 @@ describe("toLinearRichDescription", () => {
     expect(output).toBe(input);
   });
 
+  test("does not rewrite canonical IDs inside backticks", async () => {
+    const input = "Keep `LIN-4274` literal while promoting LIN-4387";
+    const output = await toLinearRichDescription(input, {
+      workspaceUrlKey: "linear-beads",
+    });
+    expect(output).toBe(
+      "Keep `LIN-4274` literal while promoting <https://linear.app/linear-beads/issue/LIN-4387>"
+    );
+  });
+
   test("heals generic LIN fallback markdown links forward once workspace slug is known", async () => {
     const input =
       "Fallback [LIN-4274](https://linear.app/issue/LIN-4274) but keep [see bug](https://linear.app/issue/LIN-9999)";
@@ -459,7 +469,7 @@ describe("toLinearRichDescription", () => {
       workspaceUrlKey: "linear-beads",
     });
     expect(output).toBe(
-      "Fallback https://linear.app/linear-beads/issue/LIN-4274 but keep [see bug](https://linear.app/issue/LIN-9999)"
+      "Fallback <https://linear.app/linear-beads/issue/LIN-4274> but keep [see bug](https://linear.app/issue/LIN-9999)"
     );
   });
 
@@ -468,7 +478,33 @@ describe("toLinearRichDescription", () => {
     const output = await toLinearRichDescription(input, {
       workspaceUrlKey: "linear-beads",
     });
-    expect(output).toBe("Fallback https://linear.app/linear-beads/issue/LIN-4465");
+    expect(output).toBe("Fallback <https://linear.app/linear-beads/issue/LIN-4465>");
+  });
+
+  test("heals malformed raw-url labels back into safe Linear mention URLs", async () => {
+    const input =
+      "Broken [https://linear.app/linear-beads/issue/LIN-4454:](<https://linear.app/linear-beads/issue/LIN-4454:>)";
+    const output = await toLinearRichDescription(input, {
+      workspaceUrlKey: "linear-beads",
+    });
+    expect(output).toBe("Broken <https://linear.app/linear-beads/issue/LIN-4454>:");
+  });
+
+  test("keeps generic fallback markdown links literal inside backticks", async () => {
+    const input = "Keep `[LIN-4274](https://linear.app/issue/LIN-4274)` literal";
+    const output = await toLinearRichDescription(input, {
+      workspaceUrlKey: "linear-beads",
+    });
+    expect(output).toBe(input);
+  });
+
+  test("keeps malformed raw-url labels literal inside backticks", async () => {
+    const input =
+      "Keep `[https://linear.app/linear-beads/issue/LIN-4454:](<https://linear.app/linear-beads/issue/LIN-4454:>)` literal";
+    const output = await toLinearRichDescription(input, {
+      workspaceUrlKey: "linear-beads",
+    });
+    expect(output).toBe(input);
   });
 
   test("keeps undefined descriptions unchanged", async () => {
@@ -485,7 +521,7 @@ describe("toLinearRichDescription", () => {
     expect(result.stderr).toBe("");
 
     const payload = JSON.parse(result.stdout) as { output: string };
-    expect(payload.output).toBe("blocks https://linear.app/linear-beads/issue/LIN-4465");
+    expect(payload.output).toBe("blocks <https://linear.app/linear-beads/issue/LIN-4465>");
   });
 
   test("preserves unresolved LOCAL refs first, then upgrades them after alias reconciliation", async () => {
@@ -498,7 +534,7 @@ describe("toLinearRichDescription", () => {
     const payload = JSON.parse(result.stdout) as { before: string; after: string };
     expect(payload.before).toContain("https://lb-ref.invalid/issue?");
     expect(payload.before).toContain("hint=LOCAL-035");
-    expect(payload.after).toBe("blocks https://linear.app/linear-beads/issue/LIN-4465");
+    expect(payload.after).toBe("blocks <https://linear.app/linear-beads/issue/LIN-4465>");
   });
 
   test("end-to-end update flow sends resolved remote target when LOCAL alias is already known", async () => {
@@ -510,7 +546,7 @@ describe("toLinearRichDescription", () => {
 
     const payload = JSON.parse(result.stdout) as { capturedDescription: string };
     expect(payload.capturedDescription).toBe(
-      "test reference to https://linear.app/linear-beads/issue/LIN-4465"
+      "test reference to <https://linear.app/linear-beads/issue/LIN-4465>"
     );
   });
 
@@ -528,7 +564,7 @@ describe("toLinearRichDescription", () => {
     };
     expect(payload.unresolvedDescription).toContain("https://lb-ref.invalid/issue?");
     expect(payload.capturedDescription).toBe(
-      "test reference to https://linear.app/linear-beads/issue/LIN-4465"
+      "test reference to <https://linear.app/linear-beads/issue/LIN-4465>"
     );
     expect(payload.capturedStateId).toBe("state-started");
   });
@@ -579,7 +615,7 @@ describe("toLinearRichDescription", () => {
     expect(payload.renderedDescription).toBe("the final test to LIN-4471 let us see now");
   });
 
-  test("queued canonical local descriptions upgrade to resolved Linear URLs on outbound send", async () => {
+  test("queued canonical local descriptions upgrade to safe Linear mention URLs on outbound send", async () => {
     const repoDir = createRepo();
     await runEval(repoDir, "seed_cli_queue_fixture");
     await runCli(repoDir, [
@@ -599,7 +635,7 @@ describe("toLinearRichDescription", () => {
     };
     expect(payload.canonicalDescription).toContain("https://lb-ref.invalid/issue?");
     expect(payload.outboundDescription).toBe(
-      "the final test to https://linear.app/linear-beads/issue/LIN-4471 let us see now"
+      "the final test to <https://linear.app/linear-beads/issue/LIN-4471> let us see now"
     );
   });
 });

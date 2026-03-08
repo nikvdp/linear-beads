@@ -72,4 +72,18 @@ describe("issue reference codec helpers", () => {
     const plain = renderIssueLinksAsPlainText(rich);
     expect(plain).toBe("Blocks LOCAL-001 and ABC-42.");
   });
+
+  test("renders malformed raw-url labels back to plain IDs with punctuation preserved", () => {
+    const rich =
+      "Broken [https://linear.app/linear-beads/issue/LIN-4432:](<https://linear.app/linear-beads/issue/LIN-4432:>)";
+    const plain = renderIssueLinksAsPlainText(rich);
+    expect(plain).toBe("Broken LIN-4432:");
+  });
+
+  test("keeps issue-link markup literal inside backticks", () => {
+    const rich =
+      "Keep `[LIN-4432](https://linear.app/linear-beads/issue/LIN-4432)` and `[https://linear.app/linear-beads/issue/LIN-4433:](<https://linear.app/linear-beads/issue/LIN-4433:>)` literal";
+    const plain = renderIssueLinksAsPlainText(rich);
+    expect(plain).toBe(rich);
+  });
 });
