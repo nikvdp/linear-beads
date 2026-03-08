@@ -218,6 +218,10 @@ function issueIdentifierToLinearUrl(identifier: string, workspaceUrlKey: string)
   return `https://linear.app/${workspaceUrlKey}/issue/${normalizeIssueToken(identifier)}`;
 }
 
+function issueIdentifierToGenericLinearUrl(identifier: string): string {
+  return `https://linear.app/issue/${normalizeIssueToken(identifier)}`;
+}
+
 type TrackedIssueRef = {
   localId: string;
   syncKey: string;
@@ -287,11 +291,17 @@ async function rewriteIssueTokenForLinearDescription(
   const normalized = normalizeIssueToken(token);
   const trackedRef = resolveTrackedIssueRef(normalized);
   if (trackedRef) {
-    if (trackedRef.linearIdentifier && workspaceUrlKey) {
+    if (trackedRef.linearIdentifier) {
+      if (workspaceUrlKey) {
+        return {
+          text: normalized,
+          url: issueIdentifierToLinearUrl(trackedRef.linearIdentifier, workspaceUrlKey),
+          format: "url",
+        };
+      }
       return {
         text: normalized,
-        url: issueIdentifierToLinearUrl(trackedRef.linearIdentifier, workspaceUrlKey),
-        format: "url",
+        url: issueIdentifierToGenericLinearUrl(trackedRef.linearIdentifier),
       };
     }
     return {
@@ -300,11 +310,13 @@ async function rewriteIssueTokenForLinearDescription(
     };
   }
 
-  if (
-    !normalized.startsWith("LOCAL-") &&
-    CANONICAL_ISSUE_TOKEN_RE.test(normalized) &&
-    workspaceUrlKey
-  ) {
+  if (!normalized.startsWith("LOCAL-") && CANONICAL_ISSUE_TOKEN_RE.test(normalized)) {
+    if (!workspaceUrlKey) {
+      return {
+        text: normalized,
+        url: issueIdentifierToGenericLinearUrl(normalized),
+      };
+    }
     return {
       text: normalized,
       url: issueIdentifierToLinearUrl(normalized, workspaceUrlKey),
@@ -501,100 +513,6 @@ function splitDescriptionAndSyncKey(description?: string | null): {
 function isUuid(value: string | undefined): value is string {
   if (!value) return false;
   return UUID_RE.test(value.trim());
-}
-
-function issueIdentifierToLinearUrl(identifier: string): string {
-  return `https://linear.app/issue/${normalizeIssueToken(identifier)}`;
-}
-
-function rewriteIssueTokenForLinearDescription(token: string): DescriptionRefRewrite | null {
-  const normalized = normalizeIssueToken(token);
-  if (normalized.startsWith("LOCAL-")) {
-    const localId = resolveIssueLocalId(normalized);
-    const syncKey = getIssueSyncKey(localId);
-    if (!syncKey) {
-      return null;
-    }
-    const linearIdentifier = getLinearIdentifierForLocalId(localId);
-    if (linearIdentifier) {
-      return {
-        text: normalized,
-        url: issueIdentifierToLinearUrl(linearIdentifier),
-      };
-    }
-    return {
-      text: normalized,
-      url: buildLbRefUrl(syncKey, normalized),
-    };
-  }
-
-  if (CANONICAL_ISSUE_TOKEN_RE.test(normalized)) {
-    return {
-      text: normalized,
-      url: issueIdentifierToLinearUrl(normalized),
-    };
-  }
-
-  return null;
-}
-
-function upgradeDescriptionLbRefsToLinearUrls(description: string): string {
-  return (
-    upgradeLbRefLinks(description, (ref) => {
-      const synced = getSyncedIssueBySyncKey(ref.syncKey);
-      if (!synced?.linear_identifier) {
-        return null;
-      }
-      return issueIdentifierToLinearUrl(synced.linear_identifier);
-    }) || description
-  );
-}
-
-export function toLinearRichDescription(description: string | undefined): string | undefined {
-  if (description === undefined) {
-    return undefined;
-  }
-  if (DEBUG_DISABLE_DESCRIPTION_REF_CODEC) {
-    return description;
-  }
-  const encoded = encodeIssueRefsInDescription(description, rewriteIssueTokenForLinearDescription);
-  if (encoded === undefined) {
-    return undefined;
-  }
-  return upgradeDescriptionLbRefsToLinearUrls(encoded);
-}
-
-async function applyDescriptionAutoHealIfNeeded(
-  issueId: string,
-  input: Record<string, unknown>,
-  client: GraphqlRequestClient
-): Promise<void> {
-  if (input.description !== undefined) {
-    return;
-  }
-
-  const query = `
-    query GetIssueDescriptionForHeal($id: String!) {
-      issue(id: $id) {
-        description
-      }
-    }
-  `;
-
-  try {
-    const result = await client.request<{ issue: { description?: string | null } | null }>(query, {
-      id: issueId,
-    });
-
-    const currentDescription = result.issue?.description ?? undefined;
-    const healedDescription = toLinearRichDescription(currentDescription);
-
-    if (currentDescription && healedDescription && healedDescription !== currentDescription) {
-      input.description = healedDescription;
-    }
-  } catch {
-    // Best-effort healing only; do not block update/close on a failed read.
-  }
 }
 
 /**
@@ -1871,7 +1789,6 @@ export async function updateIssue(
   if (updates.assigneeId !== undefined) {
     input.assigneeId = updates.assigneeId;
   }
-  await applyDescriptionAutoHealIfNeeded(issueId, input, client);
 
   const mutation = `
     mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
@@ -1902,6 +1819,10 @@ async function applyDeferredDescriptionAutoHeal(
   input: Record<string, unknown>,
   client: GraphqlRequestClient
 ): Promise<void> {
+  if (input.description !== undefined) {
+    return;
+  }
+
   const query = `
     query GetIssueDescriptionForHeal($id: String!) {
       issue(id: $id) {
@@ -1973,7 +1894,7 @@ export async function closeIssue(
 
   // Build input - add reason as comment if provided
   const input: Record<string, unknown> = { stateId };
-  await applyDescriptionAutoHealIfNeeded(issueId, input, client);
+  await applyDeferredDescriptionAutoHeal(issueId, input, client);
 
   const mutation = `
     mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
