@@ -56,6 +56,26 @@ export interface Issue {
   dependencies?: Dependency[];
 }
 
+export type MediaKind = "image" | "file";
+
+export type MediaSource = "description" | "attachment";
+
+export interface MediaItem {
+  id: string;
+  issue_local_id?: string;
+  kind: MediaKind;
+  label?: string;
+  remote_url?: string;
+  attachment_id?: string;
+  original_filename?: string;
+  mime_type?: string;
+  byte_size?: number;
+  local_path?: string;
+  source: MediaSource;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * Linear-specific types for internal use
  */

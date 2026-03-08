@@ -14,6 +14,9 @@ import type {
   Dependency,
   Issue,
   MailMessage,
+  MediaItem,
+  MediaKind,
+  MediaSource,
   MailRecipient,
   MailRecipientKind,
   MailThread,
@@ -32,6 +35,7 @@ const LOCAL_ID_WITH_DASH_RE = /^local-(\d+)$/i;
 const LINEAR_ID_WITH_DASH_RE = /^([A-Za-z]+)-(\d+)$/;
 const LINEAR_ID_NO_DASH_RE = /^([A-Za-z]+)(\d+)$/;
 const NUMERIC_ISSUE_ID_RE = /^\d+$/;
+const MEDIA_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{2,63}$/;
 const MAIL_RECIPIENT_KINDS: readonly MailRecipientKind[] = ["to", "cc", "bcc"];
 const AGENT_ADJECTIVES = [
   "Amber",
@@ -406,6 +410,31 @@ function initSchema(db: Database, dbPath: string): void {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS media_items (
+      media_id TEXT PRIMARY KEY,
+      issue_local_id TEXT,
+      source_type TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      label TEXT,
+      original_filename TEXT,
+      mime_type TEXT,
+      size_bytes INTEGER,
+      local_path TEXT,
+      remote_url TEXT,
+      linear_attachment_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_media_items_issue_local_id
+      ON media_items(issue_local_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_media_items_remote_url
+      ON media_items(remote_url)
+      WHERE remote_url IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_media_items_linear_attachment_id
+      ON media_items(linear_attachment_id)
+      WHERE linear_attachment_id IS NOT NULL;
   `);
 
   if (currentVersion < 2) {
@@ -634,6 +663,37 @@ function initSchema(db: Database, dbPath: string): void {
       WHERE sync_key IS NOT NULL;
     `);
     db.exec("PRAGMA user_version = 8");
+  }
+
+  if (currentVersion < 9) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS media_items (
+        media_id TEXT PRIMARY KEY,
+        issue_local_id TEXT,
+        source_type TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        label TEXT,
+        original_filename TEXT,
+        mime_type TEXT,
+        size_bytes INTEGER,
+        local_path TEXT,
+        remote_url TEXT,
+        linear_attachment_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_media_items_issue_local_id
+        ON media_items(issue_local_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_media_items_remote_url
+        ON media_items(remote_url)
+        WHERE remote_url IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_media_items_linear_attachment_id
+        ON media_items(linear_attachment_id)
+        WHERE linear_attachment_id IS NOT NULL;
+    `);
+
+    db.exec("PRAGMA user_version = 9");
   }
 
   ensureDependencyAliasIntegrity(db);
@@ -1179,6 +1239,204 @@ export function getCachedIssues(): Issue[] {
   >;
 
   return rows.map((row) => rowToIssue(row));
+}
+
+type CachedMediaInput = {
+  id: string;
+  issue_local_id?: string;
+  source?: MediaSource;
+  kind: MediaKind;
+  label?: string;
+  original_filename?: string;
+  mime_type?: string;
+  byte_size?: number;
+  local_path?: string;
+  remote_url?: string;
+  attachment_id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+function rowToMediaItem(row: Record<string, unknown>): MediaItem {
+  const rawSource = (row.source_type as string | null) || "description";
+  return {
+    id: row.media_id as string,
+    issue_local_id: (row.issue_local_id as string | null) || undefined,
+    kind: row.kind as MediaKind,
+    label: (row.label as string | null) || undefined,
+    original_filename: (row.original_filename as string | null) || undefined,
+    mime_type: (row.mime_type as string | null) || undefined,
+    byte_size:
+      typeof row.size_bytes === "number"
+        ? (row.size_bytes as number)
+        : row.size_bytes === null || row.size_bytes === undefined
+          ? undefined
+          : Number(row.size_bytes),
+    local_path: (row.local_path as string | null) || undefined,
+    remote_url: (row.remote_url as string | null) || undefined,
+    attachment_id: (row.linear_attachment_id as string | null) || undefined,
+    source: rawSource === "attachment" ? "attachment" : "description",
+    created_at: row.created_at as string,
+    updated_at: row.updated_at as string,
+  };
+}
+
+function upsertMediaItemRow(db: Database, item: CachedMediaInput): void {
+  const now = new Date().toISOString();
+  const createdAt = item.created_at || now;
+  const updatedAt = item.updated_at || now;
+  const issueLocalId = item.issue_local_id ? resolveIssueLocalId(item.issue_local_id) : null;
+  const sourceType = item.source || "description";
+
+  db.run(
+    `
+      INSERT INTO media_items (
+        media_id,
+        issue_local_id,
+        source_type,
+        kind,
+        label,
+        original_filename,
+        mime_type,
+        size_bytes,
+        local_path,
+        remote_url,
+        linear_attachment_id,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(media_id) DO UPDATE SET
+        issue_local_id = COALESCE(excluded.issue_local_id, media_items.issue_local_id),
+        source_type = excluded.source_type,
+        kind = excluded.kind,
+        label = COALESCE(excluded.label, media_items.label),
+        original_filename = COALESCE(excluded.original_filename, media_items.original_filename),
+        mime_type = COALESCE(excluded.mime_type, media_items.mime_type),
+        size_bytes = COALESCE(excluded.size_bytes, media_items.size_bytes),
+        local_path = COALESCE(excluded.local_path, media_items.local_path),
+        remote_url = COALESCE(excluded.remote_url, media_items.remote_url),
+        linear_attachment_id = COALESCE(
+          excluded.linear_attachment_id,
+          media_items.linear_attachment_id
+        ),
+        updated_at = excluded.updated_at
+    `,
+    [
+      item.id,
+      issueLocalId,
+      sourceType,
+      item.kind,
+      item.label || null,
+      item.original_filename || null,
+      item.mime_type || null,
+      item.byte_size ?? null,
+      item.local_path || null,
+      item.remote_url || null,
+      item.attachment_id || null,
+      createdAt,
+      updatedAt,
+    ]
+  );
+}
+
+function nextGeneratedMediaId(db: Database): string {
+  while (true) {
+    const candidate = `m_${randomUUID().replace(/-/g, "").slice(0, 10)}`;
+    const existing = db
+      .query("SELECT 1 as hit FROM media_items WHERE media_id = ? LIMIT 1")
+      .get(candidate) as { hit: 1 } | null;
+    if (!existing) {
+      return candidate;
+    }
+  }
+}
+
+export function isValidMediaId(value: string | undefined): value is string {
+  if (!value) return false;
+  return MEDIA_ID_RE.test(value.trim());
+}
+
+export function generateMediaId(preferredId?: string): string {
+  const db = getDatabase();
+  const trimmedPreferred = preferredId?.trim();
+  if (trimmedPreferred) {
+    if (!isValidMediaId(trimmedPreferred)) {
+      throw new Error(
+        `Invalid media id '${preferredId}'. Media ids must match ${MEDIA_ID_RE.toString()}.`
+      );
+    }
+
+    const existing = db
+      .query("SELECT 1 as hit FROM media_items WHERE media_id = ? LIMIT 1")
+      .get(trimmedPreferred) as { hit: 1 } | null;
+    if (!existing) {
+      return trimmedPreferred;
+    }
+  }
+
+  return nextGeneratedMediaId(db);
+}
+
+export function cacheMediaItem(item: CachedMediaInput): MediaItem {
+  const db = getDatabase();
+  const id = item.id.trim();
+  if (!isValidMediaId(id)) {
+    throw new Error(`Invalid media id '${item.id}'.`);
+  }
+
+  runWithBusyRetry(() => {
+    upsertMediaItemRow(db, { ...item, id });
+  });
+
+  const cached = getMediaItem(id);
+  if (!cached) {
+    throw new Error(`Failed to cache media item '${id}'.`);
+  }
+  return cached;
+}
+
+export function getMediaItem(mediaId: string): MediaItem | null {
+  const db = getDatabase();
+  const row = db
+    .query("SELECT * FROM media_items WHERE media_id = ? LIMIT 1")
+    .get(mediaId) as Record<string, unknown> | null;
+  if (!row) return null;
+  return rowToMediaItem(row);
+}
+
+export function getMediaItemByRemoteUrl(remoteUrl: string): MediaItem | null {
+  const db = getDatabase();
+  const row = db
+    .query("SELECT * FROM media_items WHERE remote_url = ? LIMIT 1")
+    .get(remoteUrl) as Record<string, unknown> | null;
+  if (!row) return null;
+  return rowToMediaItem(row);
+}
+
+export function getMediaItemByLinearAttachmentId(linearAttachmentId: string): MediaItem | null {
+  const db = getDatabase();
+  const row = db
+    .query("SELECT * FROM media_items WHERE linear_attachment_id = ? LIMIT 1")
+    .get(linearAttachmentId) as Record<string, unknown> | null;
+  if (!row) return null;
+  return rowToMediaItem(row);
+}
+
+export function listMediaItemsForIssue(issueId: string): MediaItem[] {
+  const db = getDatabase();
+  const resolvedIssueId = resolveIssueLocalId(issueId);
+  const rows = db
+    .query(
+      `
+      SELECT *
+      FROM media_items
+      WHERE issue_local_id = ?
+      ORDER BY created_at ASC, media_id ASC
+    `
+    )
+    .all(resolvedIssueId) as Array<Record<string, unknown>>;
+  return rows.map((row) => rowToMediaItem(row));
 }
 
 /**
@@ -2279,6 +2537,10 @@ export function replaceIssueId(localId: string, linearIdentifier: string, linear
         resolvedLocalId,
         mergedAliasLocalId,
       ]);
+      db.run("UPDATE media_items SET issue_local_id = ? WHERE issue_local_id = ?", [
+        resolvedLocalId,
+        mergedAliasLocalId,
+      ]);
       db.run(
         `
         INSERT OR REPLACE INTO issue_id_map (local_id, linear_id, created_at)
@@ -2342,6 +2604,10 @@ export function replaceIssueId(localId: string, linearIdentifier: string, linear
       resolvedLocalId,
       sourceLocalId,
     ]);
+    db.run(
+      "UPDATE media_items SET issue_local_id = ? WHERE issue_local_id = ? OR issue_local_id = ?",
+      [resolvedLocalId, resolvedLocalId, sourceLocalId]
+    );
   });
 
   requestJsonlExport();

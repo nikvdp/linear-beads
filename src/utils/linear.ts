@@ -35,11 +35,12 @@ import {
   cacheViewer,
   getCachedViewer,
   getIssueSyncKey,
+  isValidMediaId,
   getLinearIdentifierForLocalId,
   getSyncedIssueBySyncKey,
   resolveIssueLocalId,
 } from "./database.js";
-import type { Issue, IssueType, Priority, LinearIssue, IssueStatus } from "../types.js";
+import type { Issue, IssueType, Priority, LinearIssue, IssueStatus, MediaKind } from "../types.js";
 import {
   linearStateToStatus,
   linearToPriority,
@@ -60,8 +61,10 @@ export type GraphqlRequestClient = {
 const SYNC_KEY_MARKER_RE = /<!--\s*lb:sync_key=([a-f0-9-]{8,})\s*-->/i;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ISSUE_LINK_RE = /\[([^\]]+)\]\(([^)\s]+)\)/g;
+const MARKDOWN_LINK_OR_IMAGE_RE = /(!?)\[([^\]]*)\]\(([^)\s]+)\)/g;
 const ISSUE_TOKEN_RE = /\b([a-z][a-z0-9]{1,14}-\d+)\b/gi;
 const CANONICAL_ISSUE_TOKEN_RE = /^[A-Z][A-Z0-9]{1,14}-\d+$/;
+const LB_MEDIA_TARGET_PREFIX = "lb-media:";
 const LB_REF_HOST = "lb-ref.invalid";
 const LB_REF_PATH = "/issue";
 const LINEAR_ISSUE_PATH_RE = /^(?:\/[^/]+)?\/issue\/([a-z][a-z0-9]{1,14}-\d+)(?:\/[^/?#]+)?\/?$/i;
@@ -87,6 +90,15 @@ type ProtectedSpan = {
 export type LbRefLink = {
   syncKey: string;
   hint?: string;
+};
+
+export type CanonicalMediaToken = {
+  full: string;
+  label: string;
+  target: string;
+  mediaId: string;
+  kind: MediaKind;
+  index: number;
 };
 
 let workspaceUrlKeyCache: string | null = null;
@@ -270,6 +282,103 @@ export function parseLbRefUrl(rawUrl: string): LbRefLink | null {
 
   const hint = parsed.searchParams.get("hint")?.trim() || undefined;
   return { syncKey, hint };
+}
+
+export function parseLbMediaTarget(rawTarget: string): { mediaId: string } | null {
+  const normalized = stripMarkdownUrlWrapper(rawTarget);
+  if (!normalized.startsWith(LB_MEDIA_TARGET_PREFIX)) {
+    return null;
+  }
+
+  const mediaId = normalized.slice(LB_MEDIA_TARGET_PREFIX.length).trim();
+  if (!isValidMediaId(mediaId)) {
+    return null;
+  }
+
+  return { mediaId };
+}
+
+export function buildLbMediaTarget(mediaId: string): string {
+  if (!isValidMediaId(mediaId)) {
+    throw new Error(`Invalid media id '${mediaId}'.`);
+  }
+  return `${LB_MEDIA_TARGET_PREFIX}${mediaId}`;
+}
+
+export function renderCanonicalMediaToken(input: {
+  mediaId: string;
+  kind: MediaKind;
+  label?: string;
+}): string {
+  const label = input.label || "";
+  const target = buildLbMediaTarget(input.mediaId);
+  return input.kind === "image" ? `![${label}](${target})` : `[${label}](${target})`;
+}
+
+export function collectCanonicalMediaTokens(description: string): CanonicalMediaToken[] {
+  const tokens: CanonicalMediaToken[] = [];
+
+  for (const match of description.matchAll(MARKDOWN_LINK_OR_IMAGE_RE)) {
+    if (match.index === undefined) continue;
+    const parsed = parseLbMediaTarget(match[3]);
+    if (!parsed) continue;
+    tokens.push({
+      full: match[0],
+      label: match[2],
+      target: match[3],
+      mediaId: parsed.mediaId,
+      kind: match[1] === "!" ? "image" : "file",
+      index: match.index,
+    });
+  }
+
+  return tokens;
+}
+
+export function rewriteCanonicalMediaTokensOutsideBackticks(
+  description: string,
+  rewriteToken: (token: CanonicalMediaToken) => string
+): string {
+  const spans = collectBacktickSpans(description);
+  const rewriteChunk = (chunk: string, offset: number): string =>
+    chunk.replace(
+      MARKDOWN_LINK_OR_IMAGE_RE,
+      (full, bang: string, label: string, target: string, index: number) => {
+        const parsed = parseLbMediaTarget(target);
+        if (!parsed) {
+          return full;
+        }
+
+        return rewriteToken({
+          full,
+          label,
+          target,
+          mediaId: parsed.mediaId,
+          kind: bang === "!" ? "image" : "file",
+          index: offset + index,
+        });
+      }
+    );
+
+  if (spans.length === 0) {
+    return rewriteChunk(description, 0);
+  }
+
+  let cursor = 0;
+  let output = "";
+  for (const span of spans) {
+    if (span.start > cursor) {
+      output += rewriteChunk(description.slice(cursor, span.start), cursor);
+    }
+    output += description.slice(span.start, span.end);
+    cursor = span.end;
+  }
+
+  if (cursor < description.length) {
+    output += rewriteChunk(description.slice(cursor), cursor);
+  }
+
+  return output;
 }
 
 type LinearIssueUrlMatch = {
