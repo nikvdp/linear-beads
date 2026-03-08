@@ -79,3 +79,9 @@ Commit atomically as you work (one logical change per commit) unless told otherw
   - outbound sync adapter / codec
   - inbound render / CLI presentation
 - User-facing output should stay simple and literal where possible, even if adapter storage uses richer remote representations.
+- Linear description round-trip rules:
+  - The Linear UI should receive true issue mentions, not authored markdown links.
+  - The safe authoring form is an angle-wrapped Linear issue URL such as `<https://linear.app/<workspace>/issue/LIN-123>`.
+  - Linear API readback may normalize valid mentions into markdown-link-looking `description` text; treat that as stable readback, not as a signal to rewrite again.
+  - Never rewrite issue refs inside backticks or fenced code.
+  - Raw URL plus trailing punctuation like `https://.../LIN-123:` is invalid for this path and must be healed into a safe mention form with punctuation outside the URL.
