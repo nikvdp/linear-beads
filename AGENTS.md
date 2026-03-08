@@ -93,4 +93,5 @@ Commit atomically as you work (one logical change per commit) unless told otherw
     - markdown image syntax becomes a native `image` node in Linear document content
     - markdown link syntax to an uploaded asset becomes a native `file` node in Linear document content
   - Linear issue attachments are a separate native surface from description-embedded media; do not assume one automatically creates the other.
+  - `uploads.linear.app` asset downloads are private; retrieval commands must send the Linear auth header instead of assuming the asset URL is public.
   - `lb show` should render canonical `lb-media:<id>` markers, never raw Linear upload URLs.
