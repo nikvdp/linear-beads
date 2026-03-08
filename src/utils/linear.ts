@@ -222,6 +222,30 @@ function issueIdentifierToGenericLinearUrl(identifier: string): string {
   return `https://linear.app/issue/${normalizeIssueToken(identifier)}`;
 }
 
+function isGenericLinearIssueUrl(rawUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(stripMarkdownUrlWrapper(rawUrl));
+  } catch {
+    return false;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (host !== "linear.app" && !host.endsWith(".linear.app")) {
+    return false;
+  }
+
+  return /^\/issue\/[a-z][a-z0-9]{1,14}-\d+(?:\/[^/?#]+)?\/?$/i.test(parsed.pathname);
+}
+
+function shouldUpgradeGenericLinearMarkdownLink(label: string, linearIdentifier: string): boolean {
+  const normalizedLabel = normalizeIssueToken(label);
+  if (normalizedLabel.startsWith("LOCAL-")) {
+    return true;
+  }
+  return normalizedLabel === linearIdentifier;
+}
+
 type TrackedIssueRef = {
   localId: string;
   syncKey: string;
@@ -327,24 +351,34 @@ async function rewriteIssueTokenForLinearDescription(
   return null;
 }
 
-function upgradeDescriptionLbRefsToLinearUrls(
+function upgradeDescriptionIssueLinksToLinearUrls(
   description: string,
   workspaceUrlKey: string | null
 ): string {
-  return description.replace(ISSUE_LINK_RE, (full, _label: string, url: string) => {
+  return description.replace(ISSUE_LINK_RE, (full, label: string, url: string) => {
     const ref = parseLbRefUrl(url);
-    if (!ref) return full;
-
-    const synced = getSyncedIssueBySyncKey(ref.syncKey);
-    if (!synced?.linear_identifier) {
-      return full;
+    if (ref) {
+      const synced = getSyncedIssueBySyncKey(ref.syncKey);
+      if (!synced?.linear_identifier || !workspaceUrlKey) {
+        return full;
+      }
+      return issueIdentifierToLinearUrl(synced.linear_identifier, workspaceUrlKey);
     }
 
     if (!workspaceUrlKey) {
       return full;
     }
 
-    return issueIdentifierToLinearUrl(synced.linear_identifier, workspaceUrlKey);
+    const linearIdentifier = extractIssueIdentifierFromLinearUrl(url);
+    if (
+      linearIdentifier &&
+      isGenericLinearIssueUrl(url) &&
+      shouldUpgradeGenericLinearMarkdownLink(label, linearIdentifier)
+    ) {
+      return issueIdentifierToLinearUrl(linearIdentifier, workspaceUrlKey);
+    }
+
+    return full;
   });
 }
 
@@ -386,7 +420,7 @@ export async function toLinearRichDescription(
   if (encoded === undefined) {
     return undefined;
   }
-  return upgradeDescriptionLbRefsToLinearUrls(encoded, workspaceUrlKey);
+  return upgradeDescriptionIssueLinksToLinearUrls(encoded, workspaceUrlKey);
 }
 
 export async function encodeIssueRefsInDescription(
