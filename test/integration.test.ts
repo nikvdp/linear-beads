@@ -430,12 +430,14 @@ describe("lb CLI Integration Tests", () => {
 
   describe("show", () => {
     test("should show issue details", async () => {
+      const showDescription = `${TEST_PREFIX} Show description`;
+
       // Create an issue first
       const createResult = await lbJson<Array<{ id: string }>>(
         "create",
         `${TEST_PREFIX} Show test`,
         "-d",
-        "Test description",
+        showDescription,
         "--sync"
       );
       const issueId = createResult[0].id;
