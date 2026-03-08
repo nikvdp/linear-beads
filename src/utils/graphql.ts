@@ -306,11 +306,16 @@ export async function linearFetchWithRetry(
 export function getGraphQLClient(): GraphQLClient {
   if (!client) {
     const apiKey = getApiKey();
+    const fetchWithRetry: typeof fetch = Object.assign(
+      (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+        linearFetchWithRetry(input as string | URL | Request, init || {}),
+      fetch
+    );
     client = new GraphQLClient(LINEAR_ENDPOINT, {
       headers: {
         Authorization: apiKey,
       },
-      fetch: (input, init) => linearFetchWithRetry(input, init || {}),
+      fetch: fetchWithRetry,
     });
   }
   return client;
