@@ -37,10 +37,7 @@ import {
   resolveDescriptionInput,
   rewriteEscapedNewlines,
 } from "../utils/description-input.js";
-import {
-  cachePreparedDescriptionMedia,
-  planDescriptionMediaInput,
-} from "../utils/media-input.js";
+import { cachePreparedDescriptionMedia, planDescriptionMediaInput } from "../utils/media-input.js";
 
 const VALID_DEP_TYPES = ["blocks", "related", "discovered-from"];
 

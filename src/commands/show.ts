@@ -45,12 +45,16 @@ export const showCommand = new Command("show")
 
       let issue;
 
-      // With --sync, always fetch fresh from Linear to get relations (skip in local-only mode)
-      if (options.sync && !localOnly && !isLocalId(resolvedId)) {
-        issue = await fetchIssue(resolvedId);
+      // Prefer a fresh remote fetch for synced issues so show includes current relations and media.
+      if (!localOnly && !isLocalId(resolvedId)) {
+        try {
+          issue = await fetchIssue(resolvedId);
+        } catch {
+          issue = undefined;
+        }
       }
 
-      // Try cache if not synced or fetch failed
+      // Try cache if fetch failed or this is a local-only issue.
       if (!issue) {
         issue = getCachedIssue(resolvedId);
       }
@@ -96,7 +100,10 @@ export const showCommand = new Command("show")
       if (options.json) {
         const jsonOutput = {
           ...issue,
-          description: normalizeIssueDescriptionForOutput(issue.description),
+          description: normalizeIssueDescriptionForOutput(
+            issue.description,
+            issue.local_id || issue.id
+          ),
           parent: parent || null,
           children: children.length > 0 ? children : undefined,
           blocks: blocks.length > 0 ? blocks : undefined,

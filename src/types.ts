@@ -105,6 +105,17 @@ export interface LinearIssue {
     email: string;
     name: string;
   } | null;
+  attachments?: {
+    nodes: Array<{
+      id: string;
+      title: string;
+      subtitle?: string | null;
+      url: string;
+      sourceType?: string | null;
+      metadata?: Record<string, unknown> | null;
+      bodyData?: string | null;
+    }>;
+  };
   parent?: {
     id: string;
     identifier: string;

@@ -2,6 +2,7 @@
  * Linear API operations
  */
 
+import { basename } from "path";
 import {
   createLinearPaginationGuard,
   getGraphQLClient,
@@ -33,14 +34,28 @@ import {
   updateLastFullSync,
   pruneStaleIssues,
   cacheViewer,
+  cacheMediaItem,
   getCachedViewer,
+  generateMediaId,
+  getMediaItem,
+  getMediaItemByLinearAttachmentId,
+  getMediaItemByRemoteUrl,
   getIssueSyncKey,
   isValidMediaId,
   getLinearIdentifierForLocalId,
   getSyncedIssueBySyncKey,
+  listMediaItemsForIssue,
   resolveIssueLocalId,
 } from "./database.js";
-import type { Issue, IssueType, Priority, LinearIssue, IssueStatus, MediaKind } from "../types.js";
+import type {
+  Issue,
+  IssueType,
+  Priority,
+  LinearIssue,
+  IssueStatus,
+  MediaItem,
+  MediaKind,
+} from "../types.js";
 import {
   linearStateToStatus,
   linearToPriority,
@@ -68,6 +83,22 @@ const LB_MEDIA_TARGET_PREFIX = "lb-media:";
 const LB_REF_HOST = "lb-ref.invalid";
 const LB_REF_PATH = "/issue";
 const LINEAR_ISSUE_PATH_RE = /^(?:\/[^/]+)?\/issue\/([a-z][a-z0-9]{1,14}-\d+)(?:\/[^/?#]+)?\/?$/i;
+const LINEAR_UPLOAD_HOST = "uploads.linear.app";
+const IMAGE_FILE_EXTENSIONS = new Set([
+  ".apng",
+  ".avif",
+  ".bmp",
+  ".gif",
+  ".heic",
+  ".heif",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".svg",
+  ".tif",
+  ".tiff",
+  ".webp",
+]);
 
 export type DescriptionRefRewrite = {
   text: string;
@@ -381,6 +412,407 @@ export function rewriteCanonicalMediaTokensOutsideBackticks(
   return output;
 }
 
+async function rewriteCanonicalMediaTokensOutsideBackticksAsync(
+  description: string,
+  rewriteToken: (token: CanonicalMediaToken) => Promise<string>
+): Promise<string> {
+  const spans = collectBacktickSpans(description);
+  const rewriteChunk = async (chunk: string, offset: number): Promise<string> => {
+    const matches = [...chunk.matchAll(MARKDOWN_LINK_OR_IMAGE_RE)];
+    if (matches.length === 0) {
+      return chunk;
+    }
+
+    let cursor = 0;
+    let output = "";
+    for (const match of matches) {
+      const index = match.index ?? 0;
+      const full = match[0];
+      output += chunk.slice(cursor, index);
+
+      const parsed = parseLbMediaTarget(match[3]);
+      if (!parsed) {
+        output += full;
+      } else {
+        output += await rewriteToken({
+          full,
+          label: match[2],
+          target: match[3],
+          mediaId: parsed.mediaId,
+          kind: match[1] === "!" ? "image" : "file",
+          index: offset + index,
+        });
+      }
+      cursor = index + full.length;
+    }
+
+    output += chunk.slice(cursor);
+    return output;
+  };
+
+  if (spans.length === 0) {
+    return await rewriteChunk(description, 0);
+  }
+
+  let cursor = 0;
+  let output = "";
+  for (const span of spans) {
+    if (span.start > cursor) {
+      output += await rewriteChunk(description.slice(cursor, span.start), cursor);
+    }
+    output += description.slice(span.start, span.end);
+    cursor = span.end;
+  }
+
+  if (cursor < description.length) {
+    output += await rewriteChunk(description.slice(cursor), cursor);
+  }
+
+  return output;
+}
+
+function rewriteMarkdownLinksAndImagesOutsideBackticks(
+  text: string,
+  rewriteLink: (full: string, kind: MediaKind, label: string, url: string) => string
+): string {
+  const spans = collectBacktickSpans(text);
+  const rewriteChunk = (chunk: string): string =>
+    chunk.replace(MARKDOWN_LINK_OR_IMAGE_RE, (full, bang: string, label: string, url: string) =>
+      rewriteLink(full, bang === "!" ? "image" : "file", label, url)
+    );
+
+  if (spans.length === 0) {
+    return rewriteChunk(text);
+  }
+
+  let cursor = 0;
+  let output = "";
+  for (const span of spans) {
+    if (span.start > cursor) {
+      output += rewriteChunk(text.slice(cursor, span.start));
+    }
+    output += text.slice(span.start, span.end);
+    cursor = span.end;
+  }
+
+  if (cursor < text.length) {
+    output += rewriteChunk(text.slice(cursor));
+  }
+
+  return output;
+}
+
+function filenameExtension(filename: string | undefined): string {
+  if (!filename) {
+    return "";
+  }
+  const normalized = filename.trim().toLowerCase();
+  const lastDot = normalized.lastIndexOf(".");
+  if (lastDot <= 0 || lastDot === normalized.length - 1) {
+    return "";
+  }
+  return normalized.slice(lastDot);
+}
+
+function inferMediaKind(input: {
+  label?: string;
+  url?: string;
+  mimeType?: string;
+  fallback?: MediaKind;
+}): MediaKind {
+  const normalizedMimeType = input.mimeType?.trim().toLowerCase();
+  if (normalizedMimeType?.startsWith("image/")) {
+    return "image";
+  }
+
+  if (
+    IMAGE_FILE_EXTENSIONS.has(filenameExtension(input.label)) ||
+    IMAGE_FILE_EXTENSIONS.has(filenameExtension(input.url))
+  ) {
+    return "image";
+  }
+
+  return input.fallback || "file";
+}
+
+function isLinearUploadUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(stripMarkdownUrlWrapper(rawUrl));
+    return parsed.hostname.toLowerCase() === LINEAR_UPLOAD_HOST;
+  } catch {
+    return false;
+  }
+}
+
+function guessFilenameFromUrl(rawUrl: string): string | undefined {
+  try {
+    const parsed = new URL(stripMarkdownUrlWrapper(rawUrl));
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    return parts.at(-1);
+  } catch {
+    return undefined;
+  }
+}
+
+function preferredMediaLabel(item: MediaItem, fallbackLabel?: string): string {
+  if (item.label && item.label.trim()) {
+    return item.label;
+  }
+  if (fallbackLabel && fallbackLabel.trim()) {
+    return fallbackLabel;
+  }
+  if (item.original_filename && item.original_filename.trim()) {
+    return item.original_filename;
+  }
+  return item.id;
+}
+
+function registerRemoteDescriptionMedia(
+  issueId: string | undefined,
+  token: { kind: MediaKind; label: string; url: string }
+): MediaItem {
+  const existing = getMediaItemByRemoteUrl(token.url);
+  const mediaId = existing?.id || generateMediaId();
+  const issueLocalId = issueId ? resolveIssueLocalId(issueId) : existing?.issue_local_id;
+  const next = cacheMediaItem({
+    id: mediaId,
+    issue_local_id: issueLocalId,
+    source: "description",
+    kind: existing?.kind || token.kind,
+    label: existing?.label || token.label || undefined,
+    original_filename:
+      existing?.original_filename || token.label || guessFilenameFromUrl(token.url) || undefined,
+    mime_type: existing?.mime_type,
+    byte_size: existing?.byte_size,
+    local_path: existing?.local_path,
+    remote_url: token.url,
+    attachment_id: existing?.attachment_id,
+  });
+  return next;
+}
+
+function registerIssueAttachments(issueId: string, issue: LinearIssue): void {
+  const issueLocalId = resolveIssueLocalId(issueId);
+  const attachments = issue.attachments?.nodes || [];
+  for (const attachment of attachments) {
+    const existing =
+      getMediaItemByLinearAttachmentId(attachment.id) || getMediaItemByRemoteUrl(attachment.url);
+    const metadata = attachment.metadata || {};
+    const mimeType =
+      typeof metadata.mimetype === "string"
+        ? metadata.mimetype
+        : typeof metadata.mimeType === "string"
+          ? metadata.mimeType
+          : existing?.mime_type;
+    cacheMediaItem({
+      id: existing?.id || generateMediaId(),
+      issue_local_id: issueLocalId,
+      source: "attachment",
+      kind: existing?.kind || inferMediaKind({ label: attachment.title, mimeType }),
+      label: existing?.label || attachment.title || undefined,
+      original_filename:
+        existing?.original_filename ||
+        attachment.title ||
+        guessFilenameFromUrl(attachment.url) ||
+        undefined,
+      mime_type: mimeType,
+      byte_size:
+        typeof metadata.size === "number"
+          ? metadata.size
+          : typeof metadata.fileSize === "number"
+            ? metadata.fileSize
+            : existing?.byte_size,
+      local_path: existing?.local_path,
+      remote_url: attachment.url,
+      attachment_id: attachment.id,
+    });
+  }
+}
+
+async function ensureLinearMediaRemoteUrl(
+  mediaId: string,
+  client: GraphqlRequestClient
+): Promise<MediaItem> {
+  const item = getMediaItem(mediaId);
+  if (!item) {
+    throw new Error(`Unknown media id '${mediaId}'.`);
+  }
+  if (item.remote_url) {
+    return item;
+  }
+  if (!item.local_path) {
+    throw new Error(`Media '${mediaId}' has no local file path and no remote URL.`);
+  }
+
+  const file = Bun.file(item.local_path);
+  if (!(await file.exists())) {
+    throw new Error(`Media file not found: ${item.local_path}`);
+  }
+
+  const filename = item.original_filename || basename(item.local_path);
+  const contentType = item.mime_type || file.type || "application/octet-stream";
+  const size = item.byte_size ?? file.size;
+
+  const mutation = `
+    mutation FileUpload($filename: String!, $contentType: String!, $size: Int!) {
+      fileUpload(filename: $filename, contentType: $contentType, size: $size) {
+        uploadFile {
+          uploadUrl
+          assetUrl
+          headers {
+            key
+            value
+          }
+          filename
+          contentType
+          size
+        }
+      }
+    }
+  `;
+
+  const result = await client.request<{
+    fileUpload?: {
+      uploadFile?: {
+        uploadUrl: string;
+        assetUrl: string;
+        headers?: Array<{ key: string; value: string }> | Record<string, string> | null;
+        filename?: string | null;
+        contentType?: string | null;
+        size?: number | null;
+      } | null;
+    } | null;
+  }>(mutation, {
+    filename,
+    contentType,
+    size,
+  });
+
+  const uploadFile = result.fileUpload?.uploadFile;
+  if (!uploadFile?.uploadUrl || !uploadFile.assetUrl) {
+    throw new Error(`Linear file upload failed for media '${mediaId}'.`);
+  }
+
+  const headers = new Headers();
+  if (Array.isArray(uploadFile.headers)) {
+    for (const header of uploadFile.headers) {
+      headers.set(header.key, header.value);
+    }
+  } else {
+    for (const [key, value] of Object.entries(uploadFile.headers || {})) {
+      headers.set(key, value);
+    }
+  }
+  if (!headers.has("content-type")) {
+    headers.set("content-type", contentType);
+  }
+
+  const uploadResponse = await fetch(uploadFile.uploadUrl, {
+    method: "PUT",
+    headers,
+    body: file,
+  });
+  if (!uploadResponse.ok) {
+    throw new Error(
+      `Linear media upload PUT failed for '${mediaId}' with ${uploadResponse.status}.`
+    );
+  }
+
+  return cacheMediaItem({
+    id: item.id,
+    issue_local_id: item.issue_local_id,
+    source: item.source,
+    kind: item.kind,
+    label: item.label,
+    original_filename: filename,
+    mime_type: uploadFile.contentType || contentType,
+    byte_size: uploadFile.size ?? size,
+    local_path: item.local_path,
+    remote_url: uploadFile.assetUrl,
+    attachment_id: item.attachment_id,
+  });
+}
+
+async function encodeCanonicalMediaTokensInDescription(
+  description: string | undefined,
+  client: GraphqlRequestClient
+): Promise<string | undefined> {
+  if (description === undefined) {
+    return undefined;
+  }
+
+  return await rewriteCanonicalMediaTokensOutsideBackticksAsync(description, async (token) => {
+    const item = await ensureLinearMediaRemoteUrl(token.mediaId, client);
+    const label = preferredMediaLabel(item, token.label);
+    return item.kind === "image"
+      ? `![${label}](${item.remote_url})`
+      : `[${label}](${item.remote_url})`;
+  });
+}
+
+export function renderDescriptionWithCanonicalMedia(
+  description: string | undefined,
+  issueId?: string
+): string | undefined {
+  if (description === undefined) {
+    return undefined;
+  }
+
+  const rendered = rewriteMarkdownLinksAndImagesOutsideBackticks(
+    description,
+    (full, kind, label, url) => {
+      if (!isLinearUploadUrl(url)) {
+        return full;
+      }
+
+      const item = registerRemoteDescriptionMedia(issueId, { kind, label, url });
+      return renderCanonicalMediaToken({
+        mediaId: item.id,
+        kind: item.kind,
+        label: preferredMediaLabel(item, label),
+      });
+    }
+  );
+
+  if (!issueId) {
+    return rendered;
+  }
+
+  const renderedMediaIds = new Set<string>();
+  rewriteCanonicalMediaTokensOutsideBackticks(rendered, (token) => {
+    renderedMediaIds.add(token.mediaId);
+    return token.full;
+  });
+
+  const allMedia = listMediaItemsForIssue(issueId);
+  const descriptionUrls = new Set(
+    allMedia
+      .filter((item) => item.source === "description" && item.remote_url)
+      .map((item) => item.remote_url as string)
+  );
+  const detachedTokens = allMedia
+    .filter((item) => item.source === "attachment")
+    .filter((item) => !renderedMediaIds.has(item.id))
+    .filter((item) => !item.remote_url || !descriptionUrls.has(item.remote_url))
+    .map((item) =>
+      renderCanonicalMediaToken({
+        mediaId: item.id,
+        kind: item.kind,
+        label: preferredMediaLabel(item),
+      })
+    );
+
+  if (detachedTokens.length === 0) {
+    return rendered;
+  }
+
+  if (!rendered || rendered.trim() === "") {
+    return detachedTokens.join("\n\n");
+  }
+
+  return `${rendered.replace(/\s+$/, "")}\n\n${detachedTokens.join("\n\n")}`;
+}
+
 type LinearIssueUrlMatch = {
   identifier: string;
   cleanUrl: string;
@@ -650,12 +1082,17 @@ export async function toLinearRichDescription(
     return undefined;
   }
   const canonicalLocalDescription = toCanonicalLocalDescription(description);
+  const client = options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
+  const mediaExpandedDescription = await encodeCanonicalMediaTokensInDescription(
+    canonicalLocalDescription,
+    client
+  );
   const workspaceUrlKey =
     options.workspaceUrlKey !== undefined
       ? options.workspaceUrlKey
-      : await getWorkspaceUrlKey(options.client);
+      : await getWorkspaceUrlKey(client);
 
-  const encoded = await encodeIssueRefsInDescription(canonicalLocalDescription, (token) =>
+  const encoded = await encodeIssueRefsInDescription(mediaExpandedDescription, (token) =>
     rewriteIssueTokenForLinearDescription(token, workspaceUrlKey)
   );
   if (encoded === undefined) {
@@ -803,13 +1240,17 @@ function linearToBdIssue(
   const labels = linear.labels.nodes.map((l) => l.name);
   const issueType = useTypes() ? labelToIssueType(labels) : undefined;
   const parsedDescription = splitDescriptionAndSyncKey(linear.description);
+  const renderedDescription = renderDescriptionWithCanonicalMedia(
+    parsedDescription.description,
+    linear.identifier
+  );
 
   const issue: Issue & { linear_state_id: string; sync_key?: string } = {
     id: linear.identifier,
     linear_id: linear.id,
     linear_identifier: linear.identifier,
     title: linear.title,
-    description: parsedDescription.description,
+    description: renderedDescription,
     status: linearStateToStatus(linear.state.type),
     priority: linearToPriority(linear.priority),
     created_at: linear.createdAt,
@@ -1706,6 +2147,17 @@ export async function fetchIssue(issueId: string): Promise<Issue | null> {
     query GetIssue($id: String!) {
       issue(id: $id) {
         ${ISSUE_WITH_RELATIONS_FRAGMENT}
+        attachments {
+          nodes {
+            id
+            title
+            subtitle
+            url
+            sourceType
+            metadata
+            bodyData
+          }
+        }
       }
     }
   `;
@@ -1717,6 +2169,7 @@ export async function fetchIssue(issueId: string): Promise<Issue | null> {
 
     if (!result.issue) return null;
 
+    registerIssueAttachments(issueId, result.issue);
     const issue = linearToBdIssue(result.issue);
     cacheIssue(issue);
 

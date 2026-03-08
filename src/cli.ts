@@ -17,6 +17,7 @@ import { closeCommand } from "./commands/close.js";
 import { touchCommand } from "./commands/touch.js";
 import { deleteCommand } from "./commands/delete.js";
 import { depCommand } from "./commands/dep.js";
+import { mediaCommand } from "./commands/media.js";
 import { syncCommand } from "./commands/sync.js";
 import { onboardCommand } from "./commands/onboard.js";
 import { migrateCommand } from "./commands/migrate.js";
@@ -114,6 +115,7 @@ if (process.argv.includes("--worker")) {
   program.addCommand(touchCommand);
   program.addCommand(deleteCommand);
   program.addCommand(depCommand);
+  program.addCommand(mediaCommand);
 
   // Sync & interop
   program.addCommand(syncCommand);

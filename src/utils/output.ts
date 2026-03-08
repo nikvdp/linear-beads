@@ -4,18 +4,24 @@
  */
 
 import type { Issue, Dependency } from "../types.js";
-import { renderIssueLinksAsPlainText } from "./linear.js";
+import { listMediaItemsForIssue } from "./database.js";
+import { renderDescriptionWithCanonicalMedia, renderIssueLinksAsPlainText } from "./linear.js";
 
-export function normalizeIssueDescriptionForOutput(description: unknown): string | undefined {
+export function normalizeIssueDescriptionForOutput(
+  description: unknown,
+  issueId?: string
+): string | undefined {
   if (typeof description !== "string") {
     return undefined;
   }
-  return renderIssueLinksAsPlainText(description);
+  const withCanonicalMedia = renderDescriptionWithCanonicalMedia(description, issueId);
+  return renderIssueLinksAsPlainText(withCanonicalMedia);
 }
 
 function issueWithPlainDescription(issue: Issue): Issue {
   const normalizedDescription = normalizeIssueDescriptionForOutput(
-    (issue as { description?: unknown }).description
+    (issue as { description?: unknown }).description,
+    issue.local_id || issue.id
   );
   if (normalizedDescription === undefined) {
     return issue;
@@ -128,6 +134,7 @@ const PRIORITY_LABELS: Record<number, string> = {
  */
 export function formatIssueHuman(issue: Issue, displayId?: string): string {
   const plainIssue = issueWithPlainDescription(issue);
+  const mediaCount = listMediaItemsForIssue(plainIssue.local_id || plainIssue.id).length;
   const lines: string[] = [];
   lines.push(`${displayId || plainIssue.id}: ${plainIssue.title}`);
   lines.push(`  Status: ${plainIssue.status}`);
@@ -137,6 +144,11 @@ export function formatIssueHuman(issue: Issue, displayId?: string): string {
   }
   if (plainIssue.assignee) {
     lines.push(`  Assignee: ${plainIssue.assignee}`);
+  }
+  if (mediaCount > 0) {
+    lines.push(
+      `  Media: ${mediaCount} ${mediaCount === 1 ? "item" : "items"} (use 'lb media' to retrieve them)`
+    );
   }
   if (plainIssue.description) {
     lines.push(`  Description: ${plainIssue.description}`);
