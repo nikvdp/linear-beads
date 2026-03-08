@@ -79,6 +79,11 @@ type MarkdownLinkMatch = {
   index: number;
 };
 
+type ProtectedSpan = {
+  start: number;
+  end: number;
+};
+
 export type LbRefLink = {
   syncKey: string;
   hint?: string;
@@ -119,45 +124,119 @@ function collectMarkdownLinks(text: string): MarkdownLinkMatch[] {
   return links;
 }
 
-function rewriteOutsideMarkdownLinks(
+function collectBacktickSpans(text: string): ProtectedSpan[] {
+  const spans: ProtectedSpan[] = [];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== "`") {
+      continue;
+    }
+
+    let tickCount = 1;
+    while (text[index + tickCount] === "`") {
+      tickCount += 1;
+    }
+
+    const marker = "`".repeat(tickCount);
+    const closingIndex = text.indexOf(marker, index + tickCount);
+    if (closingIndex === -1) {
+      index += tickCount - 1;
+      continue;
+    }
+
+    spans.push({
+      start: index,
+      end: closingIndex + tickCount,
+    });
+    index = closingIndex + tickCount - 1;
+  }
+
+  return spans;
+}
+
+function collectProtectedSpans(text: string): ProtectedSpan[] {
+  const spans = [
+    ...collectMarkdownLinks(text).map((link) => ({
+      start: link.index,
+      end: link.index + link.full.length,
+    })),
+    ...collectBacktickSpans(text),
+  ].sort((left, right) => left.start - right.start || left.end - right.end);
+
+  if (spans.length === 0) {
+    return spans;
+  }
+
+  const merged: ProtectedSpan[] = [spans[0]];
+  for (const span of spans.slice(1)) {
+    const last = merged[merged.length - 1];
+    if (span.start <= last.end) {
+      last.end = Math.max(last.end, span.end);
+      continue;
+    }
+    merged.push({ ...span });
+  }
+
+  return merged;
+}
+
+function formatLinearMentionUrl(url: string): string {
+  return `<${url}>`;
+}
+
+function rewriteOutsideProtectedSpans(
   text: string,
-  rewriteToken: (token: string) => DescriptionRefRewrite | null
+  rewriteChunk: (chunk: string) => string
 ): string {
-  const rewriteChunk = (chunk: string): string =>
-    chunk.replace(
-      ISSUE_TOKEN_RE,
-      (full, _token: string, offset: number, source: string): string => {
-        const prevChar = offset > 0 ? source[offset - 1] : "";
-        if (prevChar === "/" || prevChar === ":") {
-          return full;
-        }
-
-        const rewrite = rewriteToken(full);
-        if (!rewrite) return full;
-        if (rewrite.format === "url") return rewrite.url;
-        return `[${rewrite.text}](${rewrite.url})`;
-      }
-    );
-
-  const links = collectMarkdownLinks(text);
-  if (links.length === 0) {
+  const spans = collectProtectedSpans(text);
+  if (spans.length === 0) {
     return rewriteChunk(text);
   }
 
   let cursor = 0;
   let output = "";
-  for (const link of links) {
-    if (link.index > cursor) {
-      const chunk = text.slice(cursor, link.index);
+  for (const span of spans) {
+    if (span.start > cursor) {
+      const chunk = text.slice(cursor, span.start);
       output += rewriteChunk(chunk);
     }
-    output += link.full;
-    cursor = link.index + link.full.length;
+    output += text.slice(span.start, span.end);
+    cursor = span.end;
   }
 
   if (cursor < text.length) {
     const tail = text.slice(cursor);
     output += rewriteChunk(tail);
+  }
+
+  return output;
+}
+
+function rewriteIssueLinksOutsideBackticks(
+  text: string,
+  rewriteLink: (full: string, label: string, url: string) => string
+): string {
+  const spans = collectBacktickSpans(text);
+  const rewriteChunk = (chunk: string): string =>
+    chunk.replace(ISSUE_LINK_RE, (full, label: string, url: string) =>
+      rewriteLink(full, label, url)
+    );
+
+  if (spans.length === 0) {
+    return rewriteChunk(text);
+  }
+
+  let cursor = 0;
+  let output = "";
+  for (const span of spans) {
+    if (span.start > cursor) {
+      output += rewriteChunk(text.slice(cursor, span.start));
+    }
+    output += text.slice(span.start, span.end);
+    cursor = span.end;
+  }
+
+  if (cursor < text.length) {
+    output += rewriteChunk(text.slice(cursor));
   }
 
   return output;
@@ -193,7 +272,14 @@ export function parseLbRefUrl(rawUrl: string): LbRefLink | null {
   return { syncKey, hint };
 }
 
-export function extractIssueIdentifierFromLinearUrl(rawUrl: string): string | null {
+type LinearIssueUrlMatch = {
+  identifier: string;
+  cleanUrl: string;
+  cleanPathname: string;
+  trailingPunctuation: string;
+};
+
+function parseLinearIssueUrl(rawUrl: string): LinearIssueUrlMatch | null {
   let parsed: URL;
   try {
     parsed = new URL(stripMarkdownUrlWrapper(rawUrl));
@@ -206,12 +292,31 @@ export function extractIssueIdentifierFromLinearUrl(rawUrl: string): string | nu
     return null;
   }
 
-  const match = parsed.pathname.match(LINEAR_ISSUE_PATH_RE);
+  const trailingPunctuationMatch = parsed.pathname.match(/([:;,.!?]+)$/);
+  const trailingPunctuation = trailingPunctuationMatch?.[1] || "";
+  const cleanPathname = trailingPunctuation
+    ? parsed.pathname.slice(0, -trailingPunctuation.length)
+    : parsed.pathname;
+  const match = cleanPathname.match(LINEAR_ISSUE_PATH_RE);
   if (!match) {
     return null;
   }
 
-  return normalizeIssueToken(match[1]);
+  parsed.pathname = cleanPathname;
+  return {
+    identifier: normalizeIssueToken(match[1]),
+    cleanUrl: parsed.toString(),
+    cleanPathname,
+    trailingPunctuation,
+  };
+}
+
+export function extractIssueIdentifierFromLinearUrl(rawUrl: string): string | null {
+  return parseLinearIssueUrl(rawUrl)?.identifier || null;
+}
+
+function extractLinearIssueUrlTrailingPunctuation(rawUrl: string): string {
+  return parseLinearIssueUrl(rawUrl)?.trailingPunctuation || "";
 }
 
 function issueIdentifierToLinearUrl(identifier: string, workspaceUrlKey: string): string {
@@ -223,27 +328,23 @@ function issueIdentifierToGenericLinearUrl(identifier: string): string {
 }
 
 function isGenericLinearIssueUrl(rawUrl: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(stripMarkdownUrlWrapper(rawUrl));
-  } catch {
+  const match = parseLinearIssueUrl(rawUrl);
+  if (!match) {
     return false;
   }
-
-  const host = parsed.hostname.toLowerCase();
-  if (host !== "linear.app" && !host.endsWith(".linear.app")) {
-    return false;
-  }
-
-  return /^\/issue\/[a-z][a-z0-9]{1,14}-\d+(?:\/[^/?#]+)?\/?$/i.test(parsed.pathname);
+  return /^\/issue\/[a-z][a-z0-9]{1,14}-\d+(?:\/[^/?#]+)?\/?$/i.test(match.cleanPathname);
 }
 
-function shouldUpgradeGenericLinearMarkdownLink(label: string, linearIdentifier: string): boolean {
+function isRawLinearUrlLabel(label: string, linearIdentifier: string): boolean {
+  return extractIssueIdentifierFromLinearUrl(label) === linearIdentifier;
+}
+
+function shouldNormalizeLinearMarkdownLink(label: string, linearIdentifier: string): boolean {
   const normalizedLabel = normalizeIssueToken(label);
   if (normalizedLabel.startsWith("LOCAL-")) {
     return true;
   }
-  return normalizedLabel === linearIdentifier;
+  return normalizedLabel === linearIdentifier || isRawLinearUrlLabel(label, linearIdentifier);
 }
 
 type TrackedIssueRef = {
@@ -316,16 +417,12 @@ async function rewriteIssueTokenForLinearDescription(
   const trackedRef = resolveTrackedIssueRef(normalized);
   if (trackedRef) {
     if (trackedRef.linearIdentifier) {
-      if (workspaceUrlKey) {
-        return {
-          text: normalized,
-          url: issueIdentifierToLinearUrl(trackedRef.linearIdentifier, workspaceUrlKey),
-          format: "url",
-        };
-      }
       return {
         text: normalized,
-        url: issueIdentifierToGenericLinearUrl(trackedRef.linearIdentifier),
+        url: workspaceUrlKey
+          ? issueIdentifierToLinearUrl(trackedRef.linearIdentifier, workspaceUrlKey)
+          : issueIdentifierToGenericLinearUrl(trackedRef.linearIdentifier),
+        format: "url",
       };
     }
     return {
@@ -335,15 +432,11 @@ async function rewriteIssueTokenForLinearDescription(
   }
 
   if (!normalized.startsWith("LOCAL-") && CANONICAL_ISSUE_TOKEN_RE.test(normalized)) {
-    if (!workspaceUrlKey) {
-      return {
-        text: normalized,
-        url: issueIdentifierToGenericLinearUrl(normalized),
-      };
-    }
     return {
       text: normalized,
-      url: issueIdentifierToLinearUrl(normalized, workspaceUrlKey),
+      url: workspaceUrlKey
+        ? issueIdentifierToLinearUrl(normalized, workspaceUrlKey)
+        : issueIdentifierToGenericLinearUrl(normalized),
       format: "url",
     };
   }
@@ -355,31 +448,68 @@ function upgradeDescriptionIssueLinksToLinearUrls(
   description: string,
   workspaceUrlKey: string | null
 ): string {
-  return description.replace(ISSUE_LINK_RE, (full, label: string, url: string) => {
+  return rewriteIssueLinksOutsideBackticks(description, (full, label: string, url: string) => {
     const ref = parseLbRefUrl(url);
     if (ref) {
       const synced = getSyncedIssueBySyncKey(ref.syncKey);
-      if (!synced?.linear_identifier || !workspaceUrlKey) {
+      if (!synced?.linear_identifier) {
         return full;
       }
-      return issueIdentifierToLinearUrl(synced.linear_identifier, workspaceUrlKey);
+      const resolvedUrl = workspaceUrlKey
+        ? issueIdentifierToLinearUrl(synced.linear_identifier, workspaceUrlKey)
+        : issueIdentifierToGenericLinearUrl(synced.linear_identifier);
+      return formatLinearMentionUrl(resolvedUrl);
     }
 
-    if (!workspaceUrlKey) {
+    const linearUrl = parseLinearIssueUrl(url);
+    if (!linearUrl) {
       return full;
     }
 
-    const linearIdentifier = extractIssueIdentifierFromLinearUrl(url);
-    if (
-      linearIdentifier &&
-      isGenericLinearIssueUrl(url) &&
-      shouldUpgradeGenericLinearMarkdownLink(label, linearIdentifier)
-    ) {
-      return issueIdentifierToLinearUrl(linearIdentifier, workspaceUrlKey);
+    const normalizedLabel = normalizeIssueToken(label);
+    const isCanonicalWorkspaceLink =
+      !linearUrl.trailingPunctuation &&
+      !isGenericLinearIssueUrl(url) &&
+      normalizedLabel === linearUrl.identifier;
+    if (isCanonicalWorkspaceLink) {
+      return full;
     }
 
-    return full;
+    if (!shouldNormalizeLinearMarkdownLink(label, linearUrl.identifier)) {
+      return full;
+    }
+
+    if (isGenericLinearIssueUrl(url) && !workspaceUrlKey && !linearUrl.trailingPunctuation) {
+      return full;
+    }
+
+    const normalizedUrl = workspaceUrlKey
+      ? issueIdentifierToLinearUrl(linearUrl.identifier, workspaceUrlKey)
+      : linearUrl.cleanUrl;
+    return `${formatLinearMentionUrl(normalizedUrl)}${linearUrl.trailingPunctuation}`;
   });
+}
+
+function rewriteIssueTokensInChunk(
+  chunk: string,
+  rewriteToken: (token: string) => DescriptionRefRewrite | null
+): string {
+  return chunk.replace(
+    ISSUE_TOKEN_RE,
+    (full, _token: string, offset: number, source: string): string => {
+      const prevChar = offset > 0 ? source[offset - 1] : "";
+      if (prevChar === "/" || prevChar === ":") {
+        return full;
+      }
+
+      const rewrite = rewriteToken(full);
+      if (!rewrite) return full;
+      if (rewrite.format === "url") {
+        return formatLinearMentionUrl(rewrite.url);
+      }
+      return `[${rewrite.text}](${rewrite.url})`;
+    }
+  );
 }
 
 export function toCanonicalLocalDescription(description: string | undefined): string | undefined {
@@ -387,18 +517,20 @@ export function toCanonicalLocalDescription(description: string | undefined): st
     return undefined;
   }
 
-  return rewriteOutsideMarkdownLinks(description, (token) => {
-    const normalized = normalizeIssueToken(token);
-    const trackedRef = resolveTrackedIssueRef(normalized);
-    if (!trackedRef) {
-      return null;
-    }
+  return rewriteOutsideProtectedSpans(description, (chunk) =>
+    rewriteIssueTokensInChunk(chunk, (token) => {
+      const normalized = normalizeIssueToken(token);
+      const trackedRef = resolveTrackedIssueRef(normalized);
+      if (!trackedRef) {
+        return null;
+      }
 
-    return {
-      text: normalized,
-      url: buildLbRefUrl(trackedRef.syncKey, normalized),
-    };
-  });
+      return {
+        text: normalized,
+        url: buildLbRefUrl(trackedRef.syncKey, normalized),
+      };
+    })
+  );
 }
 
 export async function toLinearRichDescription(
@@ -430,7 +562,6 @@ export async function encodeIssueRefsInDescription(
   ) => Promise<DescriptionRefRewrite | null> | DescriptionRefRewrite | null
 ): Promise<string | undefined> {
   if (description === undefined) return undefined;
-  const links = collectMarkdownLinks(description);
   const rewriteChunk = async (chunk: string): Promise<string> => {
     const matches = [...chunk.matchAll(ISSUE_TOKEN_RE)];
     if (matches.length === 0) return chunk;
@@ -450,7 +581,7 @@ export async function encodeIssueRefsInDescription(
         if (!rewrite) {
           output += full;
         } else if (rewrite.format === "url") {
-          output += rewrite.url;
+          output += formatLinearMentionUrl(rewrite.url);
         } else {
           output += `[${rewrite.text}](${rewrite.url})`;
         }
@@ -461,18 +592,19 @@ export async function encodeIssueRefsInDescription(
     return output;
   };
 
-  if (links.length === 0) {
+  const spans = collectProtectedSpans(description);
+  if (spans.length === 0) {
     return await rewriteChunk(description);
   }
 
   let cursor = 0;
   let output = "";
-  for (const link of links) {
-    if (link.index > cursor) {
-      output += await rewriteChunk(description.slice(cursor, link.index));
+  for (const span of spans) {
+    if (span.start > cursor) {
+      output += await rewriteChunk(description.slice(cursor, span.start));
     }
-    output += link.full;
-    cursor = link.index + link.full.length;
+    output += description.slice(span.start, span.end);
+    cursor = span.end;
   }
 
   if (cursor < description.length) {
@@ -500,7 +632,7 @@ export function upgradeLbRefLinks(
 export function renderIssueLinksAsPlainText(description: string | undefined): string | undefined {
   if (description === undefined) return undefined;
 
-  return description.replace(ISSUE_LINK_RE, (full, label: string, url: string) => {
+  return rewriteIssueLinksOutsideBackticks(description, (full, label: string, url: string) => {
     const ref = parseLbRefUrl(url);
     if (ref) {
       const synced = getSyncedIssueBySyncKey(ref.syncKey);
@@ -513,10 +645,14 @@ export function renderIssueLinksAsPlainText(description: string | undefined): st
     const linearIdentifier = extractIssueIdentifierFromLinearUrl(url);
     if (linearIdentifier) {
       const normalizedLabel = normalizeIssueToken(label);
-      if (CANONICAL_ISSUE_TOKEN_RE.test(normalizedLabel)) {
-        return normalizedLabel;
+      const trailingPunctuation = extractLinearIssueUrlTrailingPunctuation(url);
+      if (normalizedLabel.startsWith("LOCAL-")) {
+        return `${linearIdentifier}${trailingPunctuation}`;
       }
-      return linearIdentifier;
+      if (CANONICAL_ISSUE_TOKEN_RE.test(normalizedLabel)) {
+        return `${normalizedLabel}${trailingPunctuation}`;
+      }
+      return `${linearIdentifier}${trailingPunctuation}`;
     }
 
     return full;
