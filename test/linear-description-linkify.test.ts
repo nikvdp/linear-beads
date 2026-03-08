@@ -452,6 +452,25 @@ describe("toLinearRichDescription", () => {
     expect(output).toBe(input);
   });
 
+  test("heals generic LIN fallback markdown links forward once workspace slug is known", async () => {
+    const input =
+      "Fallback [LIN-4274](https://linear.app/issue/LIN-4274) but keep [see bug](https://linear.app/issue/LIN-9999)";
+    const output = await toLinearRichDescription(input, {
+      workspaceUrlKey: "linear-beads",
+    });
+    expect(output).toBe(
+      "Fallback https://linear.app/linear-beads/issue/LIN-4274 but keep [see bug](https://linear.app/issue/LIN-9999)"
+    );
+  });
+
+  test("heals generic LOCAL-labelled fallback markdown links forward once workspace slug is known", async () => {
+    const input = "Fallback [LOCAL-035](https://linear.app/issue/LIN-4465)";
+    const output = await toLinearRichDescription(input, {
+      workspaceUrlKey: "linear-beads",
+    });
+    expect(output).toBe("Fallback https://linear.app/linear-beads/issue/LIN-4465");
+  });
+
   test("keeps undefined descriptions unchanged", async () => {
     expect(
       await toLinearRichDescription(undefined, { workspaceUrlKey: "linear-beads" })
