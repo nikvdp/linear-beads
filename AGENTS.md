@@ -85,3 +85,12 @@ Commit atomically as you work (one logical change per commit) unless told otherw
   - Linear API readback may normalize valid mentions into markdown-link-looking `description` text; treat that as stable readback, not as a signal to rewrite again.
   - Never rewrite issue refs inside backticks or fenced code.
   - Raw URL plus trailing punctuation like `https://.../LIN-123:` is invalid for this path and must be healed into a safe mention form with punctuation outside the URL.
+- Linear media round-trip rules:
+  - The local canonical DSL is markdown-like and explicit, using `lb-media:<id>` targets.
+  - Images use `![label](lb-media:m_abc123)` and generic files use `[label](lb-media:m_def456)`.
+  - Local file paths are supplied by CLI flags, not stored inline in the canonical description text.
+  - When writing to Linear, uploaded `uploads.linear.app` assets should be embedded via normal markdown syntax:
+    - markdown image syntax becomes a native `image` node in Linear document content
+    - markdown link syntax to an uploaded asset becomes a native `file` node in Linear document content
+  - Linear issue attachments are a separate native surface from description-embedded media; do not assume one automatically creates the other.
+  - `lb show` should render canonical `lb-media:<id>` markers, never raw Linear upload URLs.
