@@ -39,8 +39,10 @@ async function runEval(
     | "update_before_create"
     | "orphan_parent"
     | "deps_retry"
+    | "deps_retry_prefers_identifier"
     | "legacy_placeholder_refs"
     | "alias_merge_resolution"
+    | "shared_parent_resolution"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import { Database } from "bun:sqlite";
@@ -114,6 +116,21 @@ async function runEval(
         localId
       );
       markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9005");
+    } else if (mode === "deps_retry_prefers_identifier") {
+      const db = new Database(".lb/cache.db");
+      db.run("UPDATE issues SET linear_id = ? WHERE local_id = ?", ["uuid-9005", localId]);
+      db.close();
+
+      const outboxId = queueOutboxItem(
+        "create",
+        {
+          title: "Replay guard issue",
+          priority: 2,
+          deps: "blocked-by:LIN-9999",
+        },
+        localId
+      );
+      markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9005");
     } else if (mode === "legacy_placeholder_refs") {
       const outboxId = queueOutboxItem(
         "create",
@@ -161,6 +178,96 @@ async function runEval(
         { issueId: aliasLocalId, relatedIssueId: relatedLocalId, type: "blocks" },
         aliasLocalId
       );
+    } else if (mode === "shared_parent_resolution") {
+      const parentLocalId = generateLocalId();
+      const siblingLocalId = generateLocalId();
+      const blockerLocalId = generateLocalId();
+
+      for (const [id, title] of [
+        [parentLocalId, "Shared parent"],
+        [siblingLocalId, "Sibling issue"],
+        [blockerLocalId, "Blocking issue"],
+      ] as const) {
+        cacheIssue({
+          id,
+          title,
+          status: "open",
+          priority: 2,
+          sync_status: "pending",
+          created_at: now,
+          updated_at: now,
+        });
+      }
+
+      const parentOutboxId = queueOutboxItem(
+        "create",
+        { title: "Shared parent", priority: 2 },
+        parentLocalId
+      );
+      markOutboxCreateRemoteIssueIdentifier(parentOutboxId, "LIN-9010");
+
+      const blockedChildOutboxId = queueOutboxItem(
+        "create",
+        {
+          title: "Replay guard issue",
+          priority: 2,
+          parentId: parentLocalId,
+          deps: "blocked-by:" + blockerLocalId,
+        },
+        localId
+      );
+      markOutboxCreateRemoteIssueIdentifier(blockedChildOutboxId, "LIN-9011");
+
+      const siblingOutboxId = queueOutboxItem(
+        "create",
+        {
+          title: "Sibling issue",
+          priority: 2,
+          parentId: parentLocalId,
+        },
+        siblingLocalId
+      );
+      markOutboxCreateRemoteIssueIdentifier(siblingOutboxId, "LIN-9012");
+
+      const blockerOutboxId = queueOutboxItem(
+        "create",
+        { title: "Blocking issue", priority: 2 },
+        blockerLocalId
+      );
+      markOutboxCreateRemoteIssueIdentifier(blockerOutboxId, "LIN-9013");
+
+      const pass1 = await processOutboxQueue("TEAM");
+      const pendingAfterPass1 = getPendingOutboxItems().map((item) => ({
+        operation: item.operation,
+        local_id: item.local_id || null,
+      }));
+      const pass2 = await processOutboxQueue("TEAM");
+      const pendingFinal = getPendingOutboxItems().map((item) => ({
+        operation: item.operation,
+        local_id: item.local_id || null,
+      }));
+      const db = new Database(".lb/cache.db", { readonly: true });
+      const siblingRow = db.query(
+        "SELECT local_id, linear_identifier, sync_status FROM issues WHERE local_id = ? LIMIT 1"
+      ).get(siblingLocalId) as {
+        local_id: string;
+        linear_identifier: string | null;
+        sync_status: string;
+      } | null;
+      db.close();
+
+      console.log(
+        JSON.stringify({
+          pass1,
+          pass2,
+          pendingAfterPass1,
+          pendingFinal,
+          siblingLocalId,
+          siblingDisplayId: getDisplayId(siblingLocalId),
+          siblingRow,
+        })
+      );
+      process.exit(0);
     } else {
       const outboxId = queueOutboxItem(
         "create",
@@ -192,12 +299,18 @@ async function runEval(
           resolved_local_id: resolveIssueLocalId(aliasLocalId),
         }
       : null;
+    const uuidResolution = mode === "deps_retry_prefers_identifier"
+      ? {
+          local_id: resolveIssueLocalId("uuid-9005"),
+          display_id: getDisplayId("uuid-9005"),
+        }
+      : null;
     const db = new Database(".lb/cache.db", { readonly: true });
     const row = db.query(
       "SELECT local_id, linear_identifier, sync_status FROM issues WHERE local_id = ? LIMIT 1"
     ).get(localId) as { local_id: string; linear_identifier: string | null; sync_status: string } | null;
     db.close();
-    console.log(JSON.stringify({ result, remaining, pending, mapping, displayId, row, alias }));
+    console.log(JSON.stringify({ result, remaining, pending, mapping, displayId, row, alias, uuidResolution }));
   `;
 
   const proc = Bun.spawn(["bun", "--eval", script, mode], {
@@ -390,6 +503,39 @@ describe("outbox create replay protection", () => {
     expect(payload.row?.sync_status).toBe("synced");
   });
 
+  test("keeps relation retries on stable identifiers even when a Linear UUID is already cached", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "deps_retry_prefers_identifier");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      result: { success: number; failed: number; deferred: number; remoteProcessed: number };
+      remaining: number;
+      pending: Array<{
+        id: number;
+        operation: string;
+        local_id: string | null;
+        payload: { issueId?: string; relatedIssueId?: string; type?: string };
+      }>;
+      mapping: string | null;
+      displayId: string;
+      row: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+      uuidResolution: { local_id: string; display_id: string } | null;
+    };
+
+    expect(payload.result.success).toBe(1);
+    expect(payload.result.failed).toBe(0);
+    expect(payload.remaining).toBe(1);
+    expect(payload.pending[0]?.operation).toBe("create_relation");
+    expect(payload.pending[0]?.payload?.issueId).toBe("LIN-9999");
+    expect(payload.pending[0]?.payload?.relatedIssueId).toBe("LIN-9005");
+    expect(payload.pending[0]?.payload?.relatedIssueId).not.toBe("uuid-9005");
+    expect(payload.uuidResolution?.local_id).toBe(payload.row?.local_id);
+    expect(payload.uuidResolution?.display_id).toBe("LIN-9005");
+  });
+
   test("preserves alias LOCAL mappings when replacing duplicate LIN identifiers", async () => {
     const repoDir = createRepo();
     const result = await runEval(repoDir, "alias_merge_resolution");
@@ -456,5 +602,35 @@ describe("outbox create replay protection", () => {
     expect(payload.displayId).toBe("LIN-9006");
     expect(payload.row?.linear_identifier).toBe("LIN-9006");
     expect(payload.row?.sync_status).toBe("synced");
+  });
+
+  test("does not let one deferred child block siblings that only share a resolved parent", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "shared_parent_resolution");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      pass1: { success: number; failed: number; deferred: number; remoteProcessed: number };
+      pass2: { success: number; failed: number; deferred: number; remoteProcessed: number };
+      pendingAfterPass1: Array<{ operation: string; local_id: string | null }>;
+      pendingFinal: Array<{ operation: string; local_id: string | null }>;
+      siblingLocalId: string;
+      siblingDisplayId: string;
+      siblingRow: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+    };
+
+    expect(payload.pass1.success).toBe(3);
+    expect(payload.pass1.failed).toBe(0);
+    expect(payload.pass1.deferred).toBe(1);
+    expect(payload.pendingAfterPass1).toHaveLength(1);
+    expect(payload.pendingAfterPass1[0]?.local_id).not.toBe(payload.siblingLocalId);
+    expect(payload.siblingDisplayId).toBe("LIN-9012");
+    expect(payload.siblingRow?.linear_identifier).toBe("LIN-9012");
+    expect(payload.siblingRow?.sync_status).toBe("synced");
+    expect(payload.pass2.success).toBe(1);
+    expect(payload.pass2.failed).toBe(0);
+    expect(payload.pendingFinal).toHaveLength(0);
   });
 });
