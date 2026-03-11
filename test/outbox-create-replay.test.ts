@@ -117,8 +117,9 @@ async function runEval(
       );
       markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9005");
     } else if (mode === "deps_retry_prefers_identifier") {
+      const cachedUuid = "123e4567-e89b-12d3-a456-426614174000";
       const db = new Database(".lb/cache.db");
-      db.run("UPDATE issues SET linear_id = ? WHERE local_id = ?", ["uuid-9005", localId]);
+      db.run("UPDATE issues SET linear_id = ? WHERE local_id = ?", [cachedUuid, localId]);
       db.close();
 
       const outboxId = queueOutboxItem(
@@ -242,6 +243,11 @@ async function runEval(
         local_id: item.local_id || null,
       }));
       const pass2 = await processOutboxQueue("TEAM");
+      const pendingAfterPass2 = getPendingOutboxItems().map((item) => ({
+        operation: item.operation,
+        local_id: item.local_id || null,
+      }));
+      const pass3 = await processOutboxQueue("TEAM");
       const pendingFinal = getPendingOutboxItems().map((item) => ({
         operation: item.operation,
         local_id: item.local_id || null,
@@ -260,7 +266,9 @@ async function runEval(
         JSON.stringify({
           pass1,
           pass2,
+          pass3,
           pendingAfterPass1,
+          pendingAfterPass2,
           pendingFinal,
           siblingLocalId,
           siblingDisplayId: getDisplayId(siblingLocalId),
@@ -301,8 +309,8 @@ async function runEval(
       : null;
     const uuidResolution = mode === "deps_retry_prefers_identifier"
       ? {
-          local_id: resolveIssueLocalId("uuid-9005"),
-          display_id: getDisplayId("uuid-9005"),
+          local_id: resolveIssueLocalId("123e4567-e89b-12d3-a456-426614174000"),
+          display_id: getDisplayId("123e4567-e89b-12d3-a456-426614174000"),
         }
       : null;
     const db = new Database(".lb/cache.db", { readonly: true });
@@ -531,7 +539,9 @@ describe("outbox create replay protection", () => {
     expect(payload.pending[0]?.operation).toBe("create_relation");
     expect(payload.pending[0]?.payload?.issueId).toBe("LIN-9999");
     expect(payload.pending[0]?.payload?.relatedIssueId).toBe("LIN-9005");
-    expect(payload.pending[0]?.payload?.relatedIssueId).not.toBe("uuid-9005");
+    expect(payload.pending[0]?.payload?.relatedIssueId).not.toBe(
+      "123e4567-e89b-12d3-a456-426614174000"
+    );
     expect(payload.uuidResolution?.local_id).toBe(payload.row?.local_id);
     expect(payload.uuidResolution?.display_id).toBe("LIN-9005");
   });
@@ -614,7 +624,9 @@ describe("outbox create replay protection", () => {
     const payload = JSON.parse(result.stdout) as {
       pass1: { success: number; failed: number; deferred: number; remoteProcessed: number };
       pass2: { success: number; failed: number; deferred: number; remoteProcessed: number };
+      pass3: { success: number; failed: number; deferred: number; remoteProcessed: number };
       pendingAfterPass1: Array<{ operation: string; local_id: string | null }>;
+      pendingAfterPass2: Array<{ operation: string; local_id: string | null }>;
       pendingFinal: Array<{ operation: string; local_id: string | null }>;
       siblingLocalId: string;
       siblingDisplayId: string;
@@ -631,6 +643,10 @@ describe("outbox create replay protection", () => {
     expect(payload.siblingRow?.sync_status).toBe("synced");
     expect(payload.pass2.success).toBe(1);
     expect(payload.pass2.failed).toBe(0);
+    expect(payload.pendingAfterPass2).toHaveLength(1);
+    expect(payload.pendingAfterPass2[0]?.operation).toBe("create_relation");
+    expect(payload.pass3.success).toBe(1);
+    expect(payload.pass3.failed).toBe(0);
     expect(payload.pendingFinal).toHaveLength(0);
   });
 });
