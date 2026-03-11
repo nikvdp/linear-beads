@@ -2454,8 +2454,10 @@ export function resolveIssueLocalId(id: string): string {
   const db = getDatabase();
 
   const direct = db
-    .query("SELECT local_id FROM issues WHERE local_id = ? OR linear_identifier = ? LIMIT 1")
-    .get(normalizedId, normalizedId) as { local_id: string } | null;
+    .query(
+      "SELECT local_id FROM issues WHERE local_id = ? OR linear_identifier = ? OR linear_id = ? LIMIT 1"
+    )
+    .get(normalizedId, normalizedId, normalizedId) as { local_id: string } | null;
   if (direct?.local_id) {
     return direct.local_id;
   }
@@ -2464,8 +2466,10 @@ export function resolveIssueLocalId(id: string): string {
     const mappedLinear = getIssueIdMapping(normalizedId);
     if (mappedLinear) {
       const mappedRow = db
-        .query("SELECT local_id FROM issues WHERE local_id = ? OR linear_identifier = ? LIMIT 1")
-        .get(mappedLinear, mappedLinear) as { local_id: string } | null;
+        .query(
+          "SELECT local_id FROM issues WHERE local_id = ? OR linear_identifier = ? OR linear_id = ? LIMIT 1"
+        )
+        .get(mappedLinear, mappedLinear, mappedLinear) as { local_id: string } | null;
       if (mappedRow?.local_id) {
         return mappedRow.local_id;
       }
@@ -2513,8 +2517,10 @@ export function resolveIssueId(id: string): string {
 export function getLocalIdForLinearId(linearId: string): string | null {
   const db = getDatabase();
   const row = db
-    .query("SELECT local_id FROM issues WHERE linear_identifier = ? OR local_id = ? LIMIT 1")
-    .get(linearId, linearId) as { local_id: string } | null;
+    .query(
+      "SELECT local_id FROM issues WHERE linear_identifier = ? OR linear_id = ? OR local_id = ? LIMIT 1"
+    )
+    .get(linearId, linearId, linearId) as { local_id: string } | null;
   if (row?.local_id) {
     return row.local_id;
   }

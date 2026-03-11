@@ -55,6 +55,14 @@ function canonicalLocalId(id: string): string {
   return resolveIssueLocalId(id);
 }
 
+function shouldBlockUnresolvedLocalId(
+  localId: string,
+  pendingCreateLocalIds: Set<string>
+): boolean {
+  const canonical = canonicalLocalId(localId);
+  return !(isLocalId(canonical) && pendingCreateLocalIds.has(canonical));
+}
+
 function queueRelationRetry(
   issueId: string,
   relatedIssueId: string,
@@ -354,7 +362,7 @@ async function processResolvedItem(
           const [type, targetId] = dep.trim().split(":");
           return { type, targetId };
         });
-        const createdIssueRef = remoteIssueUuid || remoteIssueIdentifier;
+        const createdIssueRef = remoteIssueIdentifier;
         for (const dep of deps) {
           try {
             if (dep.type === "blocked-by") {
@@ -606,16 +614,15 @@ export async function processOutboxQueue(
       const unresolvedLocals = new Set(claimedResolution.unresolvedLocalIds.map(canonicalLocalId));
       if (claimedResolution.primaryId) {
         const primaryLocalId = canonicalLocalId(claimedResolution.primaryId);
-        if (!(unresolvedLocals.has(primaryLocalId) && pendingCreateLocalIds.has(primaryLocalId))) {
+        if (shouldBlockUnresolvedLocalId(primaryLocalId, pendingCreateLocalIds)) {
           addBlockedId(claimedResolution.primaryId);
         }
       }
-      for (const id of claimedResolution.referencedIds) {
-        const localId = canonicalLocalId(id);
-        if (unresolvedLocals.has(localId) && pendingCreateLocalIds.has(localId)) {
+      for (const localId of unresolvedLocals) {
+        if (!shouldBlockUnresolvedLocalId(localId, pendingCreateLocalIds)) {
           continue;
         }
-        addBlockedId(id);
+        addBlockedId(localId);
       }
       deferred++;
       continue;
