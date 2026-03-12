@@ -630,7 +630,11 @@ describe("outbox create replay protection", () => {
       pendingFinal: Array<{ operation: string; local_id: string | null }>;
       siblingLocalId: string;
       siblingDisplayId: string;
-      siblingRow: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+      siblingRow: {
+        local_id: string;
+        linear_identifier: string | null;
+        sync_status: string;
+      } | null;
     };
 
     expect(payload.pass1.success).toBe(3);

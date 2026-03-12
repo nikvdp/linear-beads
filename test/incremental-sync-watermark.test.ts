@@ -31,7 +31,11 @@ function createRepo(): string {
 
 async function runEval(
   cwd: string,
-  mode: "prefers_metadata" | "falls_back_to_cached_remote" | "ignores_pending_local" | "advances_only_forward"
+  mode:
+    | "prefers_metadata"
+    | "falls_back_to_cached_remote"
+    | "ignores_pending_local"
+    | "advances_only_forward"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import {
