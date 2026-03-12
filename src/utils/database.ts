@@ -85,6 +85,7 @@ const SCHEMA_INIT_LOCK_TTL_MS = 10 * 60 * 1000;
 const SCHEMA_INIT_LOCK_POLL_MS = 50;
 const SCHEMA_INIT_LOCK_WAIT_MS = 60 * 1000;
 const LAST_SYNC_CONTEXT_METADATA_KEY = "last_sync_context";
+const LAST_ISSUE_UPDATE_WATERMARK_METADATA_KEY = "last_issue_update_watermark";
 
 function isDatabaseLockedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -952,19 +953,81 @@ export function getLastSync(): string | null {
   return row?.value || null;
 }
 
+function getLatestCachedIssueUpdatedAt(): string | null {
+  const db = getDatabase();
+  const row = db
+    .query(
+      `
+      SELECT updated_at
+      FROM issues
+      WHERE updated_at IS NOT NULL
+        AND linear_identifier IS NOT NULL
+        AND trim(linear_identifier) != ''
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `
+    )
+    .get() as { updated_at: string | null } | null;
+  return row?.updated_at || null;
+}
+
+export function getIssueUpdateWatermark(): string | null {
+  const db = getDatabase();
+  const row = db
+    .query("SELECT value FROM metadata WHERE key = ?")
+    .get(LAST_ISSUE_UPDATE_WATERMARK_METADATA_KEY) as {
+    value: string;
+  } | null;
+
+  return row?.value || getLatestCachedIssueUpdatedAt();
+}
+
+export function updateIssueUpdateWatermark(updatedAt: string | null | undefined): void {
+  if (!updatedAt) return;
+
+  const nextMs = Date.parse(updatedAt);
+  if (!Number.isFinite(nextMs)) return;
+
+  const current = getIssueUpdateWatermark();
+  const currentMs = current ? Date.parse(current) : Number.NaN;
+  if (Number.isFinite(currentMs) && currentMs >= nextMs) {
+    return;
+  }
+
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [
+      LAST_ISSUE_UPDATE_WATERMARK_METADATA_KEY,
+      new Date(nextMs).toISOString(),
+    ]);
+  });
+}
+
+export function updateIssueUpdateWatermarkFromIssues(
+  issues: Array<{ updated_at: string | null | undefined }>
+): void {
+  let newest: string | null = null;
+  let newestMs = Number.NEGATIVE_INFINITY;
+
+  for (const issue of issues) {
+    if (!issue.updated_at) continue;
+    const parsed = Date.parse(issue.updated_at);
+    if (!Number.isFinite(parsed) || parsed <= newestMs) {
+      continue;
+    }
+    newestMs = parsed;
+    newest = issue.updated_at;
+  }
+
+  updateIssueUpdateWatermark(newest);
+}
+
 /**
- * Get timestamp for incremental sync with 5-minute lookback.
- * Returns ISO string of (last_sync - 5 minutes) or null if never synced.
- * The lookback prevents missing issues updated during the previous sync.
+ * Get timestamp for incremental sync.
+ * Prefers the latest remote issue update watermark and falls back to the last sync time.
  */
 export function getIncrementalSyncTimestamp(): string | null {
-  const lastSync = getLastSync();
-  if (!lastSync) return null;
-
-  const lastSyncDate = new Date(lastSync);
-  const lookbackMs = 5 * 60 * 1000; // 5 minutes
-  const lookbackDate = new Date(lastSyncDate.getTime() - lookbackMs);
-  return lookbackDate.toISOString();
+  return getIssueUpdateWatermark() || getLastSync();
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   getOutboxStats,
   repairCreateOutboxForUnsyncedIssues,
   updateLastSyncContext,
+  updateIssueUpdateWatermarkFromIssues,
 } from "./database.js";
 import {
   fetchIssues,
@@ -237,6 +238,7 @@ export async function incrementalSync(teamKey?: string): Promise<{
   const issues = await measureSyncPhase("incremental.pullUpdated", () =>
     fetchAllUpdatedIssues(teamId, since)
   );
+  updateIssueUpdateWatermarkFromIssues(issues);
   await measureSyncPhase("incremental.mailIngest", () => getMailBackendAdapter().ingest());
 
   // Export to JSONL
@@ -272,6 +274,7 @@ export async function fullSyncPaginated(teamKey?: string): Promise<{
   const { issues, pruned } = await measureSyncPhase("full.pullAllPaginated", () =>
     fetchAllIssuesPaginated(teamId)
   );
+  updateIssueUpdateWatermarkFromIssues(issues);
   await measureSyncPhase("full.mailIngest", () => getMailBackendAdapter().ingest());
 
   // Export to JSONL
@@ -304,6 +307,7 @@ export async function fullSync(teamKey?: string): Promise<{
 
   // Then pull
   const issues = await measureSyncPhase("legacyFull.pull", () => pullFromLinear(teamId));
+  updateIssueUpdateWatermarkFromIssues(issues);
   await measureSyncPhase("legacyFull.mailIngest", () => getMailBackendAdapter().ingest());
 
   // Export to JSONL
