@@ -136,9 +136,9 @@ describe("human output style modes", () => {
 
     const shown = await runCli(repoDir, ["show", parent.id]);
     expect(shown.exitCode).toBe(0);
-    expect(shown.stdout).toContain(`○ ${parent.id} ● P2 Parent issue`);
+    expect(shown.stdout).toContain(`● ${parent.id} ● P2 Parent issue`);
     expect(shown.stdout).toContain("Children (1):");
-    expect(shown.stdout).toContain(`└── ○ ${child.id} ● P2 Child issue`);
+    expect(shown.stdout).toContain(`└── ● ${child.id} ● P2 Child issue`);
     expect(shown.stdout).toContain("Blocked by (1):");
     expect(shown.stdout).toContain(`└── ○ ${blocker.id} ● P2 Blocker issue`);
   });
@@ -147,9 +147,13 @@ describe("human output style modes", () => {
     const repoDir = createLocalRepo();
     const blocker = await createIssue(repoDir, "Primary blocker");
     const blocked = await createIssue(repoDir, "Blocked item");
+    const depRoot = await createIssue(repoDir, "Dependency root");
+    const depLeaf = await createIssue(repoDir, "Dependency leaf");
 
     const dep = await runCli(repoDir, ["dep", "add", blocked.id, "--blocked-by", blocker.id]);
     expect(dep.exitCode).toBe(0);
+    const depTreeLink = await runCli(repoDir, ["dep", "add", depRoot.id, "--blocks", depLeaf.id]);
+    expect(depTreeLink.exitCode).toBe(0);
 
     const styled = await runCli(repoDir, ["style", "beads"]);
     expect(styled.exitCode).toBe(0);
@@ -166,10 +170,10 @@ describe("human output style modes", () => {
     expect(depList.stdout).toContain("Blocked by (1):");
     expect(depList.stdout).toContain(`└── ○ ${blocker.id} ● P2 Primary blocker`);
 
-    const depTree = await runCli(repoDir, ["dep", "tree", blocked.id]);
+    const depTree = await runCli(repoDir, ["dep", "tree", depRoot.id]);
     expect(depTree.exitCode).toBe(0);
-    expect(depTree.stdout).toContain(`● ${blocked.id} ● P2 Blocked item`);
-    expect(depTree.stdout).toContain(`└── ○ ${blocker.id} ● P2 Primary blocker`);
+    expect(depTree.stdout).toContain(`○ ${depRoot.id} ● P2 Dependency root [READY]`);
+    expect(depTree.stdout).toContain(`└── ● ${depLeaf.id} ● P2 Dependency leaf`);
   });
 
   test("lb style --global persists a shared default that repos can inherit", async () => {

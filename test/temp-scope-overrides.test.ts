@@ -5,20 +5,23 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-setDefaultTimeout(120000);
+const RUN_LINEAR_INTEGRATION_TESTS = process.env.LB_RUN_INTEGRATION_TESTS === "1";
+const describeLinearSuite = RUN_LINEAR_INTEGRATION_TESTS ? describe : describe.skip;
 
 const API_KEY = process.env.LINEAR_API_KEY;
 const TEAM_KEY = process.env.LB_TEAM_KEY || "LIN";
 const CLI_PATH = join(import.meta.dir, "..", "src", "cli.ts");
 const TEST_PREFIX = `[temp-scope-${Date.now()}]`;
 
-if (!API_KEY) {
+if (RUN_LINEAR_INTEGRATION_TESTS && !API_KEY) {
   throw new Error("LINEAR_API_KEY environment variable is required for temp scope tests");
 }
 
-const client = new GraphQLClient("https://api.linear.app/graphql", {
-  headers: { Authorization: API_KEY },
-});
+const client = RUN_LINEAR_INTEGRATION_TESTS
+  ? new GraphQLClient("https://api.linear.app/graphql", {
+      headers: { Authorization: API_KEY },
+    })
+  : null;
 
 const tempDirs: string[] = [];
 const issueUuids = new Set<string>();
@@ -134,6 +137,9 @@ async function waitForLinearIdentifier(
 }
 
 async function getIssueSnapshot(issueId: string): Promise<IssueSnapshot | null> {
+  if (!client) {
+    throw new Error("temp scope integration tests are disabled");
+  }
   const result = await client.request<{
     issue: {
       id: string;
@@ -179,6 +185,10 @@ async function trackIssue(issueId: string): Promise<void> {
 }
 
 afterAll(async () => {
+  if (!client) {
+    return;
+  }
+
   for (const issueId of issueUuids) {
     try {
       await client.request(
@@ -199,7 +209,7 @@ afterAll(async () => {
   }
 });
 
-describe("temporary scope overrides", () => {
+describeLinearSuite("temporary scope overrides", () => {
   test("applies --temp-name and --temp-name-mode=label for one-off scoping", async () => {
     const repoDir = createTempGitRepo("lb-temp-flag-label");
     writeRepoConfig(repoDir, {

@@ -5,7 +5,9 @@
  * - LINEAR_API_KEY environment variable
  * - LB_TEAM_KEY environment variable (or uses LIN as default)
  *
- * Run with: bun test test/integration.test.ts
+ * Run the full Linear-backed suites with:
+ * - bun run test:integration
+ * - or LB_RUN_INTEGRATION_TESTS=1 bun test test/integration.test.ts
  */
 
 import {
@@ -25,6 +27,9 @@ import { join } from "path";
 
 // Increase timeout for API calls
 setDefaultTimeout(30000);
+
+const RUN_LINEAR_INTEGRATION_TESTS = process.env.LB_RUN_INTEGRATION_TESTS === "1";
+const describeLinearSuite = RUN_LINEAR_INTEGRATION_TESTS ? describe : describe.skip;
 
 const TEAM_KEY = process.env.LB_TEAM_KEY || "LIN";
 const WORKSPACE_SLUG = "linear-beads";
@@ -133,7 +138,7 @@ async function deleteTestIssues(): Promise<void> {
   }
 }
 
-describe("lb CLI Integration Tests", () => {
+describeLinearSuite("lb CLI Integration Tests", () => {
   beforeAll(async () => {
     // Verify API key is set
     if (!process.env.LINEAR_API_KEY) {
@@ -726,7 +731,7 @@ describe("lb CLI Integration Tests", () => {
  * Project scoping mode tests
  * These tests run in an isolated directory with repo_scope: 'project' config
  */
-describe("Project Scoping Mode", () => {
+describeLinearSuite("Project Scoping Mode", () => {
   const testDir = "/tmp/lb-project-test-" + Date.now();
   const projectTestPrefix = `[proj-test-${Date.now()}]`;
 

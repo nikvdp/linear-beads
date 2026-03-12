@@ -5,22 +5,25 @@ import { tmpdir } from "os";
 import { basename, join } from "path";
 import { Database } from "bun:sqlite";
 
-setDefaultTimeout(120000);
+const RUN_LINEAR_INTEGRATION_TESTS = process.env.LB_RUN_INTEGRATION_TESTS === "1";
+const describeLinearSuite = RUN_LINEAR_INTEGRATION_TESTS ? describe : describe.skip;
 
 const TEAM_KEY = process.env.LB_TEAM_KEY || "LIN";
 const API_KEY = process.env.LINEAR_API_KEY;
 const CLI_PATH = join(import.meta.dir, "..", "src", "cli.ts");
 const TEST_PREFIX = `[repo-binding-${Date.now()}]`;
 
-if (!API_KEY) {
+if (RUN_LINEAR_INTEGRATION_TESTS && !API_KEY) {
   throw new Error(
     "LINEAR_API_KEY environment variable is required for repo binding integration tests"
   );
 }
 
-const client = new GraphQLClient("https://api.linear.app/graphql", {
-  headers: { Authorization: API_KEY },
-});
+const client = RUN_LINEAR_INTEGRATION_TESTS
+  ? new GraphQLClient("https://api.linear.app/graphql", {
+      headers: { Authorization: API_KEY },
+    })
+  : null;
 
 const tempDirs: string[] = [];
 const issueUuids = new Set<string>();
@@ -119,6 +122,9 @@ async function lbJson<T>(cwd: string, ...args: string[]): Promise<T> {
 }
 
 async function getIssueSnapshot(issueId: string): Promise<IssueSnapshot | null> {
+  if (!client) {
+    throw new Error("repo binding integration tests are disabled");
+  }
   const result = await client.request<{
     issue: {
       id: string;
@@ -195,6 +201,10 @@ async function mustSucceed(cwd: string, ...args: string[]): Promise<string> {
 }
 
 afterAll(async () => {
+  if (!client) {
+    return;
+  }
+
   for (const issueId of issueUuids) {
     try {
       await client.request(
@@ -215,7 +225,7 @@ afterAll(async () => {
   }
 });
 
-describe("repo binding flows", () => {
+describeLinearSuite("repo binding flows", () => {
   test("init defaults new repos to project scope", async () => {
     const repoDir = createTempGitRepo("lb-init-project-default");
 
