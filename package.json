@@ -14,6 +14,7 @@
     "test": "bun test",
     "test:integration": "bun test test/integration.test.ts",
     "release": "bun run scripts/release.ts",
+    "self-update:demo": "bun run scripts/self-update-demo.ts",
     "generate:types": "json2ts schemas/config.schema.json src/types/config.generated.ts",
     "build": "bun build src/cli.ts --outdir dist --target node",
     "build:bin": "bun build src/cli.ts --compile --outfile dist/lb",
