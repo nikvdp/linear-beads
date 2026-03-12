@@ -1,6 +1,6 @@
 {
   "name": "lb-cli",
-  "version": "0.0.37",
+  "version": "0.0.38",
   "description": "Linear-native beads-style issue tracker CLI",
   "type": "module",
   "bin": {
