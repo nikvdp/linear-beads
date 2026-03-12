@@ -87,11 +87,14 @@ describe("self-update", () => {
       return makeReleaseResponse(String(input), version, binaryBytes);
     }) as typeof fetch;
 
+    const statuses: string[] = [];
+
     const result = await runSelfUpdate({
       version,
       force: false,
       check: true,
       path: binaryPath,
+      onStatus: (status) => statuses.push(status.step),
     });
 
     expect(result.alreadyUpdated).toBe(true);
@@ -99,6 +102,7 @@ describe("self-update", () => {
     expect(result.remoteVersion).toBe(normalizeReleaseTag(`v${version}`));
     expect(result.updatedPath).toBeUndefined();
     expect(readFileSync(binaryPath, "utf8")).toBe("old-binary");
+    expect(statuses).toEqual(["checking", "locating_binary"]);
   });
 
   test("uses embedded binary version even when .version sidecar is stale", () => {
@@ -115,11 +119,14 @@ describe("self-update", () => {
       return makeReleaseResponse(String(input), version, binaryBytes);
     }) as typeof fetch;
 
+    const statuses: string[] = [];
+
     const result = await runSelfUpdate({
       version,
       force: true,
       check: false,
       path: binaryPath,
+      onStatus: (status) => statuses.push(status.step),
     });
 
     expect(result.alreadyUpdated).toBe(false);
@@ -128,6 +135,14 @@ describe("self-update", () => {
     expect(result.remoteVersion).toBe(`v${version}`);
     expect(readFileSync(binaryPath, "utf8")).toBe(`replacement-${platformAssetName()}`);
     expect(getBinaryVersion(binaryPath)).toBe(normalizeReleaseTag(`v${packageJson.version}`));
+    expect(statuses).toEqual([
+      "checking",
+      "locating_binary",
+      "checking_checksums",
+      "downloading",
+      "verifying",
+      "installing",
+    ]);
 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       return makeReleaseResponse(String(input), version, binaryBytes);
