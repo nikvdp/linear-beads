@@ -11,8 +11,17 @@ import {
   getDatabase,
   getDisplayId,
 } from "../utils/database.js";
-import { output } from "../utils/output.js";
-import { isLocalOnly } from "../utils/config.js";
+import {
+  formatIssueRelationSectionBeads,
+  formatIssueSummaryBeads,
+  output,
+} from "../utils/output.js";
+import {
+  getHumanOutputStyle,
+  HUMAN_OUTPUT_STYLE_CHOICES,
+  isLocalOnly,
+  parseHumanOutputStyle,
+} from "../utils/config.js";
 
 /**
  * Get the blockers for a specific issue
@@ -37,9 +46,18 @@ export const blockedCommand = new Command("blocked")
   .description("List blocked issues (waiting on blockers)")
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Force sync before listing")
+  .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
   .action(async (options) => {
     try {
+      const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      if (options.style && !requestedStyle) {
+        console.error(
+          `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
+        );
+        process.exit(1);
+      }
+
       // Ensure cache is fresh (skip in local-only mode)
       if (!isLocalOnly()) {
         if (options.sync) {
@@ -80,20 +98,54 @@ export const blockedCommand = new Command("blocked")
         }));
         output(JSON.stringify(result, null, 2));
       } else {
-        // Human output
-        output(`\n🚫 Blocked issues (${blockedIssues.length}):\n`);
-
-        for (const issue of blockedIssues) {
-          const blockers = getBlockersForIssue(issue.id);
-          output(`[P${issue.priority}] ${getDisplayId(issue.id)}: ${issue.title}`);
-          if (blockers.length > 0) {
-            const displayBlockers = blockers.map((id) => getDisplayId(id));
+        const style = getHumanOutputStyle(requestedStyle);
+        if (style === "beads") {
+          for (const issue of blockedIssues) {
             output(
-              `  Blocked by ${blockers.length} open issue${blockers.length > 1 ? "s" : ""}: [${displayBlockers.join(", ")}]`
+              formatIssueSummaryBeads({
+                ...issue,
+                display_id: getDisplayId(issue.id),
+                is_blocked: true,
+              })
             );
+            const blockers = getBlockersForIssue(issue.id);
+            if (blockers.length > 0) {
+              output(
+                formatIssueRelationSectionBeads(
+                  "Blocked by",
+                  blockers.map((blockerId) => {
+                    const blocker = getCachedIssue(blockerId);
+                    return {
+                      id: blockerId,
+                      display_id: getDisplayId(blockerId),
+                      title: blocker?.title || "(details unavailable)",
+                      status: blocker?.status || "open",
+                      priority: blocker?.priority ?? 2,
+                      sync_status: blocker?.sync_status,
+                    };
+                  }),
+                  { indent: "  " }
+                )
+              );
+            }
           }
+          output("");
+        } else {
+          // Human output
+          output(`\n🚫 Blocked issues (${blockedIssues.length}):\n`);
+
+          for (const issue of blockedIssues) {
+            const blockers = getBlockersForIssue(issue.id);
+            output(`[P${issue.priority}] ${getDisplayId(issue.id)}: ${issue.title}`);
+            if (blockers.length > 0) {
+              const displayBlockers = blockers.map((id) => getDisplayId(id));
+              output(
+                `  Blocked by ${blockers.length} open issue${blockers.length > 1 ? "s" : ""}: [${displayBlockers.join(", ")}]`
+              );
+            }
+          }
+          output("");
         }
-        output("");
       }
     } catch (error) {
       console.error("Error:", error instanceof Error ? error.message : error);

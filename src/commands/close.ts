@@ -13,9 +13,20 @@ import {
   isLocalId,
 } from "../utils/database.js";
 import { closeIssue, getTeamId, fetchIssue } from "../utils/issue-backend.js";
-import { formatIssueJson, formatIssueHuman, output, outputError } from "../utils/output.js";
+import {
+  formatIssueJson,
+  formatIssueHuman,
+  formatIssueHumanBeads,
+  output,
+  outputError,
+} from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
-import { isLocalOnly } from "../utils/config.js";
+import {
+  getHumanOutputStyle,
+  HUMAN_OUTPUT_STYLE_CHOICES,
+  isLocalOnly,
+  parseHumanOutputStyle,
+} from "../utils/config.js";
 
 export const closeCommand = new Command("close")
   .description("Close an issue")
@@ -24,9 +35,19 @@ export const closeCommand = new Command("close")
   .option("-f, --force", "Close even if open children remain")
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Sync immediately (block on network)")
+  .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
   .action(async (id: string, options) => {
     try {
+      const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      if (options.style && !requestedStyle) {
+        console.error(
+          `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
+        );
+        process.exit(1);
+      }
+      const style = getHumanOutputStyle(requestedStyle);
+
       const resolvedId = resolveIssueId(id);
       const childIds = getChildIds(resolvedId);
       const openChildren = childIds
@@ -37,6 +58,9 @@ export const closeCommand = new Command("close")
             id: childId,
             title: child?.title || "Unknown",
             status,
+            priority: child?.priority ?? 2,
+            created_at: child?.created_at || new Date().toISOString(),
+            updated_at: child?.updated_at || new Date().toISOString(),
           };
         })
         .filter((child) => child.status !== "closed");
@@ -61,11 +85,36 @@ export const closeCommand = new Command("close")
             )
           );
         } else {
-          outputError(`Cannot close ${getDisplayId(resolvedId)}: open child issues remain.`);
-          for (const child of openChildren) {
-            outputError(`- ${getDisplayId(child.id)} [${child.status}] ${child.title}`);
+          if (style === "beads") {
+            outputError(`Cannot close ${getDisplayId(resolvedId)}: open child issues remain.`);
+            for (const child of openChildren) {
+              outputError(
+                formatIssueHumanBeads(
+                  {
+                    id: child.id,
+                    title: child.title,
+                    status:
+                      child.status === "closed"
+                        ? "closed"
+                        : child.status === "in_progress"
+                          ? "in_progress"
+                          : "open",
+                    priority: child.priority,
+                    created_at: child.created_at,
+                    updated_at: child.updated_at,
+                  },
+                  getDisplayId(child.id)
+                )
+              );
+            }
+            outputError("Use --force to close the parent anyway.");
+          } else {
+            outputError(`Cannot close ${getDisplayId(resolvedId)}: open child issues remain.`);
+            for (const child of openChildren) {
+              outputError(`- ${getDisplayId(child.id)} [${child.status}] ${child.title}`);
+            }
+            outputError("Use --force to close the parent anyway.");
           }
-          outputError("Use --force to close the parent anyway.");
         }
         process.exit(1);
       }
@@ -90,7 +139,11 @@ export const closeCommand = new Command("close")
         if (options.json) {
           output(formatIssueJson(closed));
         } else {
-          output(formatIssueHuman(closed, getDisplayId(closed.id)));
+          output(
+            style === "beads"
+              ? formatIssueHumanBeads(closed, getDisplayId(closed.id))
+              : formatIssueHuman(closed, getDisplayId(closed.id))
+          );
         }
         return;
       }
@@ -107,7 +160,11 @@ export const closeCommand = new Command("close")
         if (options.json) {
           output(formatIssueJson(issue));
         } else {
-          output(formatIssueHuman(issue, getDisplayId(issue.id)));
+          output(
+            style === "beads"
+              ? formatIssueHumanBeads(issue, getDisplayId(issue.id))
+              : formatIssueHuman(issue, getDisplayId(issue.id))
+          );
         }
       } else {
         // Queue mode: add to outbox and spawn background worker
@@ -145,7 +202,11 @@ export const closeCommand = new Command("close")
           if (options.json) {
             output(formatIssueJson(closed));
           } else {
-            output(formatIssueHuman(closed, getDisplayId(closed.id)));
+            output(
+              style === "beads"
+                ? formatIssueHumanBeads(closed, getDisplayId(closed.id))
+                : formatIssueHuman(closed, getDisplayId(closed.id))
+            );
           }
         } else {
           output(`Closed: ${getDisplayId(resolvedId)}`);

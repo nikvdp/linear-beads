@@ -7,6 +7,7 @@ import { createRelation, deleteRelation, updateIssueParent } from "../utils/issu
 import {
   getDependencies,
   getCachedIssue,
+  getBlockedIssueIds,
   getDatabase,
   cacheDependency,
   deleteDependency,
@@ -17,9 +18,20 @@ import {
   isLocalId,
   resolveIssueLocalId,
 } from "../utils/database.js";
-import { output, outputError } from "../utils/output.js";
+import {
+  formatIssueHumanBeads,
+  formatIssueRelationSectionBeads,
+  formatIssueSummaryBeads,
+  output,
+  outputError,
+} from "../utils/output.js";
 import { queueOperation } from "../utils/spawn-worker.js";
-import { isLocalOnly } from "../utils/config.js";
+import {
+  getHumanOutputStyle,
+  HUMAN_OUTPUT_STYLE_CHOICES,
+  isLocalOnly,
+  parseHumanOutputStyle,
+} from "../utils/config.js";
 import type { Dependency } from "../types.js";
 
 /**
@@ -74,6 +86,8 @@ function hasRelatedDependencyBetween(issueA: string, issueB: string): boolean {
  */
 function printTree(
   issueId: string,
+  style: "classic" | "beads",
+  blockedIds: Set<string>,
   prefix: string = "",
   isLast: boolean = true,
   visited: Set<string> = new Set()
@@ -99,13 +113,32 @@ function printTree(
   const isReady = openBlockers.length === 0 && status !== "closed";
   const readyTag = isReady ? " [READY]" : "";
 
-  if (prefix === "") {
-    // Root node
-    output(`${getDisplayId(issueId)}: ${title} [P${priority}] (${status})${readyTag}`);
-  } else {
+  if (style === "beads") {
+    const displayId = getDisplayId(issueId);
+    const connectorPrefix = prefix === "" ? "" : `${prefix}${isLast ? "└── " : "├── "}`;
     output(
-      `${prefix}${isLast ? "└── " : "├── "}${getDisplayId(issueId)}: ${title} [P${priority}] (${status})${readyTag}`
+      formatIssueSummaryBeads(
+        {
+          id: issueId,
+          display_id: displayId,
+          title: `${title}${readyTag}`,
+          status: status === "closed" ? "closed" : issue?.status || "open",
+          priority: typeof priority === "number" ? priority : 2,
+          is_blocked: blockedIds.has(issueId),
+          sync_status: issue?.sync_status,
+        },
+        connectorPrefix
+      )
     );
+  } else {
+    if (prefix === "") {
+      // Root node
+      output(`${getDisplayId(issueId)}: ${title} [P${priority}] (${status})${readyTag}`);
+    } else {
+      output(
+        `${prefix}${isLast ? "└── " : "├── "}${getDisplayId(issueId)}: ${title} [P${priority}] (${status})${readyTag}`
+      );
+    }
   }
 
   // Get outgoing dependencies (things this issue depends on)
@@ -114,7 +147,7 @@ function printTree(
 
   deps.forEach((dep, index) => {
     const isLastDep = index === deps.length - 1;
-    printTree(dep.depends_on_id, childPrefix, isLastDep, visited);
+    printTree(dep.depends_on_id, style, blockedIds, childPrefix, isLastDep, visited);
   });
 }
 
@@ -441,8 +474,17 @@ const listCommand = new Command("list")
   .description("List all dependencies for an issue")
   .argument("<issue>", "Issue ID")
   .option("-j, --json", "Output as JSON")
+  .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .action(async (issueId: string, options) => {
     try {
+      const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      if (options.style && !requestedStyle) {
+        console.error(
+          `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
+        );
+        process.exit(1);
+      }
+
       const resolvedId = resolveIssueId(issueId);
       const issue = getCachedIssue(resolvedId);
       if (!issue) {
@@ -494,80 +536,163 @@ const listCommand = new Command("list")
         return;
       }
 
-      // Human-readable output
-      output(`\n📋 Dependencies for ${getDisplayId(resolvedId)}: ${issue.title}\n`);
-
-      if (parent) {
-        const parentIssue = getCachedIssue(parent.depends_on_id);
-        output(
-          `Parent: ${getDisplayId(parent.depends_on_id)} - ${parentIssue?.title || "Unknown"} (${parentIssue?.status || "unknown"})`
-        );
-      } else {
-        output("Parent: (none)");
-      }
-
-      output("");
-
-      if (children.length > 0) {
-        output(`Children (${children.length}):`);
-        children.forEach((child) => {
-          const childIssue = getCachedIssue(child.issue_id);
-          output(
-            `  ${getDisplayId(child.issue_id)} - ${childIssue?.title || "Unknown"} (${childIssue?.status || "unknown"})`
-          );
-        });
-      } else {
-        output("Children: (none)");
-      }
-
-      output("");
-
-      if (blockedBy.length > 0) {
-        output(`Blocked By (${blockedBy.length}):`);
-        blockedBy.forEach((dep) => {
-          const blockerIssue = getCachedIssue(dep.issue_id);
-          const status = blockerIssue?.status || "unknown";
-          const isOpen = status !== "closed";
-          const icon = isOpen ? "🔴" : "✅";
-          output(
-            `  ${icon} ${getDisplayId(dep.issue_id)} - ${blockerIssue?.title || "Unknown"} (${status})`
-          );
-        });
-      } else {
-        output("Blocked By: (none)");
-      }
-
-      output("");
-
-      if (blocks.length > 0) {
-        output(`Blocks (${blocks.length}):`);
-        blocks.forEach((dep) => {
-          const blockedIssue = getCachedIssue(dep.depends_on_id);
-          output(
-            `  ${getDisplayId(dep.depends_on_id)} - ${blockedIssue?.title || "Unknown"} (${blockedIssue?.status || "unknown"})`
-          );
-        });
-      } else {
-        output("Blocks: (none)");
-      }
-
-      output("");
-
-      const allRelated = relatedUnique;
-      if (allRelated.length > 0) {
-        output(`Related (${allRelated.length}):`);
-        allRelated.forEach((dep) => {
-          const relatedId = dep.issue_id === resolvedId ? dep.depends_on_id : dep.issue_id;
+      const style = getHumanOutputStyle(requestedStyle);
+      if (style === "beads") {
+        const blockedIds = getBlockedIssueIds();
+        const toEntry = (relatedId: string) => {
           const relatedIssue = getCachedIssue(relatedId);
-          output(
-            `  ${getDisplayId(relatedId)} - ${relatedIssue?.title || "Unknown"} (${relatedIssue?.status || "unknown"})`
-          );
-        });
-      } else {
-        output("Related: (none)");
-      }
+          return {
+            id: relatedId,
+            display_id: getDisplayId(relatedId),
+            title: relatedIssue?.title || "(details unavailable)",
+            status: relatedIssue?.status || "open",
+            priority: relatedIssue?.priority ?? 2,
+            sync_status: relatedIssue?.sync_status,
+            is_blocked: blockedIds.has(relatedId),
+          };
+        };
 
-      output("");
+        output(
+          formatIssueHumanBeads(issue, getDisplayId(resolvedId), {
+            isBlocked: blockedIds.has(resolvedId),
+          })
+        );
+        output("");
+
+        if (parent) {
+          output(
+            formatIssueRelationSectionBeads("Parent", [toEntry(parent.depends_on_id)], {
+              showCount: false,
+            })
+          );
+        }
+        if (children.length > 0) {
+          if (parent) output("");
+          output(
+            formatIssueRelationSectionBeads(
+              "Children",
+              children.map((child) => toEntry(child.issue_id))
+            )
+          );
+        }
+        if (blockedBy.length > 0) {
+          if (parent || children.length > 0) output("");
+          output(
+            formatIssueRelationSectionBeads(
+              "Blocked by",
+              blockedBy.map((dep) => toEntry(dep.issue_id))
+            )
+          );
+        }
+        if (blocks.length > 0) {
+          if (parent || children.length > 0 || blockedBy.length > 0) output("");
+          output(
+            formatIssueRelationSectionBeads(
+              "Blocks",
+              blocks.map((dep) => toEntry(dep.depends_on_id))
+            )
+          );
+        }
+        const allRelated = relatedUnique;
+        if (allRelated.length > 0) {
+          if (parent || children.length > 0 || blockedBy.length > 0 || blocks.length > 0)
+            output("");
+          output(
+            formatIssueRelationSectionBeads(
+              "Related",
+              allRelated.map((dep) =>
+                toEntry(dep.issue_id === resolvedId ? dep.depends_on_id : dep.issue_id)
+              )
+            )
+          );
+        }
+
+        if (
+          !parent &&
+          children.length === 0 &&
+          blockedBy.length === 0 &&
+          blocks.length === 0 &&
+          relatedUnique.length === 0
+        ) {
+          output("No dependency relationships.");
+        }
+        output("");
+      } else {
+        // Human-readable output
+        output(`\n📋 Dependencies for ${getDisplayId(resolvedId)}: ${issue.title}\n`);
+
+        if (parent) {
+          const parentIssue = getCachedIssue(parent.depends_on_id);
+          output(
+            `Parent: ${getDisplayId(parent.depends_on_id)} - ${parentIssue?.title || "Unknown"} (${parentIssue?.status || "unknown"})`
+          );
+        } else {
+          output("Parent: (none)");
+        }
+
+        output("");
+
+        if (children.length > 0) {
+          output(`Children (${children.length}):`);
+          children.forEach((child) => {
+            const childIssue = getCachedIssue(child.issue_id);
+            output(
+              `  ${getDisplayId(child.issue_id)} - ${childIssue?.title || "Unknown"} (${childIssue?.status || "unknown"})`
+            );
+          });
+        } else {
+          output("Children: (none)");
+        }
+
+        output("");
+
+        if (blockedBy.length > 0) {
+          output(`Blocked By (${blockedBy.length}):`);
+          blockedBy.forEach((dep) => {
+            const blockerIssue = getCachedIssue(dep.issue_id);
+            const status = blockerIssue?.status || "unknown";
+            const isOpen = status !== "closed";
+            const icon = isOpen ? "🔴" : "✅";
+            output(
+              `  ${icon} ${getDisplayId(dep.issue_id)} - ${blockerIssue?.title || "Unknown"} (${status})`
+            );
+          });
+        } else {
+          output("Blocked By: (none)");
+        }
+
+        output("");
+
+        if (blocks.length > 0) {
+          output(`Blocks (${blocks.length}):`);
+          blocks.forEach((dep) => {
+            const blockedIssue = getCachedIssue(dep.depends_on_id);
+            output(
+              `  ${getDisplayId(dep.depends_on_id)} - ${blockedIssue?.title || "Unknown"} (${blockedIssue?.status || "unknown"})`
+            );
+          });
+        } else {
+          output("Blocks: (none)");
+        }
+
+        output("");
+
+        const allRelated = relatedUnique;
+        if (allRelated.length > 0) {
+          output(`Related (${allRelated.length}):`);
+          allRelated.forEach((dep) => {
+            const relatedId = dep.issue_id === resolvedId ? dep.depends_on_id : dep.issue_id;
+            const relatedIssue = getCachedIssue(relatedId);
+            output(
+              `  ${getDisplayId(relatedId)} - ${relatedIssue?.title || "Unknown"} (${relatedIssue?.status || "unknown"})`
+            );
+          });
+        } else {
+          output("Related: (none)");
+        }
+
+        output("");
+      }
     } catch (error) {
       outputError(error instanceof Error ? error.message : String(error));
       process.exit(1);
@@ -578,8 +703,17 @@ const listCommand = new Command("list")
 const treeCommand = new Command("tree")
   .description("Show dependency tree for an issue")
   .argument("<issue>", "Issue ID")
-  .action(async (issueId: string) => {
+  .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
+  .action(async (issueId: string, options) => {
     try {
+      const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      if (options.style && !requestedStyle) {
+        console.error(
+          `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
+        );
+        process.exit(1);
+      }
+
       const resolvedId = resolveIssueId(issueId);
       const issue = getCachedIssue(resolvedId);
       if (!issue) {
@@ -587,8 +721,12 @@ const treeCommand = new Command("tree")
         process.exit(1);
       }
 
-      output(`\n🌲 Dependency tree for ${getDisplayId(resolvedId)}:\n`);
-      printTree(resolvedId);
+      const style = getHumanOutputStyle(requestedStyle);
+      const blockedIds = getBlockedIssueIds();
+      if (style === "classic") {
+        output(`\n🌲 Dependency tree for ${getDisplayId(resolvedId)}:\n`);
+      }
+      printTree(resolvedId, style, blockedIds);
       output("");
     } catch (error) {
       outputError(error instanceof Error ? error.message : String(error));

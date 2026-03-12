@@ -149,6 +149,29 @@ export interface HumanOutputIssue extends Pick<Issue, "id" | "title" | "status" 
   is_blocked?: boolean;
 }
 
+export function toHumanOutputIssue(
+  issue: Pick<Issue, "id" | "title" | "status" | "priority" | "updated_at" | "sync_status">,
+  displayId: string,
+  extras?: Partial<Omit<HumanOutputIssue, "id" | "title" | "status" | "priority" | "display_id">>
+): HumanOutputIssue {
+  return {
+    id: issue.id,
+    title: issue.title,
+    status: issue.status,
+    priority: issue.priority,
+    display_id: displayId,
+    updated_at: issue.updated_at,
+    sync_status: issue.sync_status,
+    ...extras,
+  };
+}
+
+export interface BeadsRelationSectionOptions {
+  indent?: string;
+  showCount?: boolean;
+  emptyLabel?: string;
+}
+
 /**
  * Format issue for human-readable output
  */
@@ -173,30 +196,6 @@ export function formatIssueHuman(issue: Issue, displayId?: string): string {
   if (plainIssue.description) {
     lines.push(`  Description: ${plainIssue.description}`);
   }
-  return lines.join("\n");
-}
-
-/**
- * Format issues list for human-readable output
- */
-export function formatIssuesListHuman(issues: HumanOutputIssue[]): string {
-  if (issues.length === 0) {
-    return "No issues found.";
-  }
-
-  const lines: string[] = [];
-  const maxIdLen = Math.max(...issues.map((i) => i.display_id.length));
-
-  for (const issue of issues) {
-    const id = issue.display_id.padEnd(maxIdLen);
-    const status = issue.status.padEnd(12);
-    const priority = PRIORITY_LABELS[issue.priority]?.slice(0, 4).padEnd(4) || "    ";
-    const title = issue.title;
-    const parentInfo = issue.parent_display_id ? ` (↳ ${issue.parent_display_id})` : "";
-    const syncingSuffix = issue.sync_status === "pending" ? " (syncing...)" : "";
-    lines.push(`${id}  ${status}  ${priority}  ${title}${parentInfo}${syncingSuffix}`);
-  }
-
   return lines.join("\n");
 }
 
@@ -237,9 +236,89 @@ function beadsStatusSymbol(issue: HumanOutputIssue): string {
   return STATUS_SYMBOLS[issue.status] || "?";
 }
 
-function formatBeadsLine(issue: HumanOutputIssue, prefix: string = ""): string {
+/**
+ * Format issue for human-readable output
+ */
+export function formatIssuesListHuman(issues: HumanOutputIssue[]): string {
+  if (issues.length === 0) {
+    return "No issues found.";
+  }
+
+  const lines: string[] = [];
+  const maxIdLen = Math.max(...issues.map((i) => i.display_id.length));
+
+  for (const issue of issues) {
+    const id = issue.display_id.padEnd(maxIdLen);
+    const status = issue.status.padEnd(12);
+    const priority = PRIORITY_LABELS[issue.priority]?.slice(0, 4).padEnd(4) || "    ";
+    const title = issue.title;
+    const parentInfo = issue.parent_display_id ? ` (↳ ${issue.parent_display_id})` : "";
+    const syncingSuffix = issue.sync_status === "pending" ? " (syncing...)" : "";
+    lines.push(`${id}  ${status}  ${priority}  ${title}${parentInfo}${syncingSuffix}`);
+  }
+
+  return lines.join("\n");
+}
+
+export function formatIssueLineBeads(issue: HumanOutputIssue, prefix: string = ""): string {
   const syncingSuffix = issue.sync_status === "pending" ? ` ${beadsDim("(syncing...)")}` : "";
   return `${prefix}${beadsStatusSymbol(issue)} ${issue.display_id} ${beadsPriorityDot(issue.priority)} ${beadsPriorityLabel(issue.priority)} ${issue.title}${syncingSuffix}`;
+}
+
+export function formatIssueSummaryBeads(issue: HumanOutputIssue, prefix: string = ""): string {
+  return formatIssueLineBeads(issue, prefix);
+}
+
+export function formatIssueRelationSectionBeads(
+  title: string,
+  issues: HumanOutputIssue[],
+  options?: BeadsRelationSectionOptions
+): string {
+  if (issues.length === 0) {
+    return options?.emptyLabel ? `${title}: ${options.emptyLabel}` : "";
+  }
+
+  const indent = options?.indent || "";
+  const showCount = options?.showCount ?? true;
+  const heading = showCount ? `${title} (${issues.length}):` : `${title}:`;
+  const lines = [`${indent}${heading}`];
+
+  issues.forEach((issue, index) => {
+    const connector = index === issues.length - 1 ? "└── " : "├── ";
+    lines.push(formatIssueSummaryBeads(issue, `${indent}${connector}`));
+  });
+
+  return lines.join("\n");
+}
+
+export function formatIssueHumanBeads(
+  issue: Issue,
+  displayId?: string,
+  options?: { isBlocked?: boolean }
+): string {
+  const plainIssue = issueWithPlainDescription(issue);
+  const mediaCount = listMediaItemsForIssue(plainIssue.local_id || plainIssue.id).length;
+  const summary = toHumanOutputIssue(plainIssue, displayId || plainIssue.id, {
+    is_blocked: options?.isBlocked || false,
+  });
+  const lines: string[] = [formatIssueSummaryBeads(summary)];
+
+  if (plainIssue.issue_type) {
+    lines.push(`  Type: ${plainIssue.issue_type}`);
+  }
+  if (plainIssue.assignee) {
+    lines.push(`  Assignee: ${plainIssue.assignee}`);
+  }
+  if (mediaCount > 0) {
+    lines.push(
+      `  Media: ${mediaCount} ${mediaCount === 1 ? "item" : "items"} (use 'lb media' to retrieve them)`
+    );
+  }
+  if (plainIssue.description) {
+    lines.push(`  Description: ${plainIssue.description}`);
+  }
+
+  return lines.join("\n");
 }
 
 function sortBeadsChildren(a: HumanOutputIssue, b: HumanOutputIssue): number {
@@ -289,7 +368,7 @@ function buildBeadsTreeLines(issues: HumanOutputIssue[]): string[] {
     children.forEach((child, index) => {
       const isLast = index === children.length - 1;
       const connector = isLast ? "└── " : "├── ";
-      lines.push(formatBeadsLine(child, `${branchPrefix}${connector}`));
+      lines.push(formatIssueLineBeads(child, `${branchPrefix}${connector}`));
       visitDescendants(child, branchPrefix, isLast);
     });
   }
@@ -297,7 +376,7 @@ function buildBeadsTreeLines(issues: HumanOutputIssue[]): string[] {
   const topLevel = issues.filter((issue) => !childIds.has(issue.display_id));
 
   for (const issue of topLevel) {
-    lines.push(formatBeadsLine(issue));
+    lines.push(formatIssueLineBeads(issue));
     visitDescendants(issue, "", true);
   }
 

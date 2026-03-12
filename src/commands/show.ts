@@ -7,6 +7,7 @@ import { ensureFresh, ensureFreshBestEffort } from "../utils/sync.js";
 import {
   getCachedIssue,
   getDependencies,
+  getBlockedIssueIds,
   getInverseDependencies,
   getDisplayId,
   resolveIssueId,
@@ -17,20 +18,36 @@ import { fetchIssue } from "../utils/issue-backend.js";
 import {
   formatShowJson,
   formatIssueHuman,
+  formatIssueHumanBeads,
+  formatIssueRelationSectionBeads,
   normalizeIssueDescriptionForOutput,
   output,
   outputError,
 } from "../utils/output.js";
-import { isLocalOnly } from "../utils/config.js";
+import {
+  getHumanOutputStyle,
+  HUMAN_OUTPUT_STYLE_CHOICES,
+  isLocalOnly,
+  parseHumanOutputStyle,
+} from "../utils/config.js";
 
 export const showCommand = new Command("show")
   .description("Show issue details")
   .argument("<id>", "Issue ID (e.g., TEAM-123 or 123)")
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Force sync before showing")
+  .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
   .action(async (id: string, options) => {
     try {
+      const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      if (options.style && !requestedStyle) {
+        console.error(
+          `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
+        );
+        process.exit(1);
+      }
+
       const resolvedId = resolveIssueId(id);
       const localOnly = isLocalOnly();
 
@@ -112,7 +129,27 @@ export const showCommand = new Command("show")
         };
         output(JSON.stringify([jsonOutput], null, 2));
       } else {
-        output(formatIssueHuman(issue, getDisplayId(issue.id)));
+        const style = getHumanOutputStyle(requestedStyle);
+        const blockedIds = getBlockedIssueIds();
+        const issueDisplayId = getDisplayId(issue.id);
+        const relationEntry = (relatedId: string) => {
+          const relatedIssue = getCachedIssue(relatedId);
+          return {
+            id: relatedId,
+            display_id: getDisplayId(relatedId),
+            title: relatedIssue?.title || "(details unavailable)",
+            status: relatedIssue?.status || "open",
+            priority: relatedIssue?.priority ?? 2,
+            sync_status: relatedIssue?.sync_status,
+            is_blocked: blockedIds.has(relatedId),
+          };
+        };
+
+        output(
+          style === "beads"
+            ? formatIssueHumanBeads(issue, issueDisplayId, { isBlocked: blockedIds.has(issue.id) })
+            : formatIssueHuman(issue, issueDisplayId)
+        );
 
         // Show relationships
         let hasRelations = false;
@@ -122,8 +159,16 @@ export const showCommand = new Command("show")
             output("");
             hasRelations = true;
           }
-          const parentIssue = getCachedIssue(parent);
-          output(`Parent: ${getDisplayId(parent)}${parentIssue ? `: ${parentIssue.title}` : ""}`);
+          if (style === "beads") {
+            output(
+              formatIssueRelationSectionBeads("Parent", [relationEntry(parent)], {
+                showCount: false,
+              })
+            );
+          } else {
+            const parentIssue = getCachedIssue(parent);
+            output(`Parent: ${getDisplayId(parent)}${parentIssue ? `: ${parentIssue.title}` : ""}`);
+          }
         }
 
         if (children.length > 0) {
@@ -131,12 +176,16 @@ export const showCommand = new Command("show")
             output("");
             hasRelations = true;
           }
-          output(`Children (${children.length}):`);
-          for (const childId of children) {
-            const child = getCachedIssue(childId);
-            output(
-              `  ↳ ${getDisplayId(childId)}${child ? `: ${child.title} [P${child.priority}]` : ""}`
-            );
+          if (style === "beads") {
+            output(formatIssueRelationSectionBeads("Children", children.map(relationEntry)));
+          } else {
+            output(`Children (${children.length}):`);
+            for (const childId of children) {
+              const child = getCachedIssue(childId);
+              output(
+                `  ↳ ${getDisplayId(childId)}${child ? `: ${child.title} [P${child.priority}]` : ""}`
+              );
+            }
           }
         }
 
@@ -145,12 +194,16 @@ export const showCommand = new Command("show")
             output("");
             hasRelations = true;
           }
-          output(`Blocks (${blocks.length}):`);
-          for (const blockedId of blocks) {
-            const blocked = getCachedIssue(blockedId);
-            output(
-              `  ← ${getDisplayId(blockedId)}${blocked ? `: ${blocked.title} [P${blocked.priority}]` : ""}`
-            );
+          if (style === "beads") {
+            output(formatIssueRelationSectionBeads("Blocks", blocks.map(relationEntry)));
+          } else {
+            output(`Blocks (${blocks.length}):`);
+            for (const blockedId of blocks) {
+              const blocked = getCachedIssue(blockedId);
+              output(
+                `  ← ${getDisplayId(blockedId)}${blocked ? `: ${blocked.title} [P${blocked.priority}]` : ""}`
+              );
+            }
           }
         }
 
@@ -159,12 +212,16 @@ export const showCommand = new Command("show")
             output("");
             hasRelations = true;
           }
-          output(`Blocked by (${blockedBy.length}):`);
-          for (const blockerId of blockedBy) {
-            const blocker = getCachedIssue(blockerId);
-            output(
-              `  → ${getDisplayId(blockerId)}${blocker ? `: ${blocker.title} [P${blocker.priority}]` : ""}`
-            );
+          if (style === "beads") {
+            output(formatIssueRelationSectionBeads("Blocked by", blockedBy.map(relationEntry)));
+          } else {
+            output(`Blocked by (${blockedBy.length}):`);
+            for (const blockerId of blockedBy) {
+              const blocker = getCachedIssue(blockerId);
+              output(
+                `  → ${getDisplayId(blockerId)}${blocker ? `: ${blocker.title} [P${blocker.priority}]` : ""}`
+              );
+            }
           }
         }
 
@@ -173,10 +230,14 @@ export const showCommand = new Command("show")
             output("");
             hasRelations = true;
           }
-          output(`Related (${related.length}):`);
-          for (const relId of related) {
-            const rel = getCachedIssue(relId);
-            output(`  ↔ ${getDisplayId(relId)}${rel ? `: ${rel.title} [P${rel.priority}]` : ""}`);
+          if (style === "beads") {
+            output(formatIssueRelationSectionBeads("Related", related.map(relationEntry)));
+          } else {
+            output(`Related (${related.length}):`);
+            for (const relId of related) {
+              const rel = getCachedIssue(relId);
+              output(`  ↔ ${getDisplayId(relId)}${rel ? `: ${rel.title} [P${rel.priority}]` : ""}`);
+            }
           }
         }
       }

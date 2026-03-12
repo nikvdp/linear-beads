@@ -26,11 +26,23 @@ import {
   createRelation,
 } from "../utils/issue-backend.js";
 import { toCanonicalLocalDescription } from "../utils/linear.js";
-import { formatIssueJson, formatIssueHuman, output, outputError } from "../utils/output.js";
+import {
+  formatIssueJson,
+  formatIssueHuman,
+  formatIssueHumanBeads,
+  output,
+  outputError,
+} from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Issue, IssueType } from "../types.js";
 import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
-import { useTypes, isLocalOnly } from "../utils/config.js";
+import {
+  getHumanOutputStyle,
+  HUMAN_OUTPUT_STYLE_CHOICES,
+  isLocalOnly,
+  parseHumanOutputStyle,
+  useTypes,
+} from "../utils/config.js";
 import { chooseReuseIssue, findDuplicateMatches } from "../utils/duplicate-detection.js";
 import {
   looksLikeEscapedNewlineMistake,
@@ -122,9 +134,19 @@ export const createCommand = new Command("create")
   .option("--reuse-if-duplicate", "Return a matching issue instead of creating a duplicate")
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Sync immediately (block on network)")
+  .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
   .action(async (title: string, options) => {
     try {
+      const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      if (options.style && !requestedStyle) {
+        console.error(
+          `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
+        );
+        process.exit(1);
+      }
+      const style = getHumanOutputStyle(requestedStyle);
+
       const { priority, error: priorityError } = parsePriority(options.priority);
       if (priorityError || priority === undefined) {
         console.error(priorityError);
@@ -158,7 +180,11 @@ export const createCommand = new Command("create")
           if (options.json) {
             output(formatIssueJson(reused));
           } else {
-            output(`Reused existing issue: ${getDisplayId(reused.id)}: ${reused.title}`);
+            output(
+              style === "beads"
+                ? formatIssueHumanBeads(reused, getDisplayId(reused.id))
+                : `Reused existing issue: ${getDisplayId(reused.id)}: ${reused.title}`
+            );
           }
           return;
         }
@@ -301,7 +327,11 @@ export const createCommand = new Command("create")
         if (options.json) {
           output(formatIssueJson(issue));
         } else {
-          output(`Created: ${localId}: ${title}`);
+          output(
+            style === "beads"
+              ? formatIssueHumanBeads(issue, localId)
+              : `Created: ${localId}: ${title}`
+          );
         }
         return;
       }
@@ -396,7 +426,11 @@ export const createCommand = new Command("create")
         if (options.json) {
           output(formatIssueJson(issue));
         } else {
-          output(formatIssueHuman(issue, getDisplayId(issue.id)));
+          output(
+            style === "beads"
+              ? formatIssueHumanBeads(issue, getDisplayId(issue.id))
+              : formatIssueHuman(issue, getDisplayId(issue.id))
+          );
         }
       } else {
         // Queue mode: add to outbox and spawn background worker
@@ -484,7 +518,11 @@ export const createCommand = new Command("create")
         if (options.json) {
           output(formatIssueJson(issue));
         } else {
-          output(`Created: ${localId}: ${title} (syncing...)`);
+          output(
+            style === "beads"
+              ? formatIssueHumanBeads(issue, localId)
+              : `Created: ${localId}: ${title} (syncing...)`
+          );
         }
       }
     } catch (error) {

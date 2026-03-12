@@ -24,11 +24,22 @@ import {
   createRelation,
 } from "../utils/issue-backend.js";
 import { toCanonicalLocalDescription } from "../utils/linear.js";
-import { formatIssueJson, formatIssueHuman, output, outputError } from "../utils/output.js";
+import {
+  formatIssueJson,
+  formatIssueHuman,
+  formatIssueHumanBeads,
+  output,
+  outputError,
+} from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Priority, IssueStatus } from "../types.js";
 import { parsePriority } from "../types.js";
-import { isLocalOnly } from "../utils/config.js";
+import {
+  getHumanOutputStyle,
+  HUMAN_OUTPUT_STYLE_CHOICES,
+  isLocalOnly,
+  parseHumanOutputStyle,
+} from "../utils/config.js";
 import {
   looksLikeEscapedNewlineMistake,
   resolveDescriptionInput,
@@ -130,9 +141,19 @@ export const updateCommand = new Command("update")
   .option("--related <id>", "Related issue ID (repeatable)", collect)
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Sync immediately (block on network)")
+  .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
   .action(async (id: string, options) => {
     try {
+      const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      if (options.style && !requestedStyle) {
+        console.error(
+          `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
+        );
+        process.exit(1);
+      }
+      const style = getHumanOutputStyle(requestedStyle);
+
       const resolvedId = resolveIssueId(id);
       // Validate inputs
       let description = await resolveDescriptionInput({
@@ -317,7 +338,11 @@ export const updateCommand = new Command("update")
         if (options.json) {
           output(formatIssueJson(updated));
         } else {
-          output(formatIssueHuman(updated, getDisplayId(updated.id)));
+          output(
+            style === "beads"
+              ? formatIssueHumanBeads(updated, getDisplayId(updated.id))
+              : formatIssueHuman(updated, getDisplayId(updated.id))
+          );
         }
         return;
       }
@@ -409,7 +434,11 @@ export const updateCommand = new Command("update")
           if (options.json) {
             output(formatIssueJson(issue));
           } else {
-            output(formatIssueHuman(issue, getDisplayId(issue.id)));
+            output(
+              style === "beads"
+                ? formatIssueHumanBeads(issue, getDisplayId(issue.id))
+                : formatIssueHuman(issue, getDisplayId(issue.id))
+            );
           }
         }
       } else {
@@ -497,7 +526,11 @@ export const updateCommand = new Command("update")
           if (options.json) {
             output(formatIssueJson(updated));
           } else {
-            output(formatIssueHuman(updated, getDisplayId(updated.id)));
+            output(
+              style === "beads"
+                ? formatIssueHumanBeads(updated, getDisplayId(updated.id))
+                : formatIssueHuman(updated, getDisplayId(updated.id))
+            );
           }
         } else {
           output(`Updated: ${getDisplayId(resolvedId)}`);
