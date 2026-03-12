@@ -46,4 +46,8 @@ export interface HttpsLbCliDevConfigSchemaJson {
    * Mail backend adapter. 'local' keeps mail in local SQLite. 'linear' projects mail through Linear comments.
    */
   mail_backend?: "local" | "linear";
+  /**
+   * Default human-readable output style for commands like 'lb list' and 'lb ready'. JSON output is unchanged.
+   */
+  human_output_style?: "classic" | "beads";
 }

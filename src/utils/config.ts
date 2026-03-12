@@ -24,6 +24,9 @@ interface LoadedConfig extends ConfigTypes {
   team_key?: string;
 }
 
+export type HumanOutputStyle = "classic" | "beads";
+export const HUMAN_OUTPUT_STYLE_CHOICES: HumanOutputStyle[] = ["classic", "beads"];
+
 let loadedConfig: LoadedConfig | null = null;
 let runtimeOverrides: Partial<LoadedConfig> = {};
 
@@ -209,6 +212,7 @@ export const DEFAULT_CONFIG: LoadedConfig = {
   repo_binding_version: LEGACY_REPO_BINDING_VERSION,
   issue_backend: "linear",
   mail_backend: "local",
+  human_output_style: "classic",
 };
 
 function parseRepoScope(value: unknown): RepoScopeMode | undefined {
@@ -220,6 +224,13 @@ function parseRepoScope(value: unknown): RepoScopeMode | undefined {
 
 function parseRepoBindingVersion(value: unknown): RepoBindingVersion | undefined {
   if (value === 1 || value === 2) {
+    return value;
+  }
+  return undefined;
+}
+
+export function parseHumanOutputStyle(value: unknown): HumanOutputStyle | undefined {
+  if (value === "classic" || value === "beads") {
     return value;
   }
   return undefined;
@@ -496,6 +507,10 @@ export function getMailBackendKind(): "linear" | "local" {
   return value === "linear" ? "linear" : "local";
 }
 
+export function getHumanOutputStyle(cliValue?: HumanOutputStyle): HumanOutputStyle {
+  return parseHumanOutputStyle(getOption("human_output_style", cliValue)) || "classic";
+}
+
 function normalizeCliVersionTag(rawVersion: string): string {
   const trimmed = rawVersion.trim();
   if (!trimmed) {
@@ -565,17 +580,54 @@ export function getDbPath(): string {
   return join(baseDir, ".lb", "cache.db");
 }
 
-/**
- * Update per-repo config values and persist them to disk.
- */
-export function writeRepoConfig(updates: Partial<LoadedConfig>): string {
-  const configPath = getRepoConfigWritePath();
+function getGlobalConfigWritePath(): string {
+  const jsoncPath = getGlobalConfigPath();
+  const jsonPath = jsoncPath.replace(/\.jsonc$/, ".json");
+
+  if (existsSync(jsoncPath)) {
+    return jsoncPath;
+  }
+  if (existsSync(jsonPath)) {
+    return jsonPath;
+  }
+  return jsoncPath;
+}
+
+function writeConfigFile(
+  configPath: string,
+  updates: Partial<LoadedConfig>,
+  options?: { chmodMode?: number }
+): string {
   const existing = loadConfigLayer(configPath) as Partial<LoadedConfig> | null;
   const merged = deepMerge((existing || {}) as LoadedConfig, updates);
 
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, `${JSON.stringify(merged, null, 2)}\n`);
+
+  if (options?.chmodMode !== undefined) {
+    try {
+      const { chmodSync } = require("fs");
+      chmodSync(configPath, options.chmodMode);
+    } catch {
+      // best effort for config file permissions
+    }
+  }
+
   reloadConfig();
 
   return configPath;
+}
+
+/**
+ * Update per-repo config values and persist them to disk.
+ */
+export function writeRepoConfig(updates: Partial<LoadedConfig>): string {
+  return writeConfigFile(getRepoConfigWritePath(), updates);
+}
+
+/**
+ * Update global config values and persist them to disk.
+ */
+export function writeGlobalConfig(updates: Partial<LoadedConfig>): string {
+  return writeConfigFile(getGlobalConfigWritePath(), updates, { chmodMode: 0o600 });
 }

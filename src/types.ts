@@ -222,6 +222,8 @@ export interface Config {
   cache_ttl_seconds?: number;
   // Issue type labeling (off by default)
   use_issue_types?: boolean;
+  // Default human-readable list style
+  human_output_style?: "classic" | "beads";
 }
 
 /**

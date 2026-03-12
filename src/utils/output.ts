@@ -129,6 +129,26 @@ const PRIORITY_LABELS: Record<number, string> = {
   4: "backlog",
 };
 
+const BEADS_PRIORITY_LABELS = ["P0", "P1", "P2", "P3", "P4"] as const;
+const STATUS_SYMBOLS = {
+  open: "○",
+  in_progress: "◐",
+  closed: "✓",
+  blocked: "●",
+  deferred: "❄",
+} as const;
+const PRIORITY_COLORS = ["\x1b[31m", "\x1b[33m", "\x1b[35m", "\x1b[34m", "\x1b[90m"] as const;
+const ANSI_RESET = "\x1b[0m";
+const ANSI_DIM = "\x1b[2m";
+
+export interface HumanOutputIssue extends Pick<Issue, "id" | "title" | "status" | "priority"> {
+  display_id: string;
+  updated_at?: string;
+  parent_display_id?: string | null;
+  sync_status?: Issue["sync_status"];
+  is_blocked?: boolean;
+}
+
 /**
  * Format issue for human-readable output
  */
@@ -159,23 +179,187 @@ export function formatIssueHuman(issue: Issue, displayId?: string): string {
 /**
  * Format issues list for human-readable output
  */
-export function formatIssuesListHuman(issues: Issue[]): string {
+export function formatIssuesListHuman(issues: HumanOutputIssue[]): string {
   if (issues.length === 0) {
     return "No issues found.";
   }
 
   const lines: string[] = [];
-  const maxIdLen = Math.max(...issues.map((i) => i.id.length));
+  const maxIdLen = Math.max(...issues.map((i) => i.display_id.length));
 
   for (const issue of issues) {
-    const id = issue.id.padEnd(maxIdLen);
-    const status = issue.status.padEnd(11);
+    const id = issue.display_id.padEnd(maxIdLen);
+    const status = issue.status.padEnd(12);
     const priority = PRIORITY_LABELS[issue.priority]?.slice(0, 4).padEnd(4) || "    ";
-    const title = issue.title.slice(0, 60);
-    lines.push(`${id}  ${status}  ${priority}  ${title}`);
+    const title = issue.title;
+    const parentInfo = issue.parent_display_id ? ` (↳ ${issue.parent_display_id})` : "";
+    const syncingSuffix = issue.sync_status === "pending" ? " (syncing...)" : "";
+    lines.push(`${id}  ${status}  ${priority}  ${title}${parentInfo}${syncingSuffix}`);
   }
 
   return lines.join("\n");
+}
+
+function beadsOutputUsesColor(): boolean {
+  return Boolean(process.stdout.isTTY);
+}
+
+function beadsPriorityDot(priority: number): string {
+  if (!beadsOutputUsesColor()) {
+    return "●";
+  }
+
+  const color = PRIORITY_COLORS[priority] ?? PRIORITY_COLORS[2];
+  return `${color}●${ANSI_RESET}`;
+}
+
+function beadsPriorityLabel(priority: number): string {
+  const label = BEADS_PRIORITY_LABELS[priority] ?? "P2";
+  if (!beadsOutputUsesColor()) {
+    return label;
+  }
+
+  const color = PRIORITY_COLORS[priority] ?? PRIORITY_COLORS[2];
+  return `${color}${label}${ANSI_RESET}`;
+}
+
+function beadsDim(text: string): string {
+  if (!beadsOutputUsesColor()) {
+    return text;
+  }
+  return `${ANSI_DIM}${text}${ANSI_RESET}`;
+}
+
+function beadsStatusSymbol(issue: HumanOutputIssue): string {
+  if (issue.is_blocked) {
+    return STATUS_SYMBOLS.blocked;
+  }
+  return STATUS_SYMBOLS[issue.status] || "?";
+}
+
+function formatBeadsLine(issue: HumanOutputIssue, prefix: string = ""): string {
+  const syncingSuffix = issue.sync_status === "pending" ? ` ${beadsDim("(syncing...)")}` : "";
+  return `${prefix}${beadsStatusSymbol(issue)} ${issue.display_id} ${beadsPriorityDot(issue.priority)} ${beadsPriorityLabel(issue.priority)} ${issue.title}${syncingSuffix}`;
+}
+
+function sortBeadsChildren(a: HumanOutputIssue, b: HumanOutputIssue): number {
+  if (a.priority !== b.priority) {
+    return a.priority - b.priority;
+  }
+  return a.title.localeCompare(b.title);
+}
+
+function buildBeadsTreeLines(issues: HumanOutputIssue[]): string[] {
+  const issueMap = new Map<string, HumanOutputIssue>();
+  const childrenByParent = new Map<string, HumanOutputIssue[]>();
+  const childIds = new Set<string>();
+
+  for (const issue of issues) {
+    issueMap.set(issue.display_id, issue);
+  }
+
+  for (const issue of issues) {
+    const parentId = issue.parent_display_id;
+    if (!parentId || !issueMap.has(parentId)) {
+      continue;
+    }
+    childIds.add(issue.display_id);
+    const children = childrenByParent.get(parentId) || [];
+    children.push(issue);
+    childrenByParent.set(parentId, children);
+  }
+
+  for (const children of childrenByParent.values()) {
+    children.sort(sortBeadsChildren);
+  }
+
+  const lines: string[] = [];
+
+  function visitDescendants(
+    parent: HumanOutputIssue,
+    ancestorPrefix: string,
+    parentIsLast: boolean
+  ): void {
+    const children = childrenByParent.get(parent.display_id);
+    if (!children || children.length === 0) {
+      return;
+    }
+
+    const branchPrefix = `${ancestorPrefix}${parentIsLast ? "    " : "│   "}`;
+    children.forEach((child, index) => {
+      const isLast = index === children.length - 1;
+      const connector = isLast ? "└── " : "├── ";
+      lines.push(formatBeadsLine(child, `${branchPrefix}${connector}`));
+      visitDescendants(child, branchPrefix, isLast);
+    });
+  }
+
+  const topLevel = issues.filter((issue) => !childIds.has(issue.display_id));
+
+  for (const issue of topLevel) {
+    lines.push(formatBeadsLine(issue));
+    visitDescendants(issue, "", true);
+  }
+
+  return lines;
+}
+
+function formatBeadsFooter(issues: HumanOutputIssue[], includeBlockedLegend: boolean): string {
+  const counts: Partial<Record<Issue["status"], number>> = {};
+  let blockedCount = 0;
+
+  for (const issue of issues) {
+    counts[issue.status] = (counts[issue.status] || 0) + 1;
+    if (issue.is_blocked) {
+      blockedCount += 1;
+    }
+  }
+
+  const parts: string[] = [];
+  if (counts.open) parts.push(`${counts.open} open`);
+  if (counts.in_progress) parts.push(`${counts.in_progress} in progress`);
+  if (includeBlockedLegend && blockedCount) parts.push(`${blockedCount} blocked`);
+  if (counts.closed) parts.push(`${counts.closed} closed`);
+
+  const summary = parts.length > 0 ? ` (${parts.join(", ")})` : "";
+  return `${"─".repeat(80)}\nTotal: ${issues.length} issues${summary}\n\nStatus: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred`;
+}
+
+export function formatIssuesListHumanBeads(issues: HumanOutputIssue[]): string {
+  if (issues.length === 0) {
+    return "No issues found.";
+  }
+
+  return `${buildBeadsTreeLines(issues).join("\n")}\n\n${formatBeadsFooter(issues, true)}`;
+}
+
+export function formatReadyHuman(issues: HumanOutputIssue[]): string {
+  if (issues.length === 0) {
+    return "No ready issues.";
+  }
+
+  const lines: string[] = [];
+  lines.push(
+    `\n📋 Ready work (${issues.length} issue${issues.length === 1 ? "" : "s"} with no blockers):\n`
+  );
+
+  issues.forEach((issue, index) => {
+    const parentInfo = issue.parent_display_id ? ` (↳ ${issue.parent_display_id})` : "";
+    lines.push(
+      `${index + 1}. [P${issue.priority}] ${issue.display_id}: ${issue.title}${parentInfo}`
+    );
+  });
+
+  lines.push("");
+  return lines.join("\n");
+}
+
+export function formatReadyHumanBeads(issues: HumanOutputIssue[]): string {
+  if (issues.length === 0) {
+    return "No ready issues.";
+  }
+
+  return `${buildBeadsTreeLines(issues).join("\n")}\n\n${formatBeadsFooter(issues, false)}`;
 }
 
 /**

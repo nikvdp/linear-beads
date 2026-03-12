@@ -6,16 +6,25 @@ import { Command } from "commander";
 import { ensureFresh, ensureFreshBestEffort } from "../utils/sync.js";
 import {
   getCachedIssues,
+  getBlockedIssueIds,
   getDependencies,
   getDependents,
   getCacheInfo,
   getDisplayId,
 } from "../utils/database.js";
-import { formatIssuesListJson, formatIssuesListHuman, output } from "../utils/output.js";
+import { formatIssuesListHuman, formatIssuesListHumanBeads, output } from "../utils/output.js";
 import { getViewer } from "../utils/issue-backend.js";
 import type { IssueStatus } from "../types.js";
 import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
-import { useTypes, isLocalOnly, getRepoName, getRepoScope } from "../utils/config.js";
+import {
+  getHumanOutputStyle,
+  getRepoName,
+  getRepoScope,
+  HUMAN_OUTPUT_STYLE_CHOICES,
+  isLocalOnly,
+  parseHumanOutputStyle,
+  useTypes,
+} from "../utils/config.js";
 
 const VALID_STATUSES: IssueStatus[] = ["open", "in_progress", "closed"];
 
@@ -30,9 +39,18 @@ export const listCommand = new Command("list")
   )
   .option("-t, --type <type>", "Filter by type: bug, feature, task, epic, chore")
   .option("--sync", "Force sync before listing")
+  .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
   .action(async (options) => {
     try {
+      const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      if (options.style && !requestedStyle) {
+        console.error(
+          `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
+        );
+        process.exit(1);
+      }
+
       // Try to ensure cache is fresh, but don't fail if offline
       let syncFailed = false;
       const localOnly = isLocalOnly();
@@ -117,20 +135,24 @@ export const listCommand = new Command("list")
           return;
         }
 
-        // Build output with parent context
-        for (const issue of issues) {
+        const style = getHumanOutputStyle(requestedStyle);
+        const blockedIds = style === "beads" ? getBlockedIssueIds() : undefined;
+        const renderedIssues = issues.map((issue) => {
           const deps = getDependencies(issue.id);
           const parentDep = deps.find((d) => d.type === "parent-child");
-          const parentSuffix = parentDep ? ` (↳ ${getDisplayId(parentDep.depends_on_id)})` : "";
-          const syncSuffix = issue.sync_status === "pending" ? " (syncing...)" : "";
-          const displayId = getDisplayId(issue.id);
-          const priorityName = ["crit", "high", "medi", "low", "back"][issue.priority] || "medi";
-          const status = issue.status.padEnd(12);
+          return {
+            ...issue,
+            display_id: getDisplayId(issue.id),
+            parent_display_id: parentDep ? getDisplayId(parentDep.depends_on_id) : null,
+            is_blocked: blockedIds?.has(issue.id) || false,
+          };
+        });
 
-          output(
-            `${displayId}  ${status}  ${priorityName}  ${issue.title}${parentSuffix}${syncSuffix}`
-          );
-        }
+        output(
+          style === "beads"
+            ? formatIssuesListHumanBeads(renderedIssues)
+            : formatIssuesListHuman(renderedIssues)
+        );
 
         // Show stale cache warning if sync failed or cache is old (skip in local-only mode)
         if (!localOnly) {

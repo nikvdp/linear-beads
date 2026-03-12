@@ -28,6 +28,7 @@ import { agentCommand } from "./commands/agent.js";
 import { mailCommand } from "./commands/mail.js";
 import { dedupeCommand } from "./commands/dedupe.js";
 import { skillCommand } from "./commands/skill.js";
+import { styleCommand } from "./commands/style.js";
 import { verifyConnection } from "./utils/issue-backend.js";
 import { closeDatabase } from "./utils/database.js";
 import { getRuntimeCliVersion } from "./utils/runtime-version.js";
@@ -124,6 +125,7 @@ if (process.argv.includes("--worker")) {
   program.addCommand(selfUpdateCommand);
   program.addCommand(migrateCommand);
   program.addCommand(rebindCommand);
+  program.addCommand(styleCommand);
   program.addCommand(agentCommand);
   program.addCommand(mailCommand);
   program.addCommand(dedupeCommand);
