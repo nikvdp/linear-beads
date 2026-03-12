@@ -122,6 +122,56 @@ describe("human output style modes", () => {
     expect(listedClassic.stdout).not.toContain("Total: 1 issues");
   });
 
+  test("show uses beads-style relationship sections when that mode is active", async () => {
+    const repoDir = createLocalRepo();
+    const blocker = await createIssue(repoDir, "Blocker issue");
+    const parent = await createIssue(repoDir, "Parent issue");
+    const child = await createIssue(repoDir, "Child issue", ["--parent", parent.id]);
+
+    const dep = await runCli(repoDir, ["dep", "add", parent.id, "--blocked-by", blocker.id]);
+    expect(dep.exitCode).toBe(0);
+
+    const styled = await runCli(repoDir, ["style", "beads"]);
+    expect(styled.exitCode).toBe(0);
+
+    const shown = await runCli(repoDir, ["show", parent.id]);
+    expect(shown.exitCode).toBe(0);
+    expect(shown.stdout).toContain(`○ ${parent.id} ● P2 Parent issue`);
+    expect(shown.stdout).toContain("Children (1):");
+    expect(shown.stdout).toContain(`└── ○ ${child.id} ● P2 Child issue`);
+    expect(shown.stdout).toContain("Blocked by (1):");
+    expect(shown.stdout).toContain(`└── ○ ${blocker.id} ● P2 Blocker issue`);
+  });
+
+  test("blocked and dep views inherit beads mode consistently", async () => {
+    const repoDir = createLocalRepo();
+    const blocker = await createIssue(repoDir, "Primary blocker");
+    const blocked = await createIssue(repoDir, "Blocked item");
+
+    const dep = await runCli(repoDir, ["dep", "add", blocked.id, "--blocked-by", blocker.id]);
+    expect(dep.exitCode).toBe(0);
+
+    const styled = await runCli(repoDir, ["style", "beads"]);
+    expect(styled.exitCode).toBe(0);
+
+    const blockedView = await runCli(repoDir, ["blocked"]);
+    expect(blockedView.exitCode).toBe(0);
+    expect(blockedView.stdout).toContain(`● ${blocked.id} ● P2 Blocked item`);
+    expect(blockedView.stdout).toContain("Blocked by (1):");
+    expect(blockedView.stdout).toContain(`└── ○ ${blocker.id} ● P2 Primary blocker`);
+
+    const depList = await runCli(repoDir, ["dep", "list", blocked.id]);
+    expect(depList.exitCode).toBe(0);
+    expect(depList.stdout).toContain(`● ${blocked.id} ● P2 Blocked item`);
+    expect(depList.stdout).toContain("Blocked by (1):");
+    expect(depList.stdout).toContain(`└── ○ ${blocker.id} ● P2 Primary blocker`);
+
+    const depTree = await runCli(repoDir, ["dep", "tree", blocked.id]);
+    expect(depTree.exitCode).toBe(0);
+    expect(depTree.stdout).toContain(`● ${blocked.id} ● P2 Blocked item`);
+    expect(depTree.stdout).toContain(`└── ○ ${blocker.id} ● P2 Primary blocker`);
+  });
+
   test("lb style --global persists a shared default that repos can inherit", async () => {
     const repoDir = createLocalRepo();
     const homeDir = createTempDir("lb-output-style-home-");
@@ -137,5 +187,15 @@ describe("human output style modes", () => {
     const listed = await runCli(repoDir, ["list", "--all"], { HOME: homeDir });
     expect(listed.exitCode).toBe(0);
     expect(listed.stdout).toContain(`○ ${issue.id} ● P2 Global style issue`);
+  });
+
+  test("create in beads mode uses the same single-issue renderer as other issue commands", async () => {
+    const repoDir = createLocalRepo();
+
+    const created = await runCli(repoDir, ["create", "Beads create", "--style", "beads"]);
+    expect(created.exitCode).toBe(0);
+    expect(created.stdout).toContain("○ LOCAL-");
+    expect(created.stdout).toContain("● P2 Beads create");
+    expect(created.stdout).not.toContain("Created:");
   });
 });
