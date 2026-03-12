@@ -12,7 +12,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "test": "bun test",
-    "test:integration": "bun test test/integration.test.ts",
+    "test:integration": "LB_RUN_INTEGRATION_TESTS=1 bun test test/integration.test.ts test/repo-binding-flows.test.ts test/temp-scope-overrides.test.ts",
     "release": "bun run scripts/release.ts",
     "self-update:demo": "bun run scripts/self-update-demo.ts",
     "generate:types": "json2ts schemas/config.schema.json src/types/config.generated.ts",
