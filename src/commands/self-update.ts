@@ -28,6 +28,7 @@ export const selfUpdateCommand = new Command("self-update")
         force: Boolean(options.force),
         version: options.tag,
         path: options.path,
+        onStatus: (status) => output(status.message),
       });
 
       if (result.alreadyUpdated) {

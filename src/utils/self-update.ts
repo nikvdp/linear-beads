@@ -315,16 +315,32 @@ export type SelfUpdateResult = {
   updatedPath?: string;
 };
 
+export type SelfUpdateStatusStep =
+  | "checking"
+  | "locating_binary"
+  | "checking_checksums"
+  | "downloading"
+  | "verifying"
+  | "installing";
+
+export type SelfUpdateStatus = {
+  step: SelfUpdateStatusStep;
+  message: string;
+};
+
 export type SelfUpdateOptions = {
   version?: string;
   check: boolean;
   force: boolean;
   path?: string;
+  onStatus?: (status: SelfUpdateStatus) => void;
 };
 
 export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpdateResult> {
+  options.onStatus?.({ step: "checking", message: "Checking for updates..." });
   const release = await fetchJson<GitHubRelease>(getReleaseApiUrl(options.version));
   const remoteVersion = normalizeReleaseTag(release.tag_name);
+  options.onStatus?.({ step: "locating_binary", message: "Locating installed binary..." });
   const binaryPath = resolveBinaryPath(options.path);
   const local = getBinaryVersion(binaryPath);
   const localClean = normalizeTag(local);
@@ -348,11 +364,19 @@ export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpd
   ensureWritableBinaryDirectory(binaryPath);
 
   const checksumAsset = release.assets.find((item) => item.name === "checksums.txt");
+  if (checksumAsset) {
+    options.onStatus?.({
+      step: "checking_checksums",
+      message: "Downloading checksums...",
+    });
+  }
   const checksumText = checksumAsset ? await fetchText(checksumAsset.browser_download_url) : "";
 
+  options.onStatus?.({ step: "downloading", message: "Downloading update..." });
   const bytes = await downloadReleaseBytes(asset.browser_download_url);
 
   if (checksumText) {
+    options.onStatus?.({ step: "verifying", message: "Verifying checksum..." });
     const expectedHash = parseChecksumFile(checksumText).get(binaryName);
     if (!expectedHash) {
       throw new Error(`Release checksums missing entry for ${binaryName}`);
@@ -366,6 +390,7 @@ export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpd
 
   const stagedPath = `${tmpdir()}/${Date.now()}-${binaryName}`;
   try {
+    options.onStatus?.({ step: "installing", message: "Installing update..." });
     await Bun.write(stagedPath, bytes);
     installDownloadedBinary(stagedPath, binaryPath);
     chmodSync(binaryPath, 0o755);
