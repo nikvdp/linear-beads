@@ -971,6 +971,46 @@ describe("Local-only Mode", () => {
       expect(id2).toBe(id1 + 1);
     });
 
+    test("should auto-heal accidental escaped newlines by default and warn loudly", async () => {
+      const result = await lbLocal(
+        "create",
+        "Escaped newline create",
+        "-d",
+        "Why\\n\\nWhat",
+        "--json"
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("auto-corrected literal '\\n' sequences");
+      expect(result.stderr).toContain("--no-auto-format-escaped-newlines");
+
+      const created = JSON.parse(result.stdout) as Array<{ id: string; description: string }>;
+      expect(created[0].description).toBe("Why\n\nWhat");
+
+      const shown = await lbLocalJson<Array<{ description: string }>>("show", created[0].id);
+      expect(shown[0].description).toBe("Why\n\nWhat");
+    });
+
+    test("should preserve literal escaped newlines when auto-heal is explicitly disabled", async () => {
+      const result = await lbLocal(
+        "create",
+        "Literal escaped newline create",
+        "-d",
+        "Why\\n\\nWhat",
+        "--no-auto-format-escaped-newlines",
+        "--json"
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).not.toContain("auto-corrected literal '\\n' sequences");
+
+      const created = JSON.parse(result.stdout) as Array<{ id: string; description: string }>;
+      expect(created[0].description).toBe("Why\\n\\nWhat");
+
+      const shown = await lbLocalJson<Array<{ description: string }>>("show", created[0].id);
+      expect(shown[0].description).toBe("Why\\n\\nWhat");
+    });
+
     test("should support --parent flag", async () => {
       const parent = await lbLocalJson<Array<{ id: string }>>("create", "Parent");
       const child = await lbLocalJson<Array<{ id: string }>>(
@@ -1141,6 +1181,47 @@ describe("Local-only Mode", () => {
       );
 
       expect(result[0].priority).toBe(0);
+    });
+
+    test("should auto-heal accidental escaped newlines on update and warn loudly", async () => {
+      const created = await lbLocalJson<Array<{ id: string }>>("create", "Escaped newline update");
+
+      const result = await lbLocal("update", created[0].id, "-d", "Why\\n\\nWhat", "--json");
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("auto-corrected literal '\\n' sequences");
+      expect(result.stderr).toContain("--no-auto-format-escaped-newlines");
+
+      const updated = JSON.parse(result.stdout) as Array<{ description: string }>;
+      expect(updated[0].description).toBe("Why\n\nWhat");
+
+      const shown = await lbLocalJson<Array<{ description: string }>>("show", created[0].id);
+      expect(shown[0].description).toBe("Why\n\nWhat");
+    });
+
+    test("should preserve literal escaped newlines on update when auto-heal is disabled", async () => {
+      const created = await lbLocalJson<Array<{ id: string }>>(
+        "create",
+        "Literal escaped newline update"
+      );
+
+      const result = await lbLocal(
+        "update",
+        created[0].id,
+        "-d",
+        "Why\\n\\nWhat",
+        "--no-auto-format-escaped-newlines",
+        "--json"
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).not.toContain("auto-corrected literal '\\n' sequences");
+
+      const updated = JSON.parse(result.stdout) as Array<{ description: string }>;
+      expect(updated[0].description).toBe("Why\\n\\nWhat");
+
+      const shown = await lbLocalJson<Array<{ description: string }>>("show", created[0].id);
+      expect(shown[0].description).toBe("Why\\n\\nWhat");
     });
   });
 

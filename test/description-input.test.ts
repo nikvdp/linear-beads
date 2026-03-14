@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { rewriteEscapedNewlines } from "../src/utils/description-input.js";
+import {
+  protectDescriptionFromEscapedNewlines,
+  rewriteEscapedNewlines,
+} from "../src/utils/description-input.js";
 import {
   buildLbRefUrl,
   encodeIssueRefsInDescription,
@@ -29,6 +32,24 @@ describe("rewriteEscapedNewlines", () => {
     expect(output).toContain("Why\n\n* Move up/down can target the wrong block.");
     expect(output).toContain("\n\nWhat\n\n* Audit source.");
     expect(output).toContain("* Ensure active caret block.");
+  });
+});
+
+describe("protectDescriptionFromEscapedNewlines", () => {
+  test("auto-heals likely accidental escaped newlines by default", () => {
+    const result = protectDescriptionFromEscapedNewlines("Why\\n\\nWhat");
+    expect(result.looksLikeMistake).toBe(true);
+    expect(result.autoHealed).toBe(true);
+    expect(result.description).toBe("Why\n\nWhat");
+  });
+
+  test("preserves literal escaped newlines when auto-format is disabled", () => {
+    const result = protectDescriptionFromEscapedNewlines("Why\\n\\nWhat", {
+      autoFormat: false,
+    });
+    expect(result.looksLikeMistake).toBe(true);
+    expect(result.autoHealed).toBe(false);
+    expect(result.description).toBe("Why\\n\\nWhat");
   });
 });
 
