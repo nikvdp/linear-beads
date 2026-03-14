@@ -42,15 +42,15 @@ lb close LIN-XXX --reason "Brief summary of what was done"
 
 ### Key Commands Reference
 
-| Command | Purpose |
-|---------|---------|
-| `lb sync` | Sync with Linear |
-| `lb ready` | Show unblocked issues you can work on |
-| `lb list` | Show all issues |
-| `lb show LIN-XXX` | Full issue details |
-| `lb update LIN-XXX --status in_progress` | Claim work |
-| `lb close LIN-XXX --reason "why"` | Complete work |
-| `lb create "Title" --parent LIN-XXX -d "..."` | Create subtask |
+| Command                                       | Purpose                               |
+| --------------------------------------------- | ------------------------------------- |
+| `lb sync`                                     | Sync with Linear                      |
+| `lb ready`                                    | Show unblocked issues you can work on |
+| `lb list`                                     | Show all issues                       |
+| `lb show LIN-XXX`                             | Full issue details                    |
+| `lb update LIN-XXX --status in_progress`      | Claim work                            |
+| `lb close LIN-XXX --reason "why"`             | Complete work                         |
+| `lb create "Title" --parent LIN-XXX -d "..."` | Create subtask                        |
 
 ### Rules
 
@@ -83,7 +83,7 @@ Commit atomically as you work (one logical change per commit) unless told otherw
   - The Linear UI should receive true issue mentions, not authored markdown links.
   - The safe authoring form is an angle-wrapped Linear issue URL such as `<https://linear.app/<workspace>/issue/LIN-123>`.
   - Linear API readback may normalize valid mentions into markdown-link-looking `description` text; treat that as stable readback, not as a signal to rewrite again.
-  - Never rewrite issue refs inside backticks or fenced code.
+  - Rewrite canonical issue refs inside inline backticks; keep fenced code blocks literal.
   - Raw URL plus trailing punctuation like `https://.../LIN-123:` is invalid for this path and must be healed into a safe mention form with punctuation outside the URL.
 - Linear media round-trip rules:
   - The local canonical DSL is markdown-like and explicit, using `lb-media:<id>` targets.
