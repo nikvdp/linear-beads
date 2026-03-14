@@ -33,6 +33,7 @@ async function runEval(
   cwd: string,
   mode:
     | "update_auto_heals"
+    | "update_heals_backticked_literal_ref"
     | "update_skips_when_already_rich"
     | "update_skips_backticked_generic_link"
     | "update_heals_generic_link_fallback"
@@ -51,7 +52,9 @@ async function runEval(
     let healReadCalls = 0;
 
     const existingDescription =
-      mode === "update_skips_when_already_rich"
+      mode === "update_heals_backticked_literal_ref"
+        ? ${JSON.stringify("Backticked literal `LIN-4274` reference")}
+        : mode === "update_skips_when_already_rich"
         ? "Already rich [LIN-4274](https://linear.app/linear-beads/issue/LIN-4274)"
         : mode === "update_skips_backticked_generic_link"
           ? ${JSON.stringify("Keep `[LIN-4274](https://linear.app/issue/LIN-4274)` literal")}
@@ -183,6 +186,24 @@ describe("Linear description auto-heal on update paths", () => {
 
     expect(payload.healReadCalls).toBe(1);
     expect(payload.capturedInputs[0]?.description).toBeUndefined();
+  });
+
+  test("auto-heals backticked literal refs into rich mentions on later update writes", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "update_heals_backticked_literal_ref");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      capturedInputs: Array<{ description?: string }>;
+      healReadCalls: number;
+    };
+
+    expect(payload.healReadCalls).toBe(1);
+    expect(payload.capturedInputs[0]?.description).toBe(
+      "Backticked literal <https://linear.app/linear-beads/issue/LIN-4274> reference"
+    );
   });
 
   test("auto-heals generic Linear markdown fallback links once workspace slug is known", async () => {

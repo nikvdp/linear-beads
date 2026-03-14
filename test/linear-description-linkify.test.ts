@@ -452,13 +452,33 @@ describe("toLinearRichDescription", () => {
     expect(output).toBe(input);
   });
 
-  test("does not rewrite canonical IDs inside backticks", async () => {
+  test("promotes canonical IDs even when they appear inside inline backticks", async () => {
     const input = "Keep `LIN-4274` literal while promoting LIN-4387";
     const output = await toLinearRichDescription(input, {
       workspaceUrlKey: "linear-beads",
     });
     expect(output).toBe(
-      "Keep `LIN-4274` literal while promoting <https://linear.app/linear-beads/issue/LIN-4387>"
+      "Keep <https://linear.app/linear-beads/issue/LIN-4274> literal while promoting <https://linear.app/linear-beads/issue/LIN-4387>"
+    );
+  });
+
+  test("promotes backticked ticket lists like the LIN-4562 review body shape", async () => {
+    const input = [
+      "* lb tickets:",
+      "  * implementation: `LIN-4592` (done)",
+      "  * named-session follow-up: `LIN-4656` (done)",
+      "  * merge step: `LIN-4593` (open)",
+    ].join("\n");
+    const output = await toLinearRichDescription(input, {
+      workspaceUrlKey: "linear-beads",
+    });
+    expect(output).toBe(
+      [
+        "* lb tickets:",
+        "  * implementation: <https://linear.app/linear-beads/issue/LIN-4592> (done)",
+        "  * named-session follow-up: <https://linear.app/linear-beads/issue/LIN-4656> (done)",
+        "  * merge step: <https://linear.app/linear-beads/issue/LIN-4593> (open)",
+      ].join("\n")
     );
   });
 
