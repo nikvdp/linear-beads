@@ -119,6 +119,11 @@ type ProtectedSpan = {
   end: number;
 };
 
+type BacktickCodeSpan = ProtectedSpan & {
+  markerLength: number;
+  inline: boolean;
+};
+
 export type LbRefLink = {
   syncKey: string;
   hint?: string;
@@ -168,8 +173,8 @@ function collectMarkdownLinks(text: string): MarkdownLinkMatch[] {
   return links;
 }
 
-function collectBacktickSpans(text: string): ProtectedSpan[] {
-  const spans: ProtectedSpan[] = [];
+function collectBacktickCodeSpans(text: string): BacktickCodeSpan[] {
+  const spans: BacktickCodeSpan[] = [];
   for (let index = 0; index < text.length; index += 1) {
     if (text[index] !== "`") {
       continue;
@@ -190,11 +195,90 @@ function collectBacktickSpans(text: string): ProtectedSpan[] {
     spans.push({
       start: index,
       end: closingIndex + tickCount,
+      markerLength: tickCount,
+      inline: tickCount < 3 && !text.slice(index + tickCount, closingIndex).includes("\n"),
     });
     index = closingIndex + tickCount - 1;
   }
 
   return spans;
+}
+
+function collectBacktickSpans(text: string): ProtectedSpan[] {
+  return collectBacktickCodeSpans(text).map(({ start, end }) => ({ start, end }));
+}
+
+function rewriteIssueTokensOutsideMarkdownLinks(
+  text: string,
+  rewriteToken: (token: string) => DescriptionRefRewrite | null
+): string {
+  const spans = collectMarkdownLinks(text)
+    .map((link) => ({
+      start: link.index,
+      end: link.index + link.full.length,
+    }))
+    .sort((left, right) => left.start - right.start || left.end - right.end);
+
+  if (spans.length === 0) {
+    return rewriteIssueTokensInChunk(text, rewriteToken);
+  }
+
+  let cursor = 0;
+  let output = "";
+  for (const span of spans) {
+    if (span.start > cursor) {
+      output += rewriteIssueTokensInChunk(text.slice(cursor, span.start), rewriteToken);
+    }
+    output += text.slice(span.start, span.end);
+    cursor = span.end;
+  }
+
+  if (cursor < text.length) {
+    output += rewriteIssueTokensInChunk(text.slice(cursor), rewriteToken);
+  }
+
+  return output;
+}
+
+function rewriteIssueTokensOutsideMarkdownLinksAndFencedCode(
+  text: string,
+  rewriteToken: (token: string) => DescriptionRefRewrite | null
+): string {
+  const codeSpans = collectBacktickCodeSpans(text);
+  if (codeSpans.length === 0) {
+    return rewriteIssueTokensOutsideMarkdownLinks(text, rewriteToken);
+  }
+
+  let cursor = 0;
+  let output = "";
+  for (const span of codeSpans) {
+    if (span.start > cursor) {
+      output += rewriteIssueTokensOutsideMarkdownLinks(
+        text.slice(cursor, span.start),
+        rewriteToken
+      );
+    }
+
+    const fullSpan = text.slice(span.start, span.end);
+    if (!span.inline) {
+      output += fullSpan;
+      cursor = span.end;
+      continue;
+    }
+
+    const contentStart = span.start + span.markerLength;
+    const contentEnd = span.end - span.markerLength;
+    const inner = text.slice(contentStart, contentEnd);
+    const rewrittenInner = rewriteIssueTokensOutsideMarkdownLinks(inner, rewriteToken);
+    output += rewrittenInner === inner ? fullSpan : rewrittenInner;
+    cursor = span.end;
+  }
+
+  if (cursor < text.length) {
+    output += rewriteIssueTokensOutsideMarkdownLinks(text.slice(cursor), rewriteToken);
+  }
+
+  return output;
 }
 
 function collectProtectedSpans(text: string): ProtectedSpan[] {
@@ -1066,20 +1150,18 @@ export function toCanonicalLocalDescription(
     return undefined;
   }
 
-  return rewriteOutsideProtectedSpans(normalizedDescription, (chunk) =>
-    rewriteIssueTokensInChunk(chunk, (token) => {
-      const normalized = normalizeIssueToken(token);
-      const trackedRef = resolveTrackedIssueRef(normalized);
-      if (!trackedRef) {
-        return null;
-      }
+  return rewriteIssueTokensOutsideMarkdownLinksAndFencedCode(normalizedDescription, (token) => {
+    const normalized = normalizeIssueToken(token);
+    const trackedRef = resolveTrackedIssueRef(normalized);
+    if (!trackedRef) {
+      return null;
+    }
 
-      return {
-        text: normalized,
-        url: buildLbRefUrl(trackedRef.syncKey, normalized),
-      };
-    })
-  );
+    return {
+      text: normalized,
+      url: buildLbRefUrl(trackedRef.syncKey, normalized),
+    };
+  });
 }
 
 export async function toLinearRichDescription(
@@ -1122,53 +1204,94 @@ export async function encodeIssueRefsInDescription(
   ) => Promise<DescriptionRefRewrite | null> | DescriptionRefRewrite | null
 ): Promise<string | undefined> {
   if (description === undefined) return undefined;
-  const rewriteChunk = async (chunk: string): Promise<string> => {
-    const matches = [...chunk.matchAll(ISSUE_TOKEN_RE)];
-    if (matches.length === 0) return chunk;
+  const rewriteOutsideMarkdownLinks = async (text: string): Promise<string> => {
+    const rewriteChunk = async (chunk: string): Promise<string> => {
+      const matches = [...chunk.matchAll(ISSUE_TOKEN_RE)];
+      if (matches.length === 0) return chunk;
+
+      let cursor = 0;
+      let output = "";
+      for (const match of matches) {
+        const index = match.index ?? 0;
+        const full = match[0];
+        output += chunk.slice(cursor, index);
+
+        const prevChar = index > 0 ? chunk[index - 1] : "";
+        if (prevChar === "/" || prevChar === ":") {
+          output += full;
+        } else {
+          const rewrite = await rewriteToken(normalizeIssueToken(full));
+          if (!rewrite) {
+            output += full;
+          } else if (rewrite.format === "url") {
+            output += formatLinearMentionUrl(rewrite.url);
+          } else {
+            output += `[${rewrite.text}](${rewrite.url})`;
+          }
+        }
+        cursor = index + full.length;
+      }
+      output += chunk.slice(cursor);
+      return output;
+    };
+
+    const spans = collectMarkdownLinks(text)
+      .map((link) => ({
+        start: link.index,
+        end: link.index + link.full.length,
+      }))
+      .sort((left, right) => left.start - right.start || left.end - right.end);
+
+    if (spans.length === 0) {
+      return await rewriteChunk(text);
+    }
 
     let cursor = 0;
     let output = "";
-    for (const match of matches) {
-      const index = match.index ?? 0;
-      const full = match[0];
-      output += chunk.slice(cursor, index);
-
-      const prevChar = index > 0 ? chunk[index - 1] : "";
-      if (prevChar === "/" || prevChar === ":") {
-        output += full;
-      } else {
-        const rewrite = await rewriteToken(normalizeIssueToken(full));
-        if (!rewrite) {
-          output += full;
-        } else if (rewrite.format === "url") {
-          output += formatLinearMentionUrl(rewrite.url);
-        } else {
-          output += `[${rewrite.text}](${rewrite.url})`;
-        }
+    for (const span of spans) {
+      if (span.start > cursor) {
+        output += await rewriteChunk(text.slice(cursor, span.start));
       }
-      cursor = index + full.length;
+      output += text.slice(span.start, span.end);
+      cursor = span.end;
     }
-    output += chunk.slice(cursor);
+
+    if (cursor < text.length) {
+      output += await rewriteChunk(text.slice(cursor));
+    }
+
     return output;
   };
 
-  const spans = collectProtectedSpans(description);
-  if (spans.length === 0) {
-    return await rewriteChunk(description);
+  const codeSpans = collectBacktickCodeSpans(description);
+  if (codeSpans.length === 0) {
+    return await rewriteOutsideMarkdownLinks(description);
   }
 
   let cursor = 0;
   let output = "";
-  for (const span of spans) {
+  for (const span of codeSpans) {
     if (span.start > cursor) {
-      output += await rewriteChunk(description.slice(cursor, span.start));
+      output += await rewriteOutsideMarkdownLinks(description.slice(cursor, span.start));
     }
-    output += description.slice(span.start, span.end);
+
+    const fullSpan = description.slice(span.start, span.end);
+    if (!span.inline) {
+      output += fullSpan;
+      cursor = span.end;
+      continue;
+    }
+
+    const contentStart = span.start + span.markerLength;
+    const contentEnd = span.end - span.markerLength;
+    const inner = description.slice(contentStart, contentEnd);
+    const rewrittenInner = await rewriteOutsideMarkdownLinks(inner);
+    output += rewrittenInner === inner ? fullSpan : rewrittenInner;
     cursor = span.end;
   }
 
   if (cursor < description.length) {
-    output += await rewriteChunk(description.slice(cursor));
+    output += await rewriteOutsideMarkdownLinks(description.slice(cursor));
   }
 
   return output;
