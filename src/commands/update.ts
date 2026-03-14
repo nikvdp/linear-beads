@@ -41,9 +41,8 @@ import {
   parseHumanOutputStyle,
 } from "../utils/config.js";
 import {
-  looksLikeEscapedNewlineMistake,
+  protectDescriptionFromEscapedNewlines,
   resolveDescriptionInput,
-  rewriteEscapedNewlines,
 } from "../utils/description-input.js";
 import { cachePreparedDescriptionMedia, planDescriptionMediaInput } from "../utils/media-input.js";
 
@@ -87,14 +86,16 @@ function collect(value: string, previous: string[] = []): string[] {
   return previous.concat([value]);
 }
 
-function warnOnLikelyEscapedNewlineDescription(description: string | undefined): void {
-  if (!looksLikeEscapedNewlineMistake(description)) return;
+function warnOnAutoHealedEscapedNewlineDescription(autoHealed: boolean): void {
+  if (!autoHealed) return;
   outputError("");
   outputError("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-  outputError("WARNING: description includes literal '\\n' sequences.");
-  outputError("This usually means newlines were escaped instead of entered as real line breaks.");
+  outputError("WARNING: lb auto-corrected literal '\\n' sequences into real line breaks.");
+  outputError("This usually means multiline text was escaped instead of entered directly.");
   outputError("Use a heredoc, --description-file, or --description-stdin for multiline content.");
-  outputError("If this was intentional, you can ignore this warning.");
+  outputError(
+    "If you truly need literal '\\n' stored, re-run with --no-auto-format-escaped-newlines."
+  );
   outputError("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
   outputError("");
 }
@@ -127,8 +128,8 @@ export const updateCommand = new Command("update")
   .option("--media <path>", "Attach media from a local file (repeatable)", collect)
   .option("--media-id <id>", "Media id to pair with --media by position (repeatable)", collect)
   .option(
-    "--auto-format-escaped-newlines",
-    "Rewrite literal \\\\n sequences in description content into real line breaks"
+    "--no-auto-format-escaped-newlines",
+    "Preserve literal \\\\n sequences instead of auto-correcting them"
   )
   .option("-s, --status <status>", "Status: open, in_progress, closed")
   .option("-p, --priority <priority>", "Priority: urgent, high, medium, low, backlog (or 0-4)")
@@ -165,29 +166,23 @@ export const updateCommand = new Command("update")
       const requestedMediaPaths = options.media as string[] | undefined;
       const requestedMediaIds = options.mediaId as string[] | undefined;
       const hasRequestedMedia = (requestedMediaPaths?.length || 0) > 0;
-      if (options.autoFormatEscapedNewlines) {
-        if (description !== undefined) {
-          description = rewriteEscapedNewlines(description);
-        } else {
-          const currentDescription = await loadCurrentDescriptionForUpdate(resolvedId);
-          const rewritten = rewriteEscapedNewlines(currentDescription);
-          if (rewritten !== currentDescription) {
-            description = rewritten;
-            output("Auto-formatted existing description.");
-          }
-        }
-      }
       if (hasRequestedMedia && description === undefined) {
         description = await loadCurrentDescriptionForUpdate(resolvedId);
       }
-      warnOnLikelyEscapedNewlineDescription(description);
+      const escapedNewlineProtection = protectDescriptionFromEscapedNewlines(description, {
+        autoFormat: options.autoFormatEscapedNewlines as boolean,
+      });
+      description = escapedNewlineProtection.description;
+      warnOnAutoHealedEscapedNewlineDescription(escapedNewlineProtection.autoHealed);
       const preparedMedia = await planDescriptionMediaInput({
         description,
         mediaPaths: requestedMediaPaths,
         mediaIds: requestedMediaIds,
       });
       description = preparedMedia.description;
-      const canonicalDescription = toCanonicalLocalDescription(description);
+      const canonicalDescription = toCanonicalLocalDescription(description, {
+        autoFormatEscapedNewlines: options.autoFormatEscapedNewlines as boolean,
+      });
       const updates: {
         title?: string;
         description?: string;
@@ -270,10 +265,6 @@ export const updateCommand = new Command("update")
         !options.parent &&
         !options.unparent
       ) {
-        if (options.autoFormatEscapedNewlines && !hadExplicitDescriptionInput) {
-          output("No escaped newline sequences found in existing description; no update needed.");
-          return;
-        }
         outputError("No updates specified");
         process.exit(1);
       }
@@ -361,7 +352,9 @@ export const updateCommand = new Command("update")
         }
 
         if (Object.keys(updates).length > 0) {
-          issue = await updateIssue(resolvedId, updates, teamId);
+          issue = await updateIssue(resolvedId, updates, teamId, {
+            autoFormatEscapedNewlines: options.autoFormatEscapedNewlines as boolean,
+          });
         } else {
           issue = await fetchIssue(resolvedId);
         }

@@ -6,6 +6,16 @@ type DescriptionInputOptions = {
   descriptionStdin?: boolean;
 };
 
+type EscapedNewlineProtectionOptions = {
+  autoFormat?: boolean;
+};
+
+export type EscapedNewlineProtectionResult = {
+  description: string | undefined;
+  looksLikeMistake: boolean;
+  autoHealed: boolean;
+};
+
 function countEnabledSources(options: DescriptionInputOptions): number {
   let count = 0;
   if (options.inlineDescription !== undefined) count += 1;
@@ -54,6 +64,35 @@ export function looksLikeEscapedNewlineMistake(description: string | undefined):
   if (/:\s*\\n/.test(description)) return true;
 
   return false;
+}
+
+export function protectDescriptionFromEscapedNewlines(
+  description: string | undefined,
+  options: EscapedNewlineProtectionOptions = {}
+): EscapedNewlineProtectionResult {
+  const looksLikeMistake = looksLikeEscapedNewlineMistake(description);
+  if (!looksLikeMistake) {
+    return {
+      description,
+      looksLikeMistake: false,
+      autoHealed: false,
+    };
+  }
+
+  if (options.autoFormat === false) {
+    return {
+      description,
+      looksLikeMistake: true,
+      autoHealed: false,
+    };
+  }
+
+  const rewritten = rewriteEscapedNewlines(description);
+  return {
+    description: rewritten,
+    looksLikeMistake: true,
+    autoHealed: rewritten !== description,
+  };
 }
 
 export function rewriteEscapedNewlines(description: string | undefined): string | undefined {

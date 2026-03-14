@@ -169,9 +169,10 @@ export async function createIssue(
 export async function updateIssue(
   issueId: Parameters<IssueBackendAdapter["updateIssue"]>[0],
   updates: Parameters<IssueBackendAdapter["updateIssue"]>[1],
-  teamId: Parameters<IssueBackendAdapter["updateIssue"]>[2]
+  teamId: Parameters<IssueBackendAdapter["updateIssue"]>[2],
+  options?: Parameters<IssueBackendAdapter["updateIssue"]>[3]
 ): ReturnType<IssueBackendAdapter["updateIssue"]> {
-  return getIssueBackendAdapter().updateIssue(issueId, updates, teamId);
+  return getIssueBackendAdapter().updateIssue(issueId, updates, teamId, options);
 }
 
 export async function updateIssueParent(

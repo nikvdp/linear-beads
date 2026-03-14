@@ -28,6 +28,7 @@ export interface IssueBackendAdapter {
     status?: IssueStatus;
     syncKey?: string;
     skipCache?: boolean;
+    autoFormatEscapedNewlines?: boolean;
   }): Promise<Issue>;
   updateIssue(
     issueId: string,
@@ -38,7 +39,8 @@ export interface IssueBackendAdapter {
       priority?: Priority;
       assigneeId?: string | null;
     },
-    teamId: string
+    teamId: string,
+    options?: { autoFormatEscapedNewlines?: boolean }
   ): Promise<Issue>;
   updateIssueParent(issueId: string, parentId: string | null): Promise<void>;
   closeIssue(issueId: string, teamId: string, reason?: string): Promise<Issue>;

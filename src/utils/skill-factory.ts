@@ -37,7 +37,8 @@ Use \`lb\` as the source of truth for task tracking in this repo.
 
 Avoid literal escaped \`\\n\` in issue descriptions.
 Use heredoc text, \`--description-file\`, or \`--description-stdin\`.
-If needed, use \`--auto-format-escaped-newlines\` when rewriting.
+\`lb\` auto-heals likely accidental \`\\n\` sequences by default and warns loudly.
+Use \`--no-auto-format-escaped-newlines\` only when you intentionally need literal \`\\n\` stored.
 
 ## Useful commands
 

@@ -78,9 +78,9 @@ lb create "Title" -d "$desc"
 Also supported:
 - \`--description-file <path>\`
 - \`--description-stdin\`
-- \`--auto-format-escaped-newlines\` (rewrite \`\\\\n\` to real line breaks)
+- default auto-heal for accidental \`\\\\n\` sequences, with \`--no-auto-format-escaped-newlines\` as an escape hatch
 
-\`lb\` warns when a description likely contains accidental escaped newlines.
+\`lb\` auto-corrects likely accidental escaped newlines and prints a loud warning so agents stop doing it.
 
 ### Planning Work (SUBISSUES, NOT BUILT-IN TODOS)
 

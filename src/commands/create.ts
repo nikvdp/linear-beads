@@ -45,9 +45,8 @@ import {
 } from "../utils/config.js";
 import { chooseReuseIssue, findDuplicateMatches } from "../utils/duplicate-detection.js";
 import {
-  looksLikeEscapedNewlineMistake,
+  protectDescriptionFromEscapedNewlines,
   resolveDescriptionInput,
-  rewriteEscapedNewlines,
 } from "../utils/description-input.js";
 import { cachePreparedDescriptionMedia, planDescriptionMediaInput } from "../utils/media-input.js";
 
@@ -97,14 +96,16 @@ function reasonLabel(reason: string): string {
   return "description hash";
 }
 
-function warnOnLikelyEscapedNewlineDescription(description: string | undefined): void {
-  if (!looksLikeEscapedNewlineMistake(description)) return;
+function warnOnAutoHealedEscapedNewlineDescription(autoHealed: boolean): void {
+  if (!autoHealed) return;
   outputError("");
   outputError("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-  outputError("WARNING: description includes literal '\\n' sequences.");
-  outputError("This usually means newlines were escaped instead of entered as real line breaks.");
+  outputError("WARNING: lb auto-corrected literal '\\n' sequences into real line breaks.");
+  outputError("This usually means multiline text was escaped instead of entered directly.");
   outputError("Use a heredoc, --description-file, or --description-stdin for multiline content.");
-  outputError("If this was intentional, you can ignore this warning.");
+  outputError(
+    "If you truly need literal '\\n' stored, re-run with --no-auto-format-escaped-newlines."
+  );
   outputError("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
   outputError("");
 }
@@ -118,8 +119,8 @@ export const createCommand = new Command("create")
   .option("--media <path>", "Attach media from a local file (repeatable)", collect)
   .option("--media-id <id>", "Media id to pair with --media by position (repeatable)", collect)
   .option(
-    "--auto-format-escaped-newlines",
-    "Rewrite literal \\\\n sequences in description content into real line breaks"
+    "--no-auto-format-escaped-newlines",
+    "Preserve literal \\\\n sequences instead of auto-correcting them"
   )
   .option("-t, --type <type>", "Type: bug, feature, task, epic, chore (requires use_types config)")
   .option("-p, --priority <priority>", "Priority: urgent, high, medium, low, backlog (or 0-4)", "2")
@@ -157,17 +158,20 @@ export const createCommand = new Command("create")
         descriptionFile: options.descriptionFile as string | undefined,
         descriptionStdin: !!options.descriptionStdin,
       });
-      if (options.autoFormatEscapedNewlines) {
-        description = rewriteEscapedNewlines(description);
-      }
-      warnOnLikelyEscapedNewlineDescription(description);
+      const escapedNewlineProtection = protectDescriptionFromEscapedNewlines(description, {
+        autoFormat: options.autoFormatEscapedNewlines as boolean,
+      });
+      description = escapedNewlineProtection.description;
+      warnOnAutoHealedEscapedNewlineDescription(escapedNewlineProtection.autoHealed);
       const preparedMedia = await planDescriptionMediaInput({
         description,
         mediaPaths: options.media as string[] | undefined,
         mediaIds: options.mediaId as string[] | undefined,
       });
       description = preparedMedia.description;
-      const canonicalDescription = toCanonicalLocalDescription(description);
+      const canonicalDescription = toCanonicalLocalDescription(description, {
+        autoFormatEscapedNewlines: options.autoFormatEscapedNewlines as boolean,
+      });
 
       const duplicateCandidates = getCachedIssues().filter(
         (issue) => issue.status === "open" || issue.status === "in_progress"
@@ -391,6 +395,7 @@ export const createCommand = new Command("create")
             parentId: resolvedParent,
             assigneeId,
             syncKey,
+            autoFormatEscapedNewlines: options.autoFormatEscapedNewlines as boolean,
           });
         } catch (error) {
           deleteMediaItems(preparedMedia.mediaItems.map((item) => item.id));

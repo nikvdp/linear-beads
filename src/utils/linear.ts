@@ -63,6 +63,7 @@ import {
   priorityToLinear,
   statusToLinearState,
 } from "../types.js";
+import { protectDescriptionFromEscapedNewlines } from "./description-input.js";
 
 type RelationType = "blocks" | "related";
 type LinearRelationNode = {
@@ -1053,12 +1054,19 @@ function rewriteIssueTokensInChunk(
   );
 }
 
-export function toCanonicalLocalDescription(description: string | undefined): string | undefined {
-  if (description === undefined) {
+export function toCanonicalLocalDescription(
+  description: string | undefined,
+  options: { autoFormatEscapedNewlines?: boolean } = {}
+): string | undefined {
+  const normalizedDescription = protectDescriptionFromEscapedNewlines(description, {
+    autoFormat: options.autoFormatEscapedNewlines,
+  }).description;
+
+  if (normalizedDescription === undefined) {
     return undefined;
   }
 
-  return rewriteOutsideProtectedSpans(description, (chunk) =>
+  return rewriteOutsideProtectedSpans(normalizedDescription, (chunk) =>
     rewriteIssueTokensInChunk(chunk, (token) => {
       const normalized = normalizeIssueToken(token);
       const trackedRef = resolveTrackedIssueRef(normalized);
@@ -1076,12 +1084,18 @@ export function toCanonicalLocalDescription(description: string | undefined): st
 
 export async function toLinearRichDescription(
   description: string | undefined,
-  options: { client?: GraphqlRequestClient; workspaceUrlKey?: string | null } = {}
+  options: {
+    client?: GraphqlRequestClient;
+    workspaceUrlKey?: string | null;
+    autoFormatEscapedNewlines?: boolean;
+  } = {}
 ): Promise<string | undefined> {
   if (description === undefined) {
     return undefined;
   }
-  const canonicalLocalDescription = toCanonicalLocalDescription(description);
+  const canonicalLocalDescription = toCanonicalLocalDescription(description, {
+    autoFormatEscapedNewlines: options.autoFormatEscapedNewlines,
+  });
   const client = options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
   const mediaExpandedDescription = await encodeCanonicalMediaTokensInDescription(
     canonicalLocalDescription,
@@ -2368,6 +2382,7 @@ export async function createIssue(params: {
   status?: IssueStatus;
   syncKey?: string;
   skipCache?: boolean;
+  autoFormatEscapedNewlines?: boolean;
   client?: GraphqlRequestClient;
 }): Promise<Issue> {
   const client: GraphqlRequestClient =
@@ -2424,7 +2439,10 @@ export async function createIssue(params: {
 
     const input: Record<string, unknown> = {
       title: params.title,
-      description: await toLinearRichDescription(params.description, { client }),
+      description: await toLinearRichDescription(params.description, {
+        client,
+        autoFormatEscapedNewlines: params.autoFormatEscapedNewlines,
+      }),
       priority: priorityToLinear(params.priority),
       teamId: params.teamId,
       stateId,
@@ -2501,7 +2519,7 @@ export async function updateIssue(
     assigneeId?: string | null;
   },
   teamId: string,
-  options: { client?: GraphqlRequestClient } = {}
+  options: { client?: GraphqlRequestClient; autoFormatEscapedNewlines?: boolean } = {}
 ): Promise<Issue> {
   const client: GraphqlRequestClient =
     options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
@@ -2510,7 +2528,10 @@ export async function updateIssue(
   const input: Record<string, unknown> = {};
   if (updates.title) input.title = updates.title;
   if (updates.description !== undefined) {
-    input.description = await toLinearRichDescription(updates.description, { client });
+    input.description = await toLinearRichDescription(updates.description, {
+      client,
+      autoFormatEscapedNewlines: options.autoFormatEscapedNewlines,
+    });
   } else {
     await applyDeferredDescriptionAutoHeal(issueId, input, client);
   }
