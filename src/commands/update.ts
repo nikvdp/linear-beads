@@ -45,6 +45,11 @@ import {
   resolveDescriptionInput,
 } from "../utils/description-input.js";
 import { cachePreparedDescriptionMedia, planDescriptionMediaInput } from "../utils/media-input.js";
+import {
+  formatRemoteSyncPauseNotice,
+  getActiveRemoteSyncPause,
+  recordRemoteSyncPause,
+} from "../utils/remote-sync-state.js";
 
 const VALID_DEP_TYPES = ["blocks", "blocked-by", "related"];
 
@@ -106,7 +111,7 @@ async function loadCurrentDescriptionForUpdate(issueId: string): Promise<string 
     return cached.description;
   }
 
-  if (isLocalId(issueId)) {
+  if (isLocalId(issueId) || getActiveRemoteSyncPause()) {
     return undefined;
   }
 
@@ -156,6 +161,9 @@ export const updateCommand = new Command("update")
       const style = getHumanOutputStyle(requestedStyle);
 
       const resolvedId = resolveIssueId(id);
+      const initialRemotePause = getActiveRemoteSyncPause();
+      const canResolveRemoteAssignee =
+        !isLocalOnly() && Boolean(options.sync) && !initialRemotePause;
       // Validate inputs
       let description = await resolveDescriptionInput({
         inlineDescription: options.description as string | undefined,
@@ -217,7 +225,7 @@ export const updateCommand = new Command("update")
       // Handle assignee
       if (options.unassign) {
         updates.assigneeId = null;
-      } else if (options.assign) {
+      } else if (options.assign && canResolveRemoteAssignee) {
         if (options.assign === "me") {
           const viewer = await getViewer();
           updates.assigneeId = viewer.id;
@@ -338,196 +346,212 @@ export const updateCommand = new Command("update")
         return;
       }
 
-      if (options.sync) {
+      let useImmediateSync = Boolean(options.sync);
+      const remotePause = getActiveRemoteSyncPause();
+      if (useImmediateSync && remotePause) {
+        outputError(formatRemoteSyncPauseNotice(remotePause));
+        useImmediateSync = false;
+      }
+
+      if (useImmediateSync) {
         if (isLocalId(resolvedId)) {
           outputError(`Issue not synced yet: ${id}`);
           process.exit(1);
         }
-        // Sync mode: update directly in Linear
-        const teamId = await getTeamId(options.team);
-        let issue = null;
+        try {
+          // Sync mode: update directly in Linear
+          const teamId = await getTeamId(options.team);
+          let issue = null;
 
-        if (preparedMedia.mediaItems.length > 0) {
-          cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);
-        }
-
-        if (Object.keys(updates).length > 0) {
-          issue = await updateIssue(resolvedId, updates, teamId, {
-            autoFormatEscapedNewlines: options.autoFormatEscapedNewlines as boolean,
-          });
-        } else {
-          issue = await fetchIssue(resolvedId);
-        }
-
-        // Handle parent
-        if (options.parent) {
-          try {
-            const parentId = resolveIssueId(options.parent);
-            if (isLocalId(parentId)) {
-              outputError(`Parent not synced yet: ${options.parent}`);
-            } else {
-              await updateIssueParent(resolvedId, parentId);
-            }
-          } catch (error) {
-            outputError(
-              `Failed to set parent to ${options.parent}: ${error instanceof Error ? error.message : error}`
-            );
+          if (preparedMedia.mediaItems.length > 0) {
+            cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);
           }
-        }
 
-        // Handle unparent
-        if (options.unparent) {
-          try {
-            await updateIssueParent(resolvedId, null);
-            // Also remove from local cache
-            const db = getDatabase();
-            const parentDep = db
-              .query("SELECT * FROM dependencies WHERE issue_id = ? AND type = 'parent-child'")
-              .get(resolvedId) as { depends_on_id: string } | null;
-            if (parentDep) {
-              deleteDependency(resolvedId, parentDep.depends_on_id);
-            }
-          } catch (error) {
-            outputError(
-              `Failed to remove parent: ${error instanceof Error ? error.message : error}`
-            );
+          if (Object.keys(updates).length > 0) {
+            issue = await updateIssue(resolvedId, updates, teamId, {
+              autoFormatEscapedNewlines: options.autoFormatEscapedNewlines as boolean,
+            });
+          } else {
+            issue = await fetchIssue(resolvedId);
           }
-        }
 
-        // Handle deps
-        if (allDeps.length > 0) {
-          for (const dep of allDeps) {
+          // Handle parent
+          if (options.parent) {
             try {
-              if (dep.type === "blocked-by") {
-                // blocked-by is inverse: target blocks this issue
-                const targetId = resolveIssueId(dep.targetId);
-                if (isLocalId(targetId)) {
-                  outputError(`Target not synced yet: ${dep.targetId}`);
-                  continue;
-                }
-                await createRelation(targetId, resolvedId, "blocks");
+              const parentId = resolveIssueId(options.parent);
+              if (isLocalId(parentId)) {
+                outputError(`Parent not synced yet: ${options.parent}`);
               } else {
-                const targetId = resolveIssueId(dep.targetId);
-                if (isLocalId(targetId)) {
-                  outputError(`Target not synced yet: ${dep.targetId}`);
-                  continue;
-                }
-                const relationType = dep.type === "blocks" ? "blocks" : "related";
-                await createRelation(resolvedId, targetId, relationType);
+                await updateIssueParent(resolvedId, parentId);
               }
             } catch (error) {
               outputError(
-                `Failed to create ${dep.type} relation to ${dep.targetId}: ${error instanceof Error ? error.message : error}`
+                `Failed to set parent to ${options.parent}: ${error instanceof Error ? error.message : error}`
               );
             }
           }
+
+          // Handle unparent
+          if (options.unparent) {
+            try {
+              await updateIssueParent(resolvedId, null);
+              // Also remove from local cache
+              const db = getDatabase();
+              const parentDep = db
+                .query("SELECT * FROM dependencies WHERE issue_id = ? AND type = 'parent-child'")
+                .get(resolvedId) as { depends_on_id: string } | null;
+              if (parentDep) {
+                deleteDependency(resolvedId, parentDep.depends_on_id);
+              }
+            } catch (error) {
+              outputError(
+                `Failed to remove parent: ${error instanceof Error ? error.message : error}`
+              );
+            }
+          }
+
+          // Handle deps
+          if (allDeps.length > 0) {
+            for (const dep of allDeps) {
+              try {
+                if (dep.type === "blocked-by") {
+                  // blocked-by is inverse: target blocks this issue
+                  const targetId = resolveIssueId(dep.targetId);
+                  if (isLocalId(targetId)) {
+                    outputError(`Target not synced yet: ${dep.targetId}`);
+                    continue;
+                  }
+                  await createRelation(targetId, resolvedId, "blocks");
+                } else {
+                  const targetId = resolveIssueId(dep.targetId);
+                  if (isLocalId(targetId)) {
+                    outputError(`Target not synced yet: ${dep.targetId}`);
+                    continue;
+                  }
+                  const relationType = dep.type === "blocks" ? "blocks" : "related";
+                  await createRelation(resolvedId, targetId, relationType);
+                }
+              } catch (error) {
+                outputError(
+                  `Failed to create ${dep.type} relation to ${dep.targetId}: ${error instanceof Error ? error.message : error}`
+                );
+              }
+            }
+          }
+
+          if (issue) {
+            if (options.json) {
+              output(formatIssueJson(issue));
+            } else {
+              output(
+                style === "beads"
+                  ? formatIssueHumanBeads(issue, getDisplayId(issue.id))
+                  : formatIssueHuman(issue, getDisplayId(issue.id))
+              );
+            }
+          }
+          return;
+        } catch (error) {
+          const pause = recordRemoteSyncPause(error);
+          if (!pause) {
+            throw error;
+          }
+          outputError(formatRemoteSyncPauseNotice(pause));
+        }
+      }
+
+      // Queue mode: add to outbox and spawn background worker
+      // Convert allDeps to string format for queue
+      const depsString = resolvedDeps.map((d) => `${d.type}:${d.targetId}`).join(",");
+
+      // For queue mode, pass flags for worker to resolve
+      const payload: Record<string, unknown> = {
+        issueId: resolvedId,
+        ...updates,
+      };
+      // Pass assign/unassign flags for worker to resolve
+      if (options.assign) payload.assign = options.assign;
+      if (options.unassign) payload.unassign = true;
+      if (depsString) payload.deps = depsString;
+      if (options.parent) payload.parentId = resolveIssueId(options.parent);
+      if (options.unparent) payload.parentId = null;
+      // Remove assigneeId from payload - worker will resolve it
+      delete payload.assigneeId;
+
+      queueOutboxItem("update", payload, resolvedId);
+      cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);
+
+      // Spawn background worker if not already running
+      ensureOutboxProcessed();
+
+      // Return cached issue with updates applied
+      let issue = getCachedIssue(resolvedId);
+      if (!issue) {
+        try {
+          issue = isLocalId(resolvedId) ? null : await fetchIssue(resolvedId);
+        } catch {
+          issue = null;
+        }
+      }
+
+      const now = new Date().toISOString();
+
+      if (issue) {
+        const updated = { ...issue, ...updates, updated_at: now };
+        cacheIssue(updated);
+
+        if (options.parent) {
+          cacheDependency({
+            issue_id: resolvedId,
+            depends_on_id: resolveIssueId(options.parent),
+            type: "parent-child",
+            created_at: now,
+            created_by: "local",
+          });
         }
 
-        if (issue) {
-          if (options.json) {
-            output(formatIssueJson(issue));
+        if (options.unparent) {
+          const db = getDatabase();
+          const parentDep = db
+            .query("SELECT * FROM dependencies WHERE issue_id = ? AND type = 'parent-child'")
+            .get(resolvedId) as { depends_on_id: string } | null;
+          if (parentDep) {
+            deleteDependency(resolvedId, parentDep.depends_on_id);
+          }
+        }
+
+        for (const dep of allDeps) {
+          if (dep.type === "blocked-by") {
+            cacheDependency({
+              issue_id: resolveIssueId(dep.targetId),
+              depends_on_id: resolvedId,
+              type: "blocks",
+              created_at: now,
+              created_by: "local",
+            });
           } else {
-            output(
-              style === "beads"
-                ? formatIssueHumanBeads(issue, getDisplayId(issue.id))
-                : formatIssueHuman(issue, getDisplayId(issue.id))
-            );
-          }
-        }
-      } else {
-        // Queue mode: add to outbox and spawn background worker
-        // Convert allDeps to string format for queue
-        const depsString = resolvedDeps.map((d) => `${d.type}:${d.targetId}`).join(",");
-
-        // For queue mode, pass flags for worker to resolve
-        const payload: Record<string, unknown> = {
-          issueId: resolvedId,
-          ...updates,
-        };
-        // Pass assign/unassign flags for worker to resolve
-        if (options.assign) payload.assign = options.assign;
-        if (options.unassign) payload.unassign = true;
-        if (depsString) payload.deps = depsString;
-        if (options.parent) payload.parentId = resolveIssueId(options.parent);
-        if (options.unparent) payload.parentId = null;
-        // Remove assigneeId from payload - worker will resolve it
-        delete payload.assigneeId;
-
-        queueOutboxItem("update", payload, resolvedId);
-        cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);
-
-        // Spawn background worker if not already running
-        ensureOutboxProcessed();
-
-        // Return cached issue with updates applied
-        let issue = getCachedIssue(resolvedId);
-        if (!issue) {
-          try {
-            issue = isLocalId(resolvedId) ? null : await fetchIssue(resolvedId);
-          } catch {
-            issue = null;
-          }
-        }
-
-        const now = new Date().toISOString();
-
-        if (issue) {
-          const updated = { ...issue, ...updates, updated_at: now };
-          cacheIssue(updated);
-
-          if (options.parent) {
+            const depType = dep.type === "blocks" ? "blocks" : "related";
             cacheDependency({
               issue_id: resolvedId,
-              depends_on_id: resolveIssueId(options.parent),
-              type: "parent-child",
+              depends_on_id: resolveIssueId(dep.targetId),
+              type: depType as "blocks" | "related",
               created_at: now,
               created_by: "local",
             });
           }
-
-          if (options.unparent) {
-            const db = getDatabase();
-            const parentDep = db
-              .query("SELECT * FROM dependencies WHERE issue_id = ? AND type = 'parent-child'")
-              .get(resolvedId) as { depends_on_id: string } | null;
-            if (parentDep) {
-              deleteDependency(resolvedId, parentDep.depends_on_id);
-            }
-          }
-
-          for (const dep of allDeps) {
-            if (dep.type === "blocked-by") {
-              cacheDependency({
-                issue_id: resolveIssueId(dep.targetId),
-                depends_on_id: resolvedId,
-                type: "blocks",
-                created_at: now,
-                created_by: "local",
-              });
-            } else {
-              const depType = dep.type === "blocks" ? "blocks" : "related";
-              cacheDependency({
-                issue_id: resolvedId,
-                depends_on_id: resolveIssueId(dep.targetId),
-                type: depType as "blocks" | "related",
-                created_at: now,
-                created_by: "local",
-              });
-            }
-          }
-
-          if (options.json) {
-            output(formatIssueJson(updated));
-          } else {
-            output(
-              style === "beads"
-                ? formatIssueHumanBeads(updated, getDisplayId(updated.id))
-                : formatIssueHuman(updated, getDisplayId(updated.id))
-            );
-          }
-        } else {
-          output(`Updated: ${getDisplayId(resolvedId)}`);
         }
+
+        if (options.json) {
+          output(formatIssueJson(updated));
+        } else {
+          output(
+            style === "beads"
+              ? formatIssueHumanBeads(updated, getDisplayId(updated.id))
+              : formatIssueHuman(updated, getDisplayId(updated.id))
+          );
+        }
+      } else {
+        output(`Updated: ${getDisplayId(resolvedId)}`);
       }
     } catch (error) {
       console.error("Error:", error instanceof Error ? error.message : error);

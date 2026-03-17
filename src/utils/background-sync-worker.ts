@@ -14,6 +14,11 @@ import { exportToJsonl } from "./jsonl.js";
 import { operationRequiresTeamId, processOutboxQueue } from "./outbox-processor.js";
 import { isLocalOnly } from "./config.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
+import {
+  formatRemoteSyncPauseNotice,
+  getActiveRemoteSyncPause,
+  recordRemoteSyncPause,
+} from "./remote-sync-state.js";
 
 const IDLE_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 500;
@@ -33,6 +38,12 @@ async function processOutbox(): Promise<void> {
 
   try {
     while (true) {
+      const activePause = getActiveRemoteSyncPause();
+      if (activePause) {
+        console.error(formatRemoteSyncPauseNotice(activePause, { prefix: "Background sync:" }));
+        break;
+      }
+
       const items = getPendingOutboxItems();
 
       if (items.length > 0) {
@@ -83,7 +94,7 @@ async function processOutbox(): Promise<void> {
     }
 
     // Check if we should run a full sync (every 3rd run or >24h since last)
-    if (!isLocalOnly() && needsFullSync()) {
+    if (!isLocalOnly() && !getActiveRemoteSyncPause() && needsFullSync()) {
       if (!teamId) {
         teamId = await getTeamId();
       }
@@ -95,15 +106,17 @@ async function processOutbox(): Promise<void> {
         exportToJsonl();
         incrementSyncRunCount();
       } catch (error) {
+        recordRemoteSyncPause(error);
         console.error("Background full sync failed:", error);
         // Don't fail the worker, just log and continue
       }
     }
 
-    if (!isLocalOnly()) {
+    if (!isLocalOnly() && !getActiveRemoteSyncPause()) {
       try {
         await getMailBackendAdapter().ingest();
       } catch (error) {
+        recordRemoteSyncPause(error);
         console.error("Background mail ingest failed:", error);
       }
     }

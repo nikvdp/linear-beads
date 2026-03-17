@@ -27,6 +27,7 @@ import { ensureOutboxProcessed } from "./spawn-worker.js";
 import { processOutboxQueue } from "./outbox-processor.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
 import { getRepoName, getRepoScope, getTeamKey } from "./config.js";
+import { getActiveRemoteSyncPause, recordRemoteSyncPause } from "./remote-sync-state.js";
 
 /**
  * Process outbox queue - push pending mutations to Linear
@@ -221,7 +222,7 @@ export async function pullFromLinear(teamId: string): Promise<Issue[]> {
 export async function incrementalSync(teamKey?: string): Promise<{
   pushed: { success: number; failed: number };
   pulled: number;
-  type: "incremental";
+  type: "incremental" | "skipped";
 } | null> {
   const since = getIncrementalSyncTimestamp();
   if (!since) {
@@ -233,6 +234,13 @@ export async function incrementalSync(teamKey?: string): Promise<{
 
   // Push first
   const pushed = await measureSyncPhase("incremental.pushOutbox", () => pushOutbox(teamId));
+  if (getActiveRemoteSyncPause()) {
+    return {
+      pushed,
+      pulled: 0,
+      type: "skipped",
+    };
+  }
 
   // Pull only updated issues
   const issues = await measureSyncPhase("incremental.pullUpdated", () =>
@@ -263,12 +271,20 @@ export async function fullSyncPaginated(teamKey?: string): Promise<{
   pushed: { success: number; failed: number };
   pulled: number;
   pruned: number;
-  type: "full";
+  type: "full" | "skipped";
 }> {
   const teamId = await measureSyncPhase("full.getTeamId", () => getTeamId(teamKey));
 
   // Push first
   const pushed = await measureSyncPhase("full.pushOutbox", () => pushOutbox(teamId));
+  if (getActiveRemoteSyncPause()) {
+    return {
+      pushed,
+      pulled: 0,
+      pruned: 0,
+      type: "skipped",
+    };
+  }
 
   // Pull all issues with pagination
   const { issues, pruned } = await measureSyncPhase("full.pullAllPaginated", () =>
@@ -299,11 +315,19 @@ export async function fullSyncPaginated(teamKey?: string): Promise<{
 export async function fullSync(teamKey?: string): Promise<{
   pushed: { success: number; failed: number };
   pulled: number;
+  type?: "skipped";
 }> {
   const teamId = await measureSyncPhase("legacyFull.getTeamId", () => getTeamId(teamKey));
 
   // Push first
   const pushed = await measureSyncPhase("legacyFull.pushOutbox", () => pushOutbox(teamId));
+  if (getActiveRemoteSyncPause()) {
+    return {
+      pushed,
+      pulled: 0,
+      type: "skipped",
+    };
+  }
 
   // Then pull
   const issues = await measureSyncPhase("legacyFull.pull", () => pullFromLinear(teamId));
@@ -330,6 +354,16 @@ export async function smartSync(
   teamKey?: string,
   forceFullSync: boolean = false
 ): Promise<SmartSyncResult> {
+  const activePause = getActiveRemoteSyncPause();
+  if (activePause) {
+    syncDebug(`smartSync skipped until ${activePause.until}`);
+    return {
+      pushed: { success: 0, failed: 0 },
+      pulled: 0,
+      type: "skipped",
+    };
+  }
+
   const contextKey = buildSyncContextKey(teamKey);
 
   // Check if we should do a full sync
@@ -346,37 +380,58 @@ export async function smartSync(
       incrementalSync(teamKey)
     );
     if (result) {
-      updateLastSyncContext(contextKey);
+      if (result.type !== "skipped") {
+        updateLastSyncContext(contextKey);
+      }
       syncDebug(`smartSync done type=${result.type}`);
-      return { ...result, type: "incremental" };
+      return result.type === "skipped" ? result : { ...result, type: "incremental" };
     }
     // If first run, do full sync anyway
   }
 
-  if (shouldFullSync || !getLastSync()) {
-    // Full sync
-    const result = await measureSyncPhase("smartSync.fullSyncPaginated", () =>
-      fullSyncPaginated(teamKey)
-    );
-    updateLastSyncContext(contextKey);
-    syncDebug(`smartSync done type=${result.type}`);
-    return result;
-  } else {
-    // Incremental sync
-    const result = await measureSyncPhase("smartSync.incremental", () => incrementalSync(teamKey));
-    if (result) {
-      updateLastSyncContext(contextKey);
+  try {
+    if (shouldFullSync || !getLastSync()) {
+      // Full sync
+      const result = await measureSyncPhase("smartSync.fullSyncPaginated", () =>
+        fullSyncPaginated(teamKey)
+      );
+      if (result.type !== "skipped") {
+        updateLastSyncContext(contextKey);
+      }
       syncDebug(`smartSync done type=${result.type}`);
       return result;
     } else {
-      // Fallback to full if incremental isn't possible (first run edge case)
-      const fullResult = await measureSyncPhase("smartSync.incrementalFallbackFull", () =>
-        fullSyncPaginated(teamKey)
-      );
-      updateLastSyncContext(contextKey);
-      syncDebug(`smartSync done type=${fullResult.type}`);
-      return fullResult;
+      // Incremental sync
+      const result = await measureSyncPhase("smartSync.incremental", () => incrementalSync(teamKey));
+      if (result) {
+        if (result.type !== "skipped") {
+          updateLastSyncContext(contextKey);
+        }
+        syncDebug(`smartSync done type=${result.type}`);
+        return result;
+      } else {
+        // Fallback to full if incremental isn't possible (first run edge case)
+        const fullResult = await measureSyncPhase("smartSync.incrementalFallbackFull", () =>
+          fullSyncPaginated(teamKey)
+        );
+        if (fullResult.type !== "skipped") {
+          updateLastSyncContext(contextKey);
+        }
+        syncDebug(`smartSync done type=${fullResult.type}`);
+        return fullResult;
+      }
     }
+  } catch (error) {
+    const pause = recordRemoteSyncPause(error);
+    if (pause) {
+      syncDebug(`smartSync paused until ${pause.until}: ${pause.message || pause.kind}`);
+      return {
+        pushed: { success: 0, failed: 0 },
+        pulled: 0,
+        type: "skipped",
+      };
+    }
+    throw error;
   }
 }
 
@@ -385,7 +440,7 @@ export async function smartSync(
  * Called after incremental sync to check if it's time for a full refresh.
  */
 export function scheduleBackgroundFullSyncIfNeeded(): void {
-  if (needsFullSync() && !isWorkerRunning()) {
+  if (!getActiveRemoteSyncPause() && needsFullSync() && !isWorkerRunning()) {
     // Spawn background worker which will detect needsFullSync and do a full sync
     ensureOutboxProcessed();
   }
@@ -397,10 +452,12 @@ async function runFreshSyncWithBudget(
   contextChanged: boolean,
   timeoutMs: number,
   phaseLabel: string
-): Promise<void> {
+): Promise<SmartSyncResult> {
   const forceSync = force || contextChanged;
-  await runWithTimeout(phaseLabel, timeoutMs, async () => {
-    await measureSyncPhase("ensureFresh.smartSync", () => getSmartSyncRunner()(teamKey, forceSync));
+  return await runWithTimeout(phaseLabel, timeoutMs, async () => {
+    return await measureSyncPhase("ensureFresh.smartSync", () =>
+      getSmartSyncRunner()(teamKey, forceSync)
+    );
   });
 }
 
@@ -420,15 +477,15 @@ export async function ensureFresh(teamKey?: string, force: boolean = false): Pro
     return false; // Cache is fresh
   }
 
-  await runFreshSyncWithBudget(
+  const result = await runFreshSyncWithBudget(
     teamKey,
     force,
     contextChanged,
     getStrictSyncTimeoutMs(),
     "ensureFresh.strict"
   );
-  syncDebug("ensureFresh synced");
-  return true; // Synced
+  syncDebug(`ensureFresh done type=${result.type}`);
+  return result.type !== "skipped";
 }
 
 export type EnsureFreshBestEffortResult = {
@@ -459,15 +516,15 @@ export async function ensureFreshBestEffort(
 
   const timeoutMs = options.timeoutMs || getBestEffortSyncTimeoutMs();
   try {
-    await runFreshSyncWithBudget(
+    const result = await runFreshSyncWithBudget(
       teamKey,
       force,
       contextChanged,
       timeoutMs,
       "ensureFresh.bestEffort"
     );
-    syncDebug("ensureFreshBestEffort synced");
-    return { synced: true, timedOut: false };
+    syncDebug(`ensureFreshBestEffort done type=${result.type}`);
+    return { synced: result.type !== "skipped", timedOut: false };
   } catch (error) {
     if (isSyncTimeoutError(error)) {
       syncDebug(`ensureFreshBestEffort timeout: ${error.message}`);

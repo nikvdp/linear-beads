@@ -12,7 +12,12 @@ import {
   getCacheInfo,
   getDisplayId,
 } from "../utils/database.js";
-import { formatIssuesListHuman, formatIssuesListHumanBeads, output } from "../utils/output.js";
+import {
+  formatIssuesListHuman,
+  formatIssuesListHumanBeads,
+  output,
+  outputError,
+} from "../utils/output.js";
 import { getViewer } from "../utils/issue-backend.js";
 import type { IssueStatus } from "../types.js";
 import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
@@ -25,6 +30,11 @@ import {
   parseHumanOutputStyle,
   useTypes,
 } from "../utils/config.js";
+import {
+  formatRemoteSyncPauseNotice,
+  getActiveRemoteSyncPause,
+  recordRemoteSyncPause,
+} from "../utils/remote-sync-state.js";
 
 const VALID_STATUSES: IssueStatus[] = ["open", "in_progress", "closed"];
 
@@ -54,23 +64,36 @@ export const listCommand = new Command("list")
       // Try to ensure cache is fresh, but don't fail if offline
       let syncFailed = false;
       const localOnly = isLocalOnly();
+      let remotePause = getActiveRemoteSyncPause();
+      let remoteDisabled = Boolean(remotePause);
 
-      if (!localOnly) {
+      if (!localOnly && !remoteDisabled) {
         if (options.sync) {
           await ensureFresh(options.team, true);
         } else {
           const freshness = await ensureFreshBestEffort(options.team);
           syncFailed = freshness.timedOut || Boolean(freshness.error);
         }
+        remotePause = getActiveRemoteSyncPause();
+        remoteDisabled = Boolean(remotePause);
+      } else if (remoteDisabled && !options.json) {
+        outputError(formatRemoteSyncPauseNotice(remotePause as NonNullable<typeof remotePause>));
       }
 
       // Get issues from cache
       let issues = getCachedIssues();
 
       // Filter by assignee unless --all (skip in local-only mode)
-      if (!options.all && !localOnly) {
-        const viewer = await getViewer();
-        issues = issues.filter((i) => !i.assignee || i.assignee === viewer.email);
+      if (!options.all && !localOnly && !remoteDisabled) {
+        try {
+          const viewer = await getViewer();
+          issues = issues.filter((i) => !i.assignee || i.assignee === viewer.email);
+        } catch (error) {
+          const pause = recordRemoteSyncPause(error);
+          if (pause && !options.json) {
+            outputError(formatRemoteSyncPauseNotice(pause));
+          }
+        }
       }
 
       // Apply filters with validation
@@ -128,7 +151,7 @@ export const listCommand = new Command("list")
       } else {
         if (issues.length === 0) {
           output("No issues found.");
-          if (!options.all && !localOnly) {
+          if (!options.all && !localOnly && !remoteDisabled) {
             output("Hint: list defaults to issues assigned to you (or unassigned). Try --all.");
             output(`Scope checked: ${getRepoScope()}:${getRepoName() || "unknown"}`);
           }
@@ -157,10 +180,12 @@ export const listCommand = new Command("list")
         // Show stale cache warning if sync failed or cache is old (skip in local-only mode)
         if (!localOnly) {
           const cacheInfo = getCacheInfo();
-          if (syncFailed || cacheInfo.ageSeconds > 300) {
+          if (remoteDisabled || syncFailed || cacheInfo.ageSeconds > 300) {
             const ageMinutes = Math.floor(cacheInfo.ageSeconds / 60);
             output(
-              `\n(cache ${ageMinutes}m old${syncFailed ? ", offline" : ""} - run lb sync to refresh)`
+              `\n(cache ${ageMinutes}m old${
+                remoteDisabled ? ", degraded" : syncFailed ? ", offline" : ""
+              } - run lb sync to refresh)`
             );
           }
         }

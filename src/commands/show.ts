@@ -30,6 +30,11 @@ import {
   isLocalOnly,
   parseHumanOutputStyle,
 } from "../utils/config.js";
+import {
+  formatRemoteSyncPauseNotice,
+  getActiveRemoteSyncPause,
+  recordRemoteSyncPause,
+} from "../utils/remote-sync-state.js";
 
 export const showCommand = new Command("show")
   .description("Show issue details")
@@ -50,23 +55,38 @@ export const showCommand = new Command("show")
 
       const resolvedId = resolveIssueId(id);
       const localOnly = isLocalOnly();
+      let remotePause = getActiveRemoteSyncPause();
+      let remoteDisabled = Boolean(remotePause);
+      let skipRemote = localOnly || remoteDisabled;
 
       // Ensure cache is fresh (skip in local-only mode)
-      if (!localOnly) {
+      if (!skipRemote) {
         if (options.sync) {
           await ensureFresh(options.team, true);
         } else {
           await ensureFreshBestEffort(options.team);
         }
+        remotePause = getActiveRemoteSyncPause();
+        remoteDisabled = Boolean(remotePause);
+        skipRemote = localOnly || remoteDisabled;
+      } else if (remoteDisabled && !options.json) {
+        outputError(formatRemoteSyncPauseNotice(remotePause as NonNullable<typeof remotePause>));
       }
 
       let issue;
 
       // Prefer a fresh remote fetch for synced issues so show includes current relations and media.
-      if (!localOnly && !isLocalId(resolvedId)) {
+      if (!skipRemote && !isLocalId(resolvedId)) {
         try {
           issue = await fetchIssue(resolvedId);
-        } catch {
+        } catch (error) {
+          const pause = recordRemoteSyncPause(error);
+          if (pause && !options.json) {
+            outputError(formatRemoteSyncPauseNotice(pause));
+            remotePause = pause;
+            remoteDisabled = true;
+            skipRemote = true;
+          }
           issue = undefined;
         }
       }
@@ -77,8 +97,15 @@ export const showCommand = new Command("show")
       }
 
       // If still not found, try fetching directly (skip in local-only mode)
-      if (!issue && !localOnly && !isLocalId(resolvedId)) {
-        issue = await fetchIssue(resolvedId);
+      if (!issue && !skipRemote && !isLocalId(resolvedId)) {
+        try {
+          issue = await fetchIssue(resolvedId);
+        } catch (error) {
+          const pause = recordRemoteSyncPause(error);
+          if (pause && !options.json) {
+            outputError(formatRemoteSyncPauseNotice(pause));
+          }
+        }
       }
 
       if (!issue) {

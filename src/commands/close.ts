@@ -27,6 +27,11 @@ import {
   isLocalOnly,
   parseHumanOutputStyle,
 } from "../utils/config.js";
+import {
+  formatRemoteSyncPauseNotice,
+  getActiveRemoteSyncPause,
+  recordRemoteSyncPause,
+} from "../utils/remote-sync-state.js";
 
 export const closeCommand = new Command("close")
   .description("Close an issue")
@@ -148,69 +153,85 @@ export const closeCommand = new Command("close")
         return;
       }
 
-      if (options.sync) {
+      let useImmediateSync = Boolean(options.sync);
+      const remotePause = getActiveRemoteSyncPause();
+      if (useImmediateSync && remotePause) {
+        outputError(formatRemoteSyncPauseNotice(remotePause));
+        useImmediateSync = false;
+      }
+
+      if (useImmediateSync) {
         if (isLocalId(resolvedId)) {
           outputError(`Issue not synced yet: ${id}`);
           process.exit(1);
         }
-        // Sync mode: close directly in Linear
-        const teamId = await getTeamId(options.team);
-        const issue = await closeIssue(resolvedId, teamId, options.reason);
+        try {
+          // Sync mode: close directly in Linear
+          const teamId = await getTeamId(options.team);
+          const issue = await closeIssue(resolvedId, teamId, options.reason);
 
-        if (options.json) {
-          output(formatIssueJson(issue));
-        } else {
-          output(
-            style === "beads"
-              ? formatIssueHumanBeads(issue, getDisplayId(issue.id))
-              : formatIssueHuman(issue, getDisplayId(issue.id))
-          );
-        }
-      } else {
-        // Queue mode: add to outbox and spawn background worker
-        queueOutboxItem(
-          "close",
-          {
-            issueId: resolvedId,
-            reason: options.reason,
-          },
-          resolvedId
-        );
-
-        // Ensure worker processes the outbox
-        ensureOutboxProcessed();
-
-        // Return cached issue with status updated
-        let issue = getCachedIssue(resolvedId);
-        if (!issue) {
-          try {
-            issue = isLocalId(resolvedId) ? null : await fetchIssue(resolvedId);
-          } catch {
-            issue = null;
-          }
-        }
-
-        if (issue) {
-          const now = new Date().toISOString();
-          const closed = {
-            ...issue,
-            status: "closed" as const,
-            closed_at: now,
-            updated_at: now,
-          };
-          cacheIssue(closed);
           if (options.json) {
-            output(formatIssueJson(closed));
+            output(formatIssueJson(issue));
           } else {
             output(
               style === "beads"
-                ? formatIssueHumanBeads(closed, getDisplayId(closed.id))
-                : formatIssueHuman(closed, getDisplayId(closed.id))
+                ? formatIssueHumanBeads(issue, getDisplayId(issue.id))
+                : formatIssueHuman(issue, getDisplayId(issue.id))
             );
           }
-        } else {
-          output(`Closed: ${getDisplayId(resolvedId)}`);
+          return;
+        } catch (error) {
+          const pause = recordRemoteSyncPause(error);
+          if (!pause) {
+            throw error;
+          }
+          outputError(formatRemoteSyncPauseNotice(pause));
         }
+      }
+
+      // Queue mode: add to outbox and spawn background worker
+      queueOutboxItem(
+        "close",
+        {
+          issueId: resolvedId,
+          reason: options.reason,
+        },
+        resolvedId
+      );
+
+      // Ensure worker processes the outbox
+      ensureOutboxProcessed();
+
+      // Return cached issue with status updated
+      let issue = getCachedIssue(resolvedId);
+      if (!issue) {
+        try {
+          issue = isLocalId(resolvedId) ? null : await fetchIssue(resolvedId);
+        } catch {
+          issue = null;
+        }
+      }
+
+      if (issue) {
+        const now = new Date().toISOString();
+        const closed = {
+          ...issue,
+          status: "closed" as const,
+          closed_at: now,
+          updated_at: now,
+        };
+        cacheIssue(closed);
+        if (options.json) {
+          output(formatIssueJson(closed));
+        } else {
+          output(
+            style === "beads"
+              ? formatIssueHumanBeads(closed, getDisplayId(closed.id))
+              : formatIssueHuman(closed, getDisplayId(closed.id))
+          );
+        }
+      } else {
+        output(`Closed: ${getDisplayId(resolvedId)}`);
       }
     } catch (error) {
       console.error("Error:", error instanceof Error ? error.message : error);

@@ -86,6 +86,13 @@ const SCHEMA_INIT_LOCK_POLL_MS = 50;
 const SCHEMA_INIT_LOCK_WAIT_MS = 60 * 1000;
 const LAST_SYNC_CONTEXT_METADATA_KEY = "last_sync_context";
 const LAST_ISSUE_UPDATE_WATERMARK_METADATA_KEY = "last_issue_update_watermark";
+const REMOTE_SYNC_PAUSE_METADATA_KEY = "remote_sync_pause";
+
+export type RemoteSyncPauseRecord = {
+  kind: "rate_limit" | "network";
+  until: string;
+  message?: string;
+};
 
 function isDatabaseLockedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -1028,6 +1035,53 @@ export function updateIssueUpdateWatermarkFromIssues(
  */
 export function getIncrementalSyncTimestamp(): string | null {
   return getIssueUpdateWatermark() || getLastSync();
+}
+
+export function getRemoteSyncPauseRecord(): RemoteSyncPauseRecord | null {
+  const db = getDatabase();
+  const row = db.query("SELECT value FROM metadata WHERE key = ?").get(
+    REMOTE_SYNC_PAUSE_METADATA_KEY
+  ) as {
+    value: string;
+  } | null;
+
+  if (!row?.value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(row.value) as Partial<RemoteSyncPauseRecord>;
+    if (
+      (parsed.kind !== "rate_limit" && parsed.kind !== "network") ||
+      typeof parsed.until !== "string"
+    ) {
+      return null;
+    }
+    return {
+      kind: parsed.kind,
+      until: parsed.until,
+      message: typeof parsed.message === "string" ? parsed.message : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function setRemoteSyncPauseRecord(record: RemoteSyncPauseRecord): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [
+      REMOTE_SYNC_PAUSE_METADATA_KEY,
+      JSON.stringify(record),
+    ]);
+  });
+}
+
+export function clearRemoteSyncPauseRecord(): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM metadata WHERE key = ?", [REMOTE_SYNC_PAUSE_METADATA_KEY]);
+  });
 }
 
 /**
@@ -2147,7 +2201,11 @@ export function releaseOutboxItemClaim(id: number): void {
 /**
  * Update outbox item with error
  */
-export function updateOutboxItemError(id: number, error: string): void {
+export function updateOutboxItemError(
+  id: number,
+  error: string,
+  options: { retryAfterMs?: number } = {}
+): void {
   const db = getDatabase();
   const row = runWithBusyRetry(
     () =>
@@ -2164,14 +2222,19 @@ export function updateOutboxItemError(id: number, error: string): void {
   const retryAfterSecondsMatch = error.match(/retry-?after"?\s*[:=]\s*"?(\d{1,6})/i);
   const retryAfterSeconds = retryAfterSecondsMatch ? parseInt(retryAfterSecondsMatch[1], 10) : null;
   const isRateLimited = error.toLowerCase().includes("rate limit");
-  const backoffMs = retryAfterSeconds
-    ? Math.min(retryAfterSeconds * 1000, OUTBOX_RETRY_MAX_DELAY_MS)
-    : isRateLimited
-      ? 60000
-      : Math.min(
-          OUTBOX_RETRY_BASE_DELAY_MS * 2 ** Math.min(nextRetryCount - 1, 8),
-          OUTBOX_RETRY_MAX_DELAY_MS
-        );
+  const explicitRetryAfterMs = options.retryAfterMs;
+  const parsedRetryAfterMs = retryAfterSeconds ? retryAfterSeconds * 1000 : null;
+  const backoffMs =
+    explicitRetryAfterMs && explicitRetryAfterMs > 0
+      ? explicitRetryAfterMs
+      : parsedRetryAfterMs && parsedRetryAfterMs > 0
+        ? parsedRetryAfterMs
+        : isRateLimited
+          ? 60 * 60 * 1000
+          : Math.min(
+              OUTBOX_RETRY_BASE_DELAY_MS * 2 ** Math.min(nextRetryCount - 1, 8),
+              OUTBOX_RETRY_MAX_DELAY_MS
+            );
   const nextAttemptAt = new Date(Date.now() + backoffMs).toISOString();
 
   runWithBusyRetry(() => {

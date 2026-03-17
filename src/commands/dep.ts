@@ -33,6 +33,10 @@ import {
   parseHumanOutputStyle,
 } from "../utils/config.js";
 import type { Dependency } from "../types.js";
+import {
+  formatRemoteSyncPauseNotice,
+  getActiveRemoteSyncPause,
+} from "../utils/remote-sync-state.js";
 
 /**
  * Get all dependencies involving an issue (both directions)
@@ -172,7 +176,12 @@ const addCommand = new Command("add")
         process.exit(1);
       }
 
+      const remotePause = getActiveRemoteSyncPause();
       const localOnly = isLocalOnly();
+      const useImmediateSync = Boolean(options.sync) && !remotePause;
+      if (options.sync && remotePause) {
+        outputError(formatRemoteSyncPauseNotice(remotePause));
+      }
       const now = new Date().toISOString();
 
       if (options.blocks) {
@@ -186,7 +195,7 @@ const addCommand = new Command("add")
         };
         if (localOnly) {
           cacheDependency(dep);
-        } else if (options.sync) {
+        } else if (useImmediateSync) {
           if (isLocalId(resolvedIssueId) || isLocalId(targetId)) {
             outputError("Dependency target not synced yet.");
             process.exit(1);
@@ -219,7 +228,7 @@ const addCommand = new Command("add")
         };
         if (localOnly) {
           cacheDependency(dep);
-        } else if (options.sync) {
+        } else if (useImmediateSync) {
           if (isLocalId(resolvedIssueId) || isLocalId(targetId)) {
             outputError("Dependency target not synced yet.");
             process.exit(1);
@@ -255,7 +264,7 @@ const addCommand = new Command("add")
         };
         if (localOnly) {
           cacheDependency(dep);
-        } else if (options.sync) {
+        } else if (useImmediateSync) {
           if (isLocalId(resolvedIssueId) || isLocalId(targetId)) {
             outputError("Dependency target not synced yet.");
             process.exit(1);
@@ -287,7 +296,7 @@ const addCommand = new Command("add")
         };
         if (localOnly) {
           cacheDependency(dep);
-        } else if (options.sync) {
+        } else if (useImmediateSync) {
           if (isLocalId(resolvedIssueId) || isLocalId(parentId)) {
             outputError("Parent issue not synced yet.");
             process.exit(1);
@@ -325,7 +334,12 @@ const removeCommand = new Command("remove")
   .action(async (issue: string, target: string | undefined, options) => {
     try {
       const resolvedIssue = resolveIssueId(issue);
+      const remotePause = getActiveRemoteSyncPause();
       const localOnly = isLocalOnly();
+      const useImmediateSync = Boolean(options.sync) && !remotePause;
+      if (options.sync && remotePause) {
+        outputError(formatRemoteSyncPauseNotice(remotePause));
+      }
 
       // Legacy mode: two positional arguments (backward compatibility)
       if (target && !options.blocks && !options.blockedBy && !options.related && !options.parent) {
@@ -333,7 +347,7 @@ const removeCommand = new Command("remove")
 
         if (localOnly) {
           deleteDependency(resolvedIssue, resolvedTarget);
-        } else if (options.sync) {
+        } else if (useImmediateSync) {
           if (isLocalId(resolvedIssue) || isLocalId(resolvedTarget)) {
             outputError("Dependency target not synced yet.");
             process.exit(1);
@@ -379,7 +393,7 @@ const removeCommand = new Command("remove")
 
         if (localOnly) {
           deleteDependencyByType(resolvedIssue, parentId, "parent-child");
-        } else if (options.sync) {
+        } else if (useImmediateSync) {
           if (isLocalId(resolvedIssue)) {
             outputError("Issue not synced yet.");
             process.exit(1);
@@ -412,7 +426,7 @@ const removeCommand = new Command("remove")
 
           if (localOnly) {
             deleteDependencyByType(issueA, issueB, "blocks");
-          } else if (options.sync) {
+          } else if (useImmediateSync) {
             if (isLocalId(issueA) || isLocalId(issueB)) {
               outputError("Dependency target not synced yet.");
               process.exit(1);
@@ -437,7 +451,7 @@ const removeCommand = new Command("remove")
         } else if (options.related) {
           if (localOnly) {
             deleteRelatedDependency(resolvedIssue, resolvedTarget);
-          } else if (options.sync) {
+          } else if (useImmediateSync) {
             if (isLocalId(resolvedIssue) || isLocalId(resolvedTarget)) {
               outputError("Dependency target not synced yet.");
               process.exit(1);

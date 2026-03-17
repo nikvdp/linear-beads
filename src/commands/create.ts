@@ -49,6 +49,11 @@ import {
   resolveDescriptionInput,
 } from "../utils/description-input.js";
 import { cachePreparedDescriptionMedia, planDescriptionMediaInput } from "../utils/media-input.js";
+import {
+  formatRemoteSyncPauseNotice,
+  getActiveRemoteSyncPause,
+  recordRemoteSyncPause,
+} from "../utils/remote-sync-state.js";
 
 const VALID_DEP_TYPES = ["blocks", "related", "discovered-from"];
 
@@ -340,7 +345,14 @@ export const createCommand = new Command("create")
         return;
       }
 
-      if (options.sync) {
+      let useImmediateSync = Boolean(options.sync);
+      const remotePause = getActiveRemoteSyncPause();
+      if (useImmediateSync && remotePause) {
+        outputError(formatRemoteSyncPauseNotice(remotePause));
+        useImmediateSync = false;
+      }
+
+      if (useImmediateSync) {
         const syncKey = generateIssueSyncKey();
         const stagedMediaOwnerId = `MEDIA-STAGING-${generateIssueSyncKey()}`;
         if (resolvedParent && isLocalId(resolvedParent)) {
@@ -354,181 +366,190 @@ export const createCommand = new Command("create")
           }
         }
         // Sync mode: create directly in Linear
-        const teamId = await getTeamId(options.team);
+        try {
+          const teamId = await getTeamId(options.team);
 
-        // Resolve assignee
-        let assigneeId: string | undefined;
-        if (options.unassign) {
-          // Explicitly unassigned
-          assigneeId = undefined;
-        } else if (options.assign) {
-          // Explicit assignment
-          if (options.assign === "me") {
+          // Resolve assignee
+          let assigneeId: string | undefined;
+          if (options.unassign) {
+            // Explicitly unassigned
+            assigneeId = undefined;
+          } else if (options.assign) {
+            // Explicit assignment
+            if (options.assign === "me") {
+              const viewer = await getViewer();
+              assigneeId = viewer.id;
+            } else {
+              const user = await getUserByEmail(options.assign);
+              if (!user) {
+                console.error(`User not found: ${options.assign}`);
+                process.exit(1);
+              }
+              assigneeId = user.id;
+            }
+          } else {
+            // Default: auto-assign to current user
             const viewer = await getViewer();
             assigneeId = viewer.id;
-          } else {
-            const user = await getUserByEmail(options.assign);
-            if (!user) {
-              console.error(`User not found: ${options.assign}`);
-              process.exit(1);
-            }
-            assigneeId = user.id;
           }
-        } else {
-          // Default: auto-assign to current user
-          const viewer = await getViewer();
-          assigneeId = viewer.id;
-        }
 
-        if (preparedMedia.mediaItems.length > 0) {
-          cachePreparedDescriptionMedia(stagedMediaOwnerId, preparedMedia.mediaItems);
-        }
+          if (preparedMedia.mediaItems.length > 0) {
+            cachePreparedDescriptionMedia(stagedMediaOwnerId, preparedMedia.mediaItems);
+          }
 
-        let issue;
-        try {
-          issue = await createIssue({
-            title,
-            description: canonicalDescription,
-            priority,
-            issueType, // undefined if types disabled
-            teamId,
-            parentId: resolvedParent,
-            assigneeId,
-            syncKey,
-            autoFormatEscapedNewlines: options.autoFormatEscapedNewlines as boolean,
-          });
-        } catch (error) {
-          deleteMediaItems(preparedMedia.mediaItems.map((item) => item.id));
-          throw error;
-        }
+          let issue;
+          try {
+            issue = await createIssue({
+              title,
+              description: canonicalDescription,
+              priority,
+              issueType, // undefined if types disabled
+              teamId,
+              parentId: resolvedParent,
+              assigneeId,
+              syncKey,
+              autoFormatEscapedNewlines: options.autoFormatEscapedNewlines as boolean,
+            });
+          } catch (error) {
+            deleteMediaItems(preparedMedia.mediaItems.map((item) => item.id));
+            throw error;
+          }
 
-        if (preparedMedia.mediaItems.length > 0) {
-          reassignMediaItemsToIssue(stagedMediaOwnerId, issue.local_id || issue.id);
-        }
+          if (preparedMedia.mediaItems.length > 0) {
+            reassignMediaItemsToIssue(stagedMediaOwnerId, issue.local_id || issue.id);
+          }
 
-        // Handle deps after issue creation
-        if (resolvedDeps.length > 0) {
-          const createdIssueRef = issue.linear_id || issue.id;
-          for (const dep of resolvedDeps) {
-            try {
-              if (dep.type === "blocked-by") {
-                // blocked-by is inverse: target blocks this issue
-                await createRelation(dep.targetId, createdIssueRef, "blocks");
-              } else {
-                // Map dep types to Linear relation types
-                const relationType = dep.type === "blocks" ? "blocks" : "related";
-                await createRelation(createdIssueRef, dep.targetId, relationType);
+          // Handle deps after issue creation
+          if (resolvedDeps.length > 0) {
+            const createdIssueRef = issue.linear_id || issue.id;
+            for (const dep of resolvedDeps) {
+              try {
+                if (dep.type === "blocked-by") {
+                  // blocked-by is inverse: target blocks this issue
+                  await createRelation(dep.targetId, createdIssueRef, "blocks");
+                } else {
+                  // Map dep types to Linear relation types
+                  const relationType = dep.type === "blocks" ? "blocks" : "related";
+                  await createRelation(createdIssueRef, dep.targetId, relationType);
+                }
+              } catch (error) {
+                console.error(
+                  `Warning: Failed to create ${dep.type} relation to ${dep.targetId}:`,
+                  error instanceof Error ? error.message : error
+                );
               }
-            } catch (error) {
-              console.error(
-                `Warning: Failed to create ${dep.type} relation to ${dep.targetId}:`,
-                error instanceof Error ? error.message : error
-              );
             }
           }
+
+          if (options.json) {
+            output(formatIssueJson(issue));
+          } else {
+            output(
+              style === "beads"
+                ? formatIssueHumanBeads(issue, getDisplayId(issue.id))
+                : formatIssueHuman(issue, getDisplayId(issue.id))
+            );
+          }
+          return;
+        } catch (error) {
+          const pause = recordRemoteSyncPause(error);
+          if (!pause) {
+            throw error;
+          }
+          outputError(formatRemoteSyncPauseNotice(pause));
+        }
+      }
+
+      // Queue mode: add to outbox and spawn background worker
+      // For queue mode, we pass the assign/unassign flags
+      // The worker will resolve them when processing
+
+      const localId = generateLocalId();
+      const syncKey = generateIssueSyncKey();
+      const now = new Date().toISOString();
+
+      const issue: Issue = {
+        id: localId,
+        title,
+        description: canonicalDescription,
+        status: "open",
+        priority,
+        issue_type: issueType,
+        sync_status: "pending",
+        created_at: now,
+        updated_at: now,
+      };
+
+      // Convert allDeps to string format for queue
+      const depsString = resolvedDeps.map((d) => `${d.type}:${d.targetId}`).join(",");
+
+      const payload: Record<string, unknown> = {
+        title,
+        description: canonicalDescription,
+        priority,
+        parentId: resolvedParent,
+        assign: options.assign,
+        unassign: options.unassign || false,
+        deps: depsString || undefined,
+        syncKey,
+      };
+      if (issueType) {
+        payload.issueType = issueType;
+      }
+
+      const db = getDatabase();
+      const transaction = db.transaction(() => {
+        cacheIssue({ ...issue, sync_key: syncKey });
+        cachePreparedDescriptionMedia(localId, preparedMedia.mediaItems);
+
+        if (resolvedParent) {
+          cacheDependency({
+            issue_id: localId,
+            depends_on_id: resolvedParent,
+            type: "parent-child",
+            created_at: now,
+            created_by: "local",
+          });
         }
 
-        if (options.json) {
-          output(formatIssueJson(issue));
-        } else {
-          output(
-            style === "beads"
-              ? formatIssueHumanBeads(issue, getDisplayId(issue.id))
-              : formatIssueHuman(issue, getDisplayId(issue.id))
-          );
-        }
-      } else {
-        // Queue mode: add to outbox and spawn background worker
-        // For queue mode, we pass the assign/unassign flags
-        // The worker will resolve them when processing
-
-        const localId = generateLocalId();
-        const syncKey = generateIssueSyncKey();
-        const now = new Date().toISOString();
-
-        const issue: Issue = {
-          id: localId,
-          title,
-          description: canonicalDescription,
-          status: "open",
-          priority,
-          issue_type: issueType,
-          sync_status: "pending",
-          created_at: now,
-          updated_at: now,
-        };
-
-        // Convert allDeps to string format for queue
-        const depsString = resolvedDeps.map((d) => `${d.type}:${d.targetId}`).join(",");
-
-        const payload: Record<string, unknown> = {
-          title,
-          description: canonicalDescription,
-          priority,
-          parentId: resolvedParent,
-          assign: options.assign,
-          unassign: options.unassign || false,
-          deps: depsString || undefined,
-          syncKey,
-        };
-        if (issueType) {
-          payload.issueType = issueType;
-        }
-
-        const db = getDatabase();
-        const transaction = db.transaction(() => {
-          cacheIssue({ ...issue, sync_key: syncKey });
-          cachePreparedDescriptionMedia(localId, preparedMedia.mediaItems);
-
-          if (resolvedParent) {
+        for (const dep of resolvedDeps) {
+          if (dep.type === "blocked-by") {
+            cacheDependency({
+              issue_id: dep.targetId,
+              depends_on_id: localId,
+              type: "blocks",
+              created_at: now,
+              created_by: "local",
+            });
+          } else {
+            const depType = dep.type === "blocks" ? "blocks" : "related";
             cacheDependency({
               issue_id: localId,
-              depends_on_id: resolvedParent,
-              type: "parent-child",
+              depends_on_id: dep.targetId,
+              type: depType as "blocks" | "related",
               created_at: now,
               created_by: "local",
             });
           }
-
-          for (const dep of resolvedDeps) {
-            if (dep.type === "blocked-by") {
-              cacheDependency({
-                issue_id: dep.targetId,
-                depends_on_id: localId,
-                type: "blocks",
-                created_at: now,
-                created_by: "local",
-              });
-            } else {
-              const depType = dep.type === "blocks" ? "blocks" : "related";
-              cacheDependency({
-                issue_id: localId,
-                depends_on_id: dep.targetId,
-                type: depType as "blocks" | "related",
-                created_at: now,
-                created_by: "local",
-              });
-            }
-          }
-
-          queueOutboxItem("create", payload, localId);
-        });
-        runWithBusyRetry(() => {
-          transaction();
-        });
-
-        // Spawn background worker if not already running
-        ensureOutboxProcessed();
-
-        if (options.json) {
-          output(formatIssueJson(issue));
-        } else {
-          output(
-            style === "beads"
-              ? formatIssueHumanBeads(issue, localId)
-              : `Created: ${localId}: ${title} (syncing...)`
-          );
         }
+
+        queueOutboxItem("create", payload, localId);
+      });
+      runWithBusyRetry(() => {
+        transaction();
+      });
+
+      // Spawn background worker if not already running
+      ensureOutboxProcessed();
+
+      if (options.json) {
+        output(formatIssueJson(issue));
+      } else {
+        output(
+          style === "beads"
+            ? formatIssueHumanBeads(issue, localId)
+            : `Created: ${localId}: ${title} (syncing...)`
+        );
       }
     } catch (error) {
       console.error("Error:", error instanceof Error ? error.message : error);

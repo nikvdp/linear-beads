@@ -37,6 +37,7 @@ import {
 } from "./issue-backend.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
 import { toCanonicalLocalDescription } from "./linear.js";
+import { getActiveRemoteSyncPause, recordRemoteSyncPause } from "./remote-sync-state.js";
 
 type ResolutionContext = {
   pendingCreateLocalIds: Set<string>;
@@ -549,6 +550,10 @@ export async function processOutboxQueue(
   options: { propagateParent?: boolean } = {}
 ): Promise<{ success: number; failed: number; deferred: number; remoteProcessed: number }> {
   const items = getPendingOutboxItems();
+  const activePause = getActiveRemoteSyncPause();
+  if (activePause) {
+    return { success: 0, failed: 0, deferred: items.length, remoteProcessed: 0 };
+  }
   const pendingCreateLocalIds = new Set(
     items
       .filter((item) => item.operation === "create" && typeof item.local_id === "string")
@@ -577,7 +582,8 @@ export async function processOutboxQueue(
     return blockedIssueIds.has(resolveRemoteIssueId(id));
   };
 
-  for (const item of items) {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
     if (item.operation === "create" && item.local_id) {
       const localIssue = getCachedIssue(item.local_id);
       if (!localIssue) {
@@ -652,8 +658,13 @@ export async function processOutboxQueue(
         success++;
         continue;
       }
-      updateOutboxItemError(item.id, errorMsg);
+      const pause = recordRemoteSyncPause(error);
+      updateOutboxItemError(item.id, errorMsg, { retryAfterMs: pause?.retryAfterMs });
       failed++;
+      if (pause) {
+        deferred += items.length - index - 1;
+        break;
+      }
     }
   }
 

@@ -3,7 +3,7 @@
  */
 
 import { Command } from "commander";
-import { getDisplayId, isLocalId, resolveIssueId } from "../utils/database.js";
+import { getCachedIssue, getDisplayId, isLocalId, resolveIssueId } from "../utils/database.js";
 import { getTeamId, updateIssue } from "../utils/issue-backend.js";
 import {
   formatIssueJson,
@@ -18,6 +18,12 @@ import {
   isLocalOnly,
   parseHumanOutputStyle,
 } from "../utils/config.js";
+import { queueOperation } from "../utils/spawn-worker.js";
+import {
+  formatRemoteSyncPauseNotice,
+  getActiveRemoteSyncPause,
+  recordRemoteSyncPause,
+} from "../utils/remote-sync-state.js";
 
 export const touchCommand = new Command("touch")
   .description("Round-trip an issue through lb's canonical description heal path")
@@ -36,6 +42,7 @@ export const touchCommand = new Command("touch")
       }
 
       const resolvedId = resolveIssueId(id);
+      const remotePause = getActiveRemoteSyncPause();
 
       if (isLocalOnly()) {
         outputError("touch is unavailable in local-only mode");
@@ -47,8 +54,44 @@ export const touchCommand = new Command("touch")
         process.exit(1);
       }
 
-      const teamId = await getTeamId(options.team);
-      const issue = await updateIssue(resolvedId, {}, teamId);
+      if (remotePause) {
+        outputError(formatRemoteSyncPauseNotice(remotePause));
+        queueOperation("update", { issueId: resolvedId }, resolvedId);
+        const cachedIssue = getCachedIssue(resolvedId);
+        if (!cachedIssue) {
+          output(`Queued touch for ${getDisplayId(resolvedId)}`);
+          return;
+        }
+        if (options.json) {
+          output(formatIssueJson(cachedIssue));
+        } else {
+          const style = getHumanOutputStyle(requestedStyle);
+          output(
+            style === "beads"
+              ? formatIssueHumanBeads(cachedIssue, getDisplayId(cachedIssue.id))
+              : formatIssueHuman(cachedIssue, getDisplayId(cachedIssue.id))
+          );
+        }
+        return;
+      }
+
+      let issue;
+      try {
+        const teamId = await getTeamId(options.team);
+        issue = await updateIssue(resolvedId, {}, teamId);
+      } catch (error) {
+        const pause = recordRemoteSyncPause(error);
+        if (!pause) {
+          throw error;
+        }
+        outputError(formatRemoteSyncPauseNotice(pause));
+        queueOperation("update", { issueId: resolvedId }, resolvedId);
+        issue = getCachedIssue(resolvedId);
+        if (!issue) {
+          output(`Queued touch for ${getDisplayId(resolvedId)}`);
+          return;
+        }
+      }
 
       if (options.json) {
         output(formatIssueJson(issue));

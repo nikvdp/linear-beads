@@ -16,6 +16,7 @@ import {
   formatReadyHumanBeads,
   formatReadyJson,
   output,
+  outputError,
 } from "../utils/output.js";
 import { getViewer } from "../utils/issue-backend.js";
 import {
@@ -26,6 +27,11 @@ import {
   isLocalOnly,
   parseHumanOutputStyle,
 } from "../utils/config.js";
+import {
+  formatRemoteSyncPauseNotice,
+  getActiveRemoteSyncPause,
+  recordRemoteSyncPause,
+} from "../utils/remote-sync-state.js";
 
 export const readyCommand = new Command("ready")
   .description("List unblocked issues ready to work on")
@@ -47,14 +53,20 @@ export const readyCommand = new Command("ready")
       // Try to ensure cache is fresh, but don't fail if offline
       let syncFailed = false;
       const localOnly = isLocalOnly();
+      let remotePause = getActiveRemoteSyncPause();
+      let remoteDisabled = Boolean(remotePause);
 
-      if (!localOnly) {
+      if (!localOnly && !remoteDisabled) {
         if (options.sync) {
           await ensureFresh(options.team, true);
         } else {
           const freshness = await ensureFreshBestEffort(options.team);
           syncFailed = freshness.timedOut || Boolean(freshness.error);
         }
+        remotePause = getActiveRemoteSyncPause();
+        remoteDisabled = Boolean(remotePause);
+      } else if (remoteDisabled && !options.json) {
+        outputError(formatRemoteSyncPauseNotice(remotePause as NonNullable<typeof remotePause>));
       }
 
       // Get issues from cache
@@ -65,9 +77,16 @@ export const readyCommand = new Command("ready")
       let scopedIssues = allIssues;
 
       // Filter by assignee unless --all (skip in local-only mode)
-      if (!options.all && !localOnly) {
-        const viewer = await getViewer();
-        scopedIssues = scopedIssues.filter((i) => !i.assignee || i.assignee === viewer.email);
+      if (!options.all && !localOnly && !remoteDisabled) {
+        try {
+          const viewer = await getViewer();
+          scopedIssues = scopedIssues.filter((i) => !i.assignee || i.assignee === viewer.email);
+        } catch (error) {
+          const pause = recordRemoteSyncPause(error);
+          if (pause && !options.json) {
+            outputError(formatRemoteSyncPauseNotice(pause));
+          }
+        }
       }
 
       let readyIssues = scopedIssues.filter((i) => i.status === "open" && !blockedIds.has(i.id));
@@ -119,7 +138,7 @@ export const readyCommand = new Command("ready")
 
         if ((style === "beads" ? dedupedBeadsIssues.length : readyDisplayIssues.length) === 0) {
           output("No ready issues.");
-          if (!options.all && !localOnly) {
+          if (!options.all && !localOnly && !remoteDisabled) {
             output("Hint: ready defaults to issues assigned to you (or unassigned). Try --all.");
             output(`Scope checked: ${getRepoScope()}:${getRepoName() || "unknown"}`);
           }
@@ -142,10 +161,12 @@ export const readyCommand = new Command("ready")
         // Show stale cache warning if sync failed or cache is old (skip in local-only mode)
         if (!localOnly) {
           const cacheInfo = getCacheInfo();
-          if (syncFailed || cacheInfo.ageSeconds > 300) {
+          if (remoteDisabled || syncFailed || cacheInfo.ageSeconds > 300) {
             const ageMinutes = Math.floor(cacheInfo.ageSeconds / 60);
             output(
-              `(cache ${ageMinutes}m old${syncFailed ? ", offline" : ""} - run lb sync to refresh)`
+              `(cache ${ageMinutes}m old${
+                remoteDisabled ? ", degraded" : syncFailed ? ", offline" : ""
+              } - run lb sync to refresh)`
             );
           }
         }

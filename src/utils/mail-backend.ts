@@ -1,6 +1,7 @@
 import type { MailBackendAdapter } from "../adapters/types.js";
 import { linearMailBackend } from "../adapters/linear-mail.js";
 import { getMailBackendKind, isLocalOnly } from "./config.js";
+import { getActiveRemoteSyncPause } from "./remote-sync-state.js";
 
 const localMailBackend: MailBackendAdapter = {
   name: "local",
@@ -22,7 +23,7 @@ const localMailBackend: MailBackendAdapter = {
 };
 
 export function getMailBackendAdapter(): MailBackendAdapter {
-  if (isLocalOnly()) {
+  if (isLocalOnly() || getActiveRemoteSyncPause()) {
     return localMailBackend;
   }
 

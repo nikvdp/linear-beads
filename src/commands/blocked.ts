@@ -15,6 +15,7 @@ import {
   formatIssueRelationSectionBeads,
   formatIssueSummaryBeads,
   output,
+  outputError,
 } from "../utils/output.js";
 import {
   getHumanOutputStyle,
@@ -22,6 +23,10 @@ import {
   isLocalOnly,
   parseHumanOutputStyle,
 } from "../utils/config.js";
+import {
+  formatRemoteSyncPauseNotice,
+  getActiveRemoteSyncPause,
+} from "../utils/remote-sync-state.js";
 
 /**
  * Get the blockers for a specific issue
@@ -58,13 +63,18 @@ export const blockedCommand = new Command("blocked")
         process.exit(1);
       }
 
+      const remotePause = getActiveRemoteSyncPause();
+      const remoteDisabled = Boolean(remotePause);
+
       // Ensure cache is fresh (skip in local-only mode)
-      if (!isLocalOnly()) {
+      if (!isLocalOnly() && !remoteDisabled) {
         if (options.sync) {
           await ensureFresh(options.team, true);
         } else {
           await ensureFreshBestEffort(options.team);
         }
+      } else if (remoteDisabled && !options.json) {
+        outputError(formatRemoteSyncPauseNotice(remotePause as NonNullable<typeof remotePause>));
       }
 
       // Get all blocked issue IDs
