@@ -143,8 +143,23 @@ export function recordRemoteSyncPause(
   if (current) {
     const currentUntilMs = Date.parse(current.until);
     const nextUntilMs = Date.parse(next.until);
-    if (Number.isFinite(currentUntilMs) && currentUntilMs >= nextUntilMs) {
-      return current;
+    if (Number.isFinite(currentUntilMs) && Number.isFinite(nextUntilMs)) {
+      const clampedUntilMs = Math.min(currentUntilMs, nextUntilMs);
+      if (clampedUntilMs === currentUntilMs) {
+        return current;
+      }
+
+      const clamped: ActiveRemoteSyncPause = {
+        ...next,
+        until: new Date(clampedUntilMs).toISOString(),
+        retryAfterMs: Math.max(0, clampedUntilMs - nowMs),
+      };
+      setRemoteSyncPauseRecord({
+        kind: clamped.kind,
+        until: clamped.until,
+        message: clamped.message,
+      });
+      return clamped;
     }
   }
 
