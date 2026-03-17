@@ -51,14 +51,6 @@ export function isNetworkErrorMessage(message: string): boolean {
 }
 
 function extractRetryAfterMs(message: string, nowMs: number): number | null {
-  const retryAfterMatch = message.match(/["']?retry-?after["']?\s*[:=]\s*["']?(\d{1,10})/i);
-  if (retryAfterMatch) {
-    const seconds = Number.parseInt(retryAfterMatch[1], 10);
-    if (Number.isFinite(seconds) && seconds >= 0) {
-      return seconds * 1000;
-    }
-  }
-
   const resetMatch = message.match(
     /["']?x-ratelimit-requests-reset["']?\s*[:=]\s*["']?(\d{10,16})/i
   );
@@ -66,6 +58,14 @@ function extractRetryAfterMs(message: string, nowMs: number): number | null {
     const resetAtMs = Number.parseInt(resetMatch[1], 10);
     if (Number.isFinite(resetAtMs) && resetAtMs > nowMs) {
       return resetAtMs - nowMs;
+    }
+  }
+
+  const retryAfterMatch = message.match(/["']?retry-?after["']?\s*[:=]\s*["']?(\d{1,10})/i);
+  if (retryAfterMatch) {
+    const seconds = Number.parseInt(retryAfterMatch[1], 10);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return seconds * 1000;
     }
   }
 
