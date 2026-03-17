@@ -23,6 +23,8 @@ const client = RUN_LINEAR_INTEGRATION_TESTS
     })
   : null;
 
+setDefaultTimeout(30000);
+
 const tempDirs: string[] = [];
 const issueUuids = new Set<string>();
 

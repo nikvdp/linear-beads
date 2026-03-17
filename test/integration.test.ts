@@ -410,7 +410,7 @@ describeLinearSuite("lb CLI Integration Tests", () => {
   });
 
   describe("touch", () => {
-    test("should heal malformed Linear links while preserving backticked literals", async () => {
+    test("should heal malformed Linear links while normalizing inline backticked refs", async () => {
       const client = new GraphQLClient("https://api.linear.app/graphql", {
         headers: { Authorization: process.env.LINEAR_API_KEY! },
       });
@@ -454,7 +454,8 @@ describeLinearSuite("lb CLI Integration Tests", () => {
       );
       expect(touchResult[0].id).toBe(subjectId);
       expect(touchResult[0].description).toContain(`Broken ${targetId}:`);
-      expect(touchResult[0].description).toContain(`Keep \`${targetId}\` literal`);
+      expect(touchResult[0].description).toContain(`Keep ${targetId} literal`);
+      expect(touchResult[0].description).not.toContain(`Keep \`${targetId}\` literal`);
 
       const fetched = await client.request<{
         issue: { description: string | null };
@@ -470,7 +471,9 @@ describeLinearSuite("lb CLI Integration Tests", () => {
       expect(fetched.issue.description).toContain(
         `[${targetId}](https://linear.app/${WORKSPACE_SLUG}/issue/${targetId}):`
       );
-      expect(fetched.issue.description).toContain(`\`${targetId}\` literal`);
+      expect(fetched.issue.description).toContain(targetId);
+      expect(fetched.issue.description).toContain("literal");
+      expect(fetched.issue.description).not.toContain(`\`${targetId}\` literal`);
       expect(fetched.issue.description).not.toContain(
         `[https://linear.app/${WORKSPACE_SLUG}/issue/${targetId}:]`
       );
