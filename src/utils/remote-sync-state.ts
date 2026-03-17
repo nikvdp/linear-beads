@@ -297,20 +297,37 @@ function computeRateLimitAutomaticPauseMs(message: string, nowMs: number): numbe
 function extractRateLimitMeta(message: string): {
   durationMs?: number;
   limit?: number;
+  remaining?: number;
   requested?: number;
+  resetAtMs?: number;
+  retryAfterMs?: number;
 } {
   const durationMatch = message.match(/["']duration["']\s*:\s*(\d{1,12})/i);
   const limitMatch = message.match(/["']limit["']\s*:\s*(\d{1,12})/i);
+  const remainingMatch = message.match(/["']remaining["']\s*:\s*(\d{1,12})/i);
   const requestedMatch = message.match(/["']requested["']\s*:\s*(\d{1,12})/i);
+  const resetMatch = message.match(
+    /["']?x-ratelimit-requests-reset["']?\s*[:=]\s*["']?(\d{10,16})/i
+  );
+  const retryAfterMatch = message.match(/["']?retry-?after["']?\s*[:=]\s*["']?(\d{1,10})/i);
 
   const durationMs = durationMatch ? Number.parseInt(durationMatch[1], 10) : undefined;
   const limit = limitMatch ? Number.parseInt(limitMatch[1], 10) : undefined;
+  const remaining = remainingMatch ? Number.parseInt(remainingMatch[1], 10) : undefined;
   const requested = requestedMatch ? Number.parseInt(requestedMatch[1], 10) : undefined;
+  const resetAtMs = resetMatch ? Number.parseInt(resetMatch[1], 10) : undefined;
+  const retryAfterSeconds = retryAfterMatch ? Number.parseInt(retryAfterMatch[1], 10) : undefined;
 
   return {
     durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
     limit: Number.isFinite(limit) ? limit : undefined,
+    remaining: Number.isFinite(remaining) ? remaining : undefined,
     requested: Number.isFinite(requested) ? requested : undefined,
+    resetAtMs: Number.isFinite(resetAtMs) ? resetAtMs : undefined,
+    retryAfterMs:
+      Number.isFinite(retryAfterSeconds) && retryAfterSeconds !== undefined
+        ? retryAfterSeconds * 1000
+        : undefined,
   };
 }
 
@@ -572,13 +589,67 @@ function formatPauseUntilLocal(isoTimestamp: string): string {
   }
 }
 
+function formatRateLimitDetails(pause: ActiveRemoteSyncPause): string | null {
+  if (pause.kind !== "rate_limit" || !pause.message) {
+    return null;
+  }
+
+  const meta = extractRateLimitMeta(pause.message);
+  const details: string[] = [];
+
+  details.push(
+    `Next manual re-check: ${formatPauseUntilLocal(pause.until)} (${formatPauseDuration(
+      pause.retryAfterMs
+    )})`
+  );
+
+  if (pause.backgroundRetryAfterMs > pause.retryAfterMs) {
+    details.push(
+      `Background sync resumes: ${formatPauseUntilLocal(
+        pause.backgroundUntil
+      )} (${formatPauseDuration(pause.backgroundRetryAfterMs)})`
+    );
+  }
+
+  const bucketParts: string[] = [];
+  if (meta.remaining !== undefined && meta.limit !== undefined) {
+    bucketParts.push(`${meta.remaining}/${meta.limit} requests remaining`);
+  } else if (meta.limit !== undefined) {
+    bucketParts.push(`bucket limit ${meta.limit} requests`);
+  }
+  if (meta.requested !== undefined) {
+    bucketParts.push(`${meta.requested} requested`);
+  }
+  if (meta.durationMs !== undefined) {
+    bucketParts.push(`window ${formatPauseDuration(meta.durationMs)}`);
+  }
+  if (bucketParts.length > 0) {
+    details.push(`Linear last reported: ${bucketParts.join(", ")}`);
+  }
+
+  const retryParts: string[] = [];
+  if (meta.retryAfterMs !== undefined) {
+    retryParts.push(`retry-after ${formatPauseDuration(meta.retryAfterMs)}`);
+  }
+  if (meta.resetAtMs !== undefined) {
+    retryParts.push(`reset header ${formatPauseUntilLocal(new Date(meta.resetAtMs).toISOString())}`);
+  }
+  if (retryParts.length > 0) {
+    details.push(`Last rate-limit headers: ${retryParts.join(", ")}`);
+  }
+
+  return details.join(". ");
+}
+
 export function formatRemoteSyncPauseNotice(
   pause: ActiveRemoteSyncPause,
   options: { prefix?: string } = {}
 ): string {
   const prefix = options.prefix || "Warning:";
   const cause = pause.kind === "rate_limit" ? "Linear rate limit" : "network failure";
-  return `${prefix} remote sync is paused until ${formatPauseUntilLocal(
+  const summary = `${prefix} remote sync is paused until ${formatPauseUntilLocal(
     pause.until
   )} (${formatPauseDuration(pause.retryAfterMs)}) after ${cause}. Local cache and queued writes are still available.`;
+  const details = formatRateLimitDetails(pause);
+  return details ? `${summary}\n  ${details}` : summary;
 }
