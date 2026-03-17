@@ -318,6 +318,7 @@ export type SelfUpdateResult = {
 export type SelfUpdateStatusStep =
   | "checking"
   | "locating_binary"
+  | "current_version"
   | "checking_checksums"
   | "downloading"
   | "verifying"
@@ -344,6 +345,7 @@ export async function runSelfUpdate(options: SelfUpdateOptions): Promise<SelfUpd
   const binaryPath = resolveBinaryPath(options.path);
   const local = getBinaryVersion(binaryPath);
   const localClean = normalizeTag(local);
+  options.onStatus?.({ step: "current_version", message: `Current version: ${localClean}` });
   const binaryName = artifactNameForPlatform();
   const asset = release.assets.find((item) => item.name === binaryName);
 

@@ -12,7 +12,7 @@ function formatResult(result: SelfUpdateResult): string {
   }
 
   const target = result.updatedPath || result.binaryPath;
-  return `Updated lb to ${result.remoteVersion}\nReplaced: ${target}`;
+  return `Updated lb: ${result.localVersion} -> ${result.remoteVersion}\nReplaced: ${target}`;
 }
 
 export const selfUpdateCommand = new Command("self-update")
