@@ -230,13 +230,34 @@ function formatPauseDuration(retryAfterMs: number): string {
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }
 
+function formatPauseUntilLocal(isoTimestamp: string): string {
+  const parsed = new Date(isoTimestamp);
+  if (Number.isNaN(parsed.getTime())) {
+    return isoTimestamp;
+  }
+
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    }).format(parsed);
+  } catch {
+    return parsed.toLocaleString();
+  }
+}
+
 export function formatRemoteSyncPauseNotice(
   pause: ActiveRemoteSyncPause,
   options: { prefix?: string } = {}
 ): string {
   const prefix = options.prefix || "Warning:";
   const cause = pause.kind === "rate_limit" ? "Linear rate limit" : "network failure";
-  return `${prefix} remote sync is paused until ${pause.until} (${formatPauseDuration(
-    pause.retryAfterMs
-  )}) after ${cause}. Local cache and queued writes are still available.`;
+  return `${prefix} remote sync is paused until ${formatPauseUntilLocal(
+    pause.until
+  )} (${formatPauseDuration(pause.retryAfterMs)}) after ${cause}. Local cache and queued writes are still available.`;
 }
