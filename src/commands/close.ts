@@ -29,7 +29,7 @@ import {
 } from "../utils/config.js";
 import {
   formatRemoteSyncPauseNotice,
-  getActiveRemoteSyncPause,
+  getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
@@ -154,7 +154,7 @@ export const closeCommand = new Command("close")
       }
 
       let useImmediateSync = Boolean(options.sync);
-      const remotePause = getActiveRemoteSyncPause();
+      const remotePause = await getCommandRemoteSyncPause();
       if (useImmediateSync && remotePause) {
         outputError(formatRemoteSyncPauseNotice(remotePause));
         useImmediateSync = false;

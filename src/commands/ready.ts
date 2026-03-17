@@ -30,6 +30,7 @@ import {
 import {
   formatRemoteSyncPauseNotice,
   getActiveRemoteSyncPause,
+  getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
@@ -53,7 +54,7 @@ export const readyCommand = new Command("ready")
       // Try to ensure cache is fresh, but don't fail if offline
       let syncFailed = false;
       const localOnly = isLocalOnly();
-      let remotePause = getActiveRemoteSyncPause();
+      let remotePause = await getCommandRemoteSyncPause();
       let remoteDisabled = Boolean(remotePause);
 
       if (!localOnly && !remoteDisabled) {

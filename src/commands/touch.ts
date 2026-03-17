@@ -21,7 +21,7 @@ import {
 import { queueOperation } from "../utils/spawn-worker.js";
 import {
   formatRemoteSyncPauseNotice,
-  getActiveRemoteSyncPause,
+  getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
@@ -42,7 +42,7 @@ export const touchCommand = new Command("touch")
       }
 
       const resolvedId = resolveIssueId(id);
-      const remotePause = getActiveRemoteSyncPause();
+      const remotePause = await getCommandRemoteSyncPause();
 
       if (isLocalOnly()) {
         outputError("touch is unavailable in local-only mode");

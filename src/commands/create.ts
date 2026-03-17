@@ -51,7 +51,7 @@ import {
 import { cachePreparedDescriptionMedia, planDescriptionMediaInput } from "../utils/media-input.js";
 import {
   formatRemoteSyncPauseNotice,
-  getActiveRemoteSyncPause,
+  getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
@@ -346,7 +346,7 @@ export const createCommand = new Command("create")
       }
 
       let useImmediateSync = Boolean(options.sync);
-      const remotePause = getActiveRemoteSyncPause();
+      const remotePause = await getCommandRemoteSyncPause();
       if (useImmediateSync && remotePause) {
         outputError(formatRemoteSyncPauseNotice(remotePause));
         useImmediateSync = false;

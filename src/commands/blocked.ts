@@ -25,7 +25,7 @@ import {
 } from "../utils/config.js";
 import {
   formatRemoteSyncPauseNotice,
-  getActiveRemoteSyncPause,
+  getCommandRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
 /**
@@ -63,7 +63,7 @@ export const blockedCommand = new Command("blocked")
         process.exit(1);
       }
 
-      const remotePause = getActiveRemoteSyncPause();
+      const remotePause = await getCommandRemoteSyncPause();
       const remoteDisabled = Boolean(remotePause);
 
       // Ensure cache is fresh (skip in local-only mode)

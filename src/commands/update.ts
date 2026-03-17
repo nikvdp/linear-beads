@@ -48,6 +48,7 @@ import { cachePreparedDescriptionMedia, planDescriptionMediaInput } from "../uti
 import {
   formatRemoteSyncPauseNotice,
   getActiveRemoteSyncPause,
+  getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
@@ -161,9 +162,6 @@ export const updateCommand = new Command("update")
       const style = getHumanOutputStyle(requestedStyle);
 
       const resolvedId = resolveIssueId(id);
-      const initialRemotePause = getActiveRemoteSyncPause();
-      const canResolveRemoteAssignee =
-        !isLocalOnly() && Boolean(options.sync) && !initialRemotePause;
       // Validate inputs
       let description = await resolveDescriptionInput({
         inlineDescription: options.description as string | undefined,
@@ -225,18 +223,6 @@ export const updateCommand = new Command("update")
       // Handle assignee
       if (options.unassign) {
         updates.assigneeId = null;
-      } else if (options.assign && canResolveRemoteAssignee) {
-        if (options.assign === "me") {
-          const viewer = await getViewer();
-          updates.assigneeId = viewer.id;
-        } else {
-          const user = await getUserByEmail(options.assign);
-          if (!user) {
-            outputError(`User not found: ${options.assign}`);
-            process.exit(1);
-          }
-          updates.assigneeId = user.id;
-        }
       }
 
       // Build deps array from explicit flags + legacy --deps
@@ -347,7 +333,7 @@ export const updateCommand = new Command("update")
       }
 
       let useImmediateSync = Boolean(options.sync);
-      const remotePause = getActiveRemoteSyncPause();
+      const remotePause = await getCommandRemoteSyncPause();
       if (useImmediateSync && remotePause) {
         outputError(formatRemoteSyncPauseNotice(remotePause));
         useImmediateSync = false;
@@ -362,6 +348,20 @@ export const updateCommand = new Command("update")
           // Sync mode: update directly in Linear
           const teamId = await getTeamId(options.team);
           let issue = null;
+
+          if (options.assign && updates.assigneeId === undefined) {
+            if (options.assign === "me") {
+              const viewer = await getViewer();
+              updates.assigneeId = viewer.id;
+            } else {
+              const user = await getUserByEmail(options.assign);
+              if (!user) {
+                outputError(`User not found: ${options.assign}`);
+                process.exit(1);
+              }
+              updates.assigneeId = user.id;
+            }
+          }
 
           if (preparedMedia.mediaItems.length > 0) {
             cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);

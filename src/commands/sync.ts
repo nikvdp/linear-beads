@@ -10,6 +10,7 @@ import { isLocalOnly } from "../utils/config.js";
 import {
   formatRemoteSyncPauseNotice,
   getActiveRemoteSyncPause,
+  getCommandRemoteSyncPause,
   isNetworkErrorMessage,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
@@ -35,7 +36,7 @@ export const syncCommand = new Command("sync")
         return;
       }
 
-      const activePause = getActiveRemoteSyncPause();
+      const activePause = await getCommandRemoteSyncPause();
       if (activePause) {
         if (options.json) {
           output(

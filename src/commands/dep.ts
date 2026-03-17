@@ -35,7 +35,7 @@ import {
 import type { Dependency } from "../types.js";
 import {
   formatRemoteSyncPauseNotice,
-  getActiveRemoteSyncPause,
+  getCommandRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
 /**
@@ -176,7 +176,7 @@ const addCommand = new Command("add")
         process.exit(1);
       }
 
-      const remotePause = getActiveRemoteSyncPause();
+      const remotePause = await getCommandRemoteSyncPause();
       const localOnly = isLocalOnly();
       const useImmediateSync = Boolean(options.sync) && !remotePause;
       if (options.sync && remotePause) {
@@ -334,7 +334,7 @@ const removeCommand = new Command("remove")
   .action(async (issue: string, target: string | undefined, options) => {
     try {
       const resolvedIssue = resolveIssueId(issue);
-      const remotePause = getActiveRemoteSyncPause();
+      const remotePause = await getCommandRemoteSyncPause();
       const localOnly = isLocalOnly();
       const useImmediateSync = Boolean(options.sync) && !remotePause;
       if (options.sync && remotePause) {

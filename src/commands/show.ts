@@ -33,6 +33,7 @@ import {
 import {
   formatRemoteSyncPauseNotice,
   getActiveRemoteSyncPause,
+  getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
@@ -55,7 +56,7 @@ export const showCommand = new Command("show")
 
       const resolvedId = resolveIssueId(id);
       const localOnly = isLocalOnly();
-      let remotePause = getActiveRemoteSyncPause();
+      let remotePause = await getCommandRemoteSyncPause();
       let remoteDisabled = Boolean(remotePause);
       let skipRemote = localOnly || remoteDisabled;
 

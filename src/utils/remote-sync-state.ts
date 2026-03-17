@@ -4,9 +4,12 @@ import {
   setRemoteSyncPauseRecord,
   type RemoteSyncPauseRecord,
 } from "./database.js";
+import { getApiKey } from "./config.js";
+import { getLinearRequestPolicy, linearFetchWithRetry } from "./graphql.js";
 
 const DEFAULT_RATE_LIMIT_PAUSE_MS = 60 * 60 * 1000;
 const DEFAULT_NETWORK_PAUSE_MS = 30 * 1000;
+const LINEAR_ENDPOINT = "https://api.linear.app/graphql";
 
 function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -91,6 +94,17 @@ export function getActiveRemoteSyncPause(nowMs: number = Date.now()): ActiveRemo
   };
 }
 
+function buildProbeFailureMessage(response: Response, body: string): string {
+  return `Pause probe failed: ${JSON.stringify({
+    status: response.status,
+    headers: {
+      "retry-after": response.headers.get("retry-after"),
+      "x-ratelimit-requests-reset": response.headers.get("x-ratelimit-requests-reset"),
+    },
+    body,
+  })}`;
+}
+
 function buildPauseRecord(error: unknown, nowMs: number): ActiveRemoteSyncPause | null {
   const message = normalizeErrorMessage(error);
 
@@ -140,6 +154,67 @@ export function recordRemoteSyncPause(
     message: next.message,
   });
   return next;
+}
+
+export async function getCommandRemoteSyncPause(): Promise<ActiveRemoteSyncPause | null> {
+  const currentPause = getActiveRemoteSyncPause();
+  if (!currentPause) {
+    return null;
+  }
+
+  try {
+    const policy = getLinearRequestPolicy();
+    const response = await linearFetchWithRetry(
+      LINEAR_ENDPOINT,
+      {
+        method: "POST",
+        headers: {
+          Authorization: getApiKey(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          query: `
+            query PauseProbe {
+              viewer {
+                id
+              }
+            }
+          `,
+        }),
+      },
+      {
+        policy: {
+          ...policy,
+          timeoutMs: Math.min(policy.timeoutMs, 5000),
+          maxRetries: 0,
+        },
+      }
+    );
+
+    const body = await response.text();
+    if (!response.ok) {
+      const pause = recordRemoteSyncPause(buildProbeFailureMessage(response, body));
+      return pause || getActiveRemoteSyncPause() || currentPause;
+    }
+
+    let parsed: { errors?: unknown[] } | null = null;
+    try {
+      parsed = JSON.parse(body) as { errors?: unknown[] };
+    } catch {
+      parsed = null;
+    }
+
+    if (parsed?.errors && parsed.errors.length > 0) {
+      const pause = recordRemoteSyncPause(body);
+      return pause || getActiveRemoteSyncPause() || currentPause;
+    }
+
+    clearRemoteSyncPauseRecord();
+    return null;
+  } catch (error) {
+    const pause = recordRemoteSyncPause(error);
+    return pause || getActiveRemoteSyncPause() || currentPause;
+  }
 }
 
 function formatPauseDuration(retryAfterMs: number): string {
