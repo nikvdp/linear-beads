@@ -7,7 +7,7 @@ import {
   getRemoteSyncPauseRecord as getLegacyRemoteSyncPauseRecord,
   runWithBusyRetry,
 } from "./database.js";
-import { getApiKey, getGlobalConfigPath } from "./config.js";
+import { getConfig, getGlobalConfigPath } from "./config.js";
 import { getLinearRequestPolicy, linearFetchWithRetry } from "./graphql.js";
 
 const DEFAULT_RATE_LIMIT_PAUSE_MS = 60 * 60 * 1000;
@@ -53,8 +53,18 @@ function getGlobalStateDb(): Database {
   return db;
 }
 
-function getRemoteSyncPauseKey(): string {
-  const fingerprint = createHash("sha256").update(getApiKey()).digest("hex").slice(0, 24);
+function getConfiguredApiKey(): string | null {
+  const apiKey = getConfig().api_key?.trim();
+  return apiKey ? apiKey : null;
+}
+
+function getRemoteSyncPauseKey(): string | null {
+  const apiKey = getConfiguredApiKey();
+  if (!apiKey) {
+    return null;
+  }
+
+  const fingerprint = createHash("sha256").update(apiKey).digest("hex").slice(0, 24);
   return `${GLOBAL_REMOTE_SYNC_PAUSE_KEY_PREFIX}${fingerprint}`;
 }
 
@@ -118,18 +128,29 @@ function normalizeStoredRateLimitPauseRecord(
 }
 
 function clearStoredRemoteSyncPauseRecord(): void {
+  const pauseKey = getRemoteSyncPauseKey();
+  if (!pauseKey) {
+    clearLegacyRemoteSyncPauseRecord();
+    return;
+  }
+
   const db = getGlobalStateDb();
   runWithBusyRetry(() => {
-    db.run("DELETE FROM metadata WHERE key = ?", [getRemoteSyncPauseKey()]);
+    db.run("DELETE FROM metadata WHERE key = ?", [pauseKey]);
   });
   clearLegacyRemoteSyncPauseRecord();
 }
 
 function setStoredRemoteSyncPauseRecord(record: StoredRemoteSyncPauseRecord): void {
+  const pauseKey = getRemoteSyncPauseKey();
+  if (!pauseKey) {
+    return;
+  }
+
   const db = getGlobalStateDb();
   runWithBusyRetry(() => {
     db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [
-      getRemoteSyncPauseKey(),
+      pauseKey,
       JSON.stringify(record),
     ]);
   });
@@ -137,10 +158,15 @@ function setStoredRemoteSyncPauseRecord(record: StoredRemoteSyncPauseRecord): vo
 }
 
 function migrateLegacyRemoteSyncPauseRecord(nowMs: number): void {
+  const pauseKey = getRemoteSyncPauseKey();
+  if (!pauseKey) {
+    return;
+  }
+
   const db = getGlobalStateDb();
-  const existing = db.query("SELECT value FROM metadata WHERE key = ?").get(
-    getRemoteSyncPauseKey()
-  ) as { value: string } | null;
+  const existing = db.query("SELECT value FROM metadata WHERE key = ?").get(pauseKey) as
+    | { value: string }
+    | null;
   if (existing?.value) {
     clearLegacyRemoteSyncPauseRecord();
     return;
@@ -171,12 +197,17 @@ function migrateLegacyRemoteSyncPauseRecord(nowMs: number): void {
 function getStoredRemoteSyncPauseRecord(
   nowMs: number = Date.now()
 ): StoredRemoteSyncPauseRecord | null {
+  const pauseKey = getRemoteSyncPauseKey();
+  if (!pauseKey) {
+    return null;
+  }
+
   migrateLegacyRemoteSyncPauseRecord(nowMs);
 
   const db = getGlobalStateDb();
-  const row = db.query("SELECT value FROM metadata WHERE key = ?").get(
-    getRemoteSyncPauseKey()
-  ) as { value: string } | null;
+  const row = db.query("SELECT value FROM metadata WHERE key = ?").get(pauseKey) as
+    | { value: string }
+    | null;
 
   if (!row?.value) {
     return null;
@@ -500,6 +531,11 @@ export async function getCommandRemoteSyncPause(): Promise<ActiveRemoteSyncPause
     return null;
   }
 
+  const apiKey = getConfiguredApiKey();
+  if (!apiKey) {
+    return null;
+  }
+
   try {
     const policy = getLinearRequestPolicy();
     const response = await linearFetchWithRetry(
@@ -507,7 +543,7 @@ export async function getCommandRemoteSyncPause(): Promise<ActiveRemoteSyncPause
       {
         method: "POST",
         headers: {
-          Authorization: getApiKey(),
+          Authorization: apiKey,
           "content-type": "application/json",
         },
         body: JSON.stringify({
