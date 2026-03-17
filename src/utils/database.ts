@@ -2544,6 +2544,7 @@ function inferTeamPrefixForIssueNumber(issueNumber: string): string {
 function normalizeIssueInputId(id: string): string {
   const trimmed = id.trim();
   if (!trimmed) return trimmed;
+  if (isPlaceholderIssueInput(trimmed)) return "";
 
   const localDashedMatch = trimmed.match(LOCAL_ID_WITH_DASH_RE);
   if (localDashedMatch) {
@@ -2570,6 +2571,15 @@ function normalizeIssueInputId(id: string): string {
   }
 
   return trimmed;
+}
+
+export function isPlaceholderIssueInput(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized === "" || normalized === "-" || normalized === "null" || normalized === "undefined";
 }
 
 /**

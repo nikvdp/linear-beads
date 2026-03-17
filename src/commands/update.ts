@@ -12,6 +12,7 @@ import {
   getDisplayId,
   resolveIssueId,
   isLocalId,
+  isPlaceholderIssueInput,
   getDatabase,
 } from "../utils/database.js";
 import {
@@ -105,6 +106,20 @@ function warnOnAutoHealedEscapedNewlineDescription(autoHealed: boolean): void {
   );
   outputError("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
   outputError("");
+}
+
+function normalizeOptionalParentInput(parent: string | undefined): string | undefined {
+  if (!parent || isPlaceholderIssueInput(parent)) {
+    return undefined;
+  }
+  return parent;
+}
+
+function assertConcreteRelationTarget(value: string, flagName: string): void {
+  if (isPlaceholderIssueInput(value)) {
+    outputError(`${flagName} requires a real issue ID, not '${value}'.`);
+    process.exit(1);
+  }
 }
 
 async function loadCurrentDescriptionForUpdate(issueId: string): Promise<string | undefined> {
@@ -243,6 +258,13 @@ export const updateCommand = new Command("update")
         allDeps.push(...parseDeps(options.deps));
       }
 
+      for (const dep of allDeps) {
+        assertConcreteRelationTarget(dep.targetId, `--${dep.type}`);
+      }
+      const normalizedParentInput = normalizeOptionalParentInput(
+        options.parent as string | undefined
+      );
+
       const resolvedDeps = allDeps.map((dep) => ({
         ...dep,
         targetId: resolveIssueId(dep.targetId),
@@ -257,7 +279,7 @@ export const updateCommand = new Command("update")
       if (
         Object.keys(updates).length === 0 &&
         allDeps.length === 0 &&
-        !options.parent &&
+        !normalizedParentInput &&
         !options.unparent
       ) {
         outputError("No updates specified");
@@ -278,10 +300,10 @@ export const updateCommand = new Command("update")
         cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);
 
         // Handle parent
-        if (options.parent) {
+        if (normalizedParentInput) {
           cacheDependency({
             issue_id: resolvedId,
-            depends_on_id: resolveIssueId(options.parent),
+            depends_on_id: resolveIssueId(normalizedParentInput),
             type: "parent-child",
             created_at: now,
             created_by: "local",
@@ -377,17 +399,17 @@ export const updateCommand = new Command("update")
           }
 
           // Handle parent
-          if (options.parent) {
+          if (normalizedParentInput) {
             try {
-              const parentId = resolveIssueId(options.parent);
+              const parentId = resolveIssueId(normalizedParentInput);
               if (isLocalId(parentId)) {
-                outputError(`Parent not synced yet: ${options.parent}`);
+                outputError(`Parent not synced yet: ${normalizedParentInput}`);
               } else {
                 await updateIssueParent(resolvedId, parentId);
               }
             } catch (error) {
               outputError(
-                `Failed to set parent to ${options.parent}: ${error instanceof Error ? error.message : error}`
+                `Failed to set parent to ${normalizedParentInput}: ${error instanceof Error ? error.message : error}`
               );
             }
           }
@@ -474,7 +496,7 @@ export const updateCommand = new Command("update")
       if (options.assign) payload.assign = options.assign;
       if (options.unassign) payload.unassign = true;
       if (depsString) payload.deps = depsString;
-      if (options.parent) payload.parentId = resolveIssueId(options.parent);
+      if (normalizedParentInput) payload.parentId = resolveIssueId(normalizedParentInput);
       if (options.unparent) payload.parentId = null;
       // Remove assigneeId from payload - worker will resolve it
       delete payload.assigneeId;
@@ -501,10 +523,10 @@ export const updateCommand = new Command("update")
         const updated = { ...issue, ...updates, updated_at: now };
         cacheIssue(updated);
 
-        if (options.parent) {
+        if (normalizedParentInput) {
           cacheDependency({
             issue_id: resolvedId,
-            depends_on_id: resolveIssueId(options.parent),
+            depends_on_id: resolveIssueId(normalizedParentInput),
             type: "parent-child",
             created_at: now,
             created_by: "local",

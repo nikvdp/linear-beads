@@ -15,6 +15,7 @@ import {
   reassignMediaItemsToIssue,
   resolveIssueId,
   isLocalId,
+  isPlaceholderIssueInput,
   runWithBusyRetry,
   generateIssueSyncKey,
 } from "../utils/database.js";
@@ -93,6 +94,20 @@ function parseDeps(deps: string): Array<{ type: string; targetId: string }> {
  */
 function collect(value: string, previous: string[] = []): string[] {
   return previous.concat([value]);
+}
+
+function normalizeOptionalParentInput(parent: string | undefined): string | undefined {
+  if (!parent || isPlaceholderIssueInput(parent)) {
+    return undefined;
+  }
+  return parent;
+}
+
+function assertConcreteRelationTarget(value: string, flagName: string): void {
+  if (isPlaceholderIssueInput(value)) {
+    console.error(`${flagName} requires a real issue ID, not '${value}'.`);
+    process.exit(1);
+  }
 }
 
 function reasonLabel(reason: string): string {
@@ -274,11 +289,20 @@ export const createCommand = new Command("create")
         allDeps.push(...parseDeps(options.deps));
       }
 
+      for (const dep of allDeps) {
+        assertConcreteRelationTarget(dep.targetId, `--${dep.type}`);
+      }
+      const normalizedParentInput = normalizeOptionalParentInput(
+        options.parent as string | undefined
+      );
+
       const resolvedDeps = allDeps.map((dep) => ({
         ...dep,
         targetId: resolveIssueId(dep.targetId),
       }));
-      const resolvedParent = options.parent ? resolveIssueId(options.parent) : undefined;
+      const resolvedParent = normalizedParentInput
+        ? resolveIssueId(normalizedParentInput)
+        : undefined;
 
       // Local-only mode: create locally without Linear
       if (isLocalOnly()) {

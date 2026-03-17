@@ -16,6 +16,7 @@ import {
   getDisplayId,
   resolveIssueId,
   isLocalId,
+  isPlaceholderIssueInput,
   resolveIssueLocalId,
 } from "../utils/database.js";
 import {
@@ -83,6 +84,13 @@ function hasRelatedDependencyBetween(issueA: string, issueB: string): boolean {
   return related.some(
     (dep) => resolveIssueLocalId(getRelatedCounterpartId(dep, resolvedA)) === resolvedB
   );
+}
+
+function requireConcreteIssueInput(value: string, flagName: string): string {
+  if (isPlaceholderIssueInput(value)) {
+    throw new Error(`${flagName} requires a real issue ID, not '${value}'.`);
+  }
+  return value;
 }
 
 /**
@@ -185,7 +193,7 @@ const addCommand = new Command("add")
       const now = new Date().toISOString();
 
       if (options.blocks) {
-        const targetId = resolveIssueId(options.blocks);
+        const targetId = resolveIssueId(requireConcreteIssueInput(options.blocks, "--blocks"));
         const dep: Dependency = {
           issue_id: resolvedIssueId,
           depends_on_id: targetId,
@@ -218,7 +226,9 @@ const addCommand = new Command("add")
 
       if (options.blockedBy) {
         // blocked-by is inverse: target blocks this issue
-        const targetId = resolveIssueId(options.blockedBy);
+        const targetId = resolveIssueId(
+          requireConcreteIssueInput(options.blockedBy, "--blocked-by")
+        );
         const dep: Dependency = {
           issue_id: targetId,
           depends_on_id: resolvedIssueId,
@@ -250,7 +260,7 @@ const addCommand = new Command("add")
       }
 
       if (options.related) {
-        const targetId = resolveIssueId(options.related);
+        const targetId = resolveIssueId(requireConcreteIssueInput(options.related, "--related"));
         if (hasRelatedDependencyBetween(resolvedIssueId, targetId)) {
           output(`Already related: ${getDisplayId(resolvedIssueId)} and ${getDisplayId(targetId)}`);
           return;
@@ -286,7 +296,7 @@ const addCommand = new Command("add")
       }
 
       if (options.parent) {
-        const parentId = resolveIssueId(options.parent);
+        const parentId = resolveIssueId(requireConcreteIssueInput(options.parent, "--parent"));
         const dep: Dependency = {
           issue_id: resolvedIssueId,
           depends_on_id: parentId,
@@ -343,7 +353,7 @@ const removeCommand = new Command("remove")
 
       // Legacy mode: two positional arguments (backward compatibility)
       if (target && !options.blocks && !options.blockedBy && !options.related && !options.parent) {
-        const resolvedTarget = resolveIssueId(target);
+        const resolvedTarget = resolveIssueId(requireConcreteIssueInput(target, "target issue"));
 
         if (localOnly) {
           deleteDependency(resolvedIssue, resolvedTarget);
@@ -417,7 +427,7 @@ const removeCommand = new Command("remove")
         );
       } else if (target) {
         // For blocks/blocked-by/related, we need a target
-        const resolvedTarget = resolveIssueId(target);
+        const resolvedTarget = resolveIssueId(requireConcreteIssueInput(target, "target issue"));
 
         if (options.blocks || options.blockedBy) {
           // For blocks/blocked-by, determine the direction

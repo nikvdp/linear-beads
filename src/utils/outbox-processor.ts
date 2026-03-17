@@ -4,6 +4,7 @@
 
 import type { Issue, IssueType, OutboxItem, Priority } from "../types.js";
 import {
+  cacheIssue,
   getPendingOutboxItems,
   removeOutboxItem,
   claimOutboxItem,
@@ -19,7 +20,9 @@ import {
   getParentId,
   getChildIds,
   getCachedIssue,
+  cacheDependency,
   isLocalId,
+  isPlaceholderIssueInput,
   resolveIssueId as resolveRemoteIssueId,
   resolveIssueLocalId,
   updateMailMessageSyncStatus,
@@ -77,8 +80,89 @@ function queueRelationRetry(
 }
 
 function isPlaceholderIssueRef(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  return normalized === "" || normalized === "undefined" || normalized === "null";
+  return isPlaceholderIssueInput(value);
+}
+
+function reviveIssueFromCreateOutbox(item: OutboxItem): boolean {
+  if (item.operation !== "create" || !item.local_id) {
+    return false;
+  }
+
+  const payload = item.payload as Record<string, unknown>;
+  const title = typeof payload.title === "string" ? payload.title.trim() : "";
+  if (!title) {
+    return false;
+  }
+
+  const parsedPriority =
+    typeof payload.priority === "number"
+      ? payload.priority
+      : typeof payload.priority === "string"
+        ? Number.parseInt(payload.priority, 10)
+        : NaN;
+  const priority = Number.isFinite(parsedPriority) ? (parsedPriority as Priority) : 2;
+  const createdAt =
+    typeof item.created_at === "string" && item.created_at.trim()
+      ? item.created_at
+      : new Date().toISOString();
+  const syncKey =
+    typeof payload.syncKey === "string" && payload.syncKey.trim() ? payload.syncKey.trim() : undefined;
+
+  cacheIssue({
+    id: item.local_id,
+    title,
+    description:
+      typeof payload.description === "string"
+        ? toCanonicalLocalDescription(payload.description)
+        : undefined,
+    status: "open",
+    priority,
+    issue_type: typeof payload.issueType === "string" ? (payload.issueType as IssueType) : undefined,
+    sync_status: "pending",
+    created_at: createdAt,
+    updated_at: createdAt,
+    sync_key: syncKey,
+  });
+
+  if (typeof payload.parentId === "string" && !isPlaceholderIssueRef(payload.parentId)) {
+    cacheDependency({
+      issue_id: item.local_id,
+      depends_on_id: payload.parentId,
+      type: "parent-child",
+      created_at: createdAt,
+      created_by: "local",
+    });
+  }
+
+  if (typeof payload.deps === "string") {
+    for (const dep of payload.deps.split(",").map((value) => value.trim()).filter(Boolean)) {
+      const [type, targetId] = dep.split(":");
+      if (!targetId || isPlaceholderIssueRef(targetId)) {
+        continue;
+      }
+      if (type === "blocked-by") {
+        cacheDependency({
+          issue_id: targetId,
+          depends_on_id: item.local_id,
+          type: "blocks",
+          created_at: createdAt,
+          created_by: "local",
+        });
+        continue;
+      }
+
+      const depType = type === "blocks" ? "blocks" : "related";
+      cacheDependency({
+        issue_id: item.local_id,
+        depends_on_id: targetId,
+        type: depType as "blocks" | "related",
+        created_at: createdAt,
+        created_by: "local",
+      });
+    }
+  }
+
+  return true;
 }
 
 function isOrphanUnresolvedLocalId(localId: string, context: ResolutionContext): boolean {
@@ -586,7 +670,12 @@ export async function processOutboxQueue(
     const item = items[index];
     if (item.operation === "create" && item.local_id) {
       const localIssue = getCachedIssue(item.local_id);
-      if (!localIssue) {
+      if (!localIssue && !reviveIssueFromCreateOutbox(item)) {
+        // Keep the outbox row intact when the create payload is all we have left.
+        deferred++;
+        continue;
+      }
+      if (!getCachedIssue(item.local_id)) {
         removeOutboxItem(item.id);
         success++;
         continue;
