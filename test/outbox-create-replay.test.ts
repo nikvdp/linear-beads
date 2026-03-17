@@ -41,6 +41,7 @@ async function runEval(
     | "deps_retry"
     | "deps_retry_prefers_identifier"
     | "legacy_placeholder_refs"
+    | "missing_cached_issue_row"
     | "alias_merge_resolution"
     | "shared_parent_resolution"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -138,12 +139,29 @@ async function runEval(
         {
           title: "Replay guard issue",
           priority: 2,
-          parentId: "undefined",
-          deps: "blocked-by:undefined,related:null,blocks:LIN-9006",
+          parentId: "-",
+          deps: "blocked-by:-,blocked-by:undefined,related:null,blocks:LIN-9006",
         },
         localId
       );
       markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9006");
+    } else if (mode === "missing_cached_issue_row") {
+      const outboxId = queueOutboxItem(
+        "create",
+        {
+          title: "Replay guard issue",
+          priority: 2,
+          parentId: "-",
+          syncKey: "fbab0a11-7f0a-4b0f-90ee-52c057826001",
+        },
+        localId
+      );
+      markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9014");
+
+      const db = new Database(".lb/cache.db");
+      db.run("DELETE FROM issues WHERE local_id = ?", [localId]);
+      db.run("DELETE FROM dependencies WHERE issue_id = ? OR depends_on_id = ?", [localId, localId]);
+      db.close();
     } else if (mode === "alias_merge_resolution") {
       if (!aliasLocalId) {
         throw new Error("Expected aliasLocalId for alias_merge_resolution mode");
@@ -284,6 +302,8 @@ async function runEval(
       );
       if (mode === "mapping") {
         setIssueIdMapping(localId, "LIN-9001");
+      } else if (mode === "orphan") {
+        markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9000");
       } else if (mode === "marker") {
         markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9002");
       }
@@ -391,7 +411,7 @@ describe("outbox create replay protection", () => {
     expect(payload.row?.sync_status).toBe("synced");
   });
 
-  test("drops orphaned create outbox rows when local issue no longer exists", async () => {
+  test("revives orphaned create outbox rows when the payload still contains the issue data", async () => {
     const repoDir = createRepo();
     const result = await runEval(repoDir, "orphan");
 
@@ -411,9 +431,10 @@ describe("outbox create replay protection", () => {
     expect(payload.result.failed).toBe(0);
     expect(payload.result.remoteProcessed).toBe(0);
     expect(payload.remaining).toBe(0);
-    expect(payload.mapping).toBeNull();
-    expect(payload.displayId).toMatch(/^LOCAL-/);
-    expect(payload.row).toBeNull();
+    expect(payload.mapping).toBe("LIN-9000");
+    expect(payload.displayId).toBe("LIN-9000");
+    expect(payload.row?.linear_identifier).toBe("LIN-9000");
+    expect(payload.row?.sync_status).toBe("synced");
   });
 
   test("allows create replay when an unresolved update row appears earlier in the queue", async () => {
@@ -611,6 +632,32 @@ describe("outbox create replay protection", () => {
     expect(payload.mapping).toBe("LIN-9006");
     expect(payload.displayId).toBe("LIN-9006");
     expect(payload.row?.linear_identifier).toBe("LIN-9006");
+    expect(payload.row?.sync_status).toBe("synced");
+  });
+
+  test("revives missing cached create rows from outbox payloads before finalizing mapping", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "missing_cached_issue_row");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      result: { success: number; failed: number; deferred: number; remoteProcessed: number };
+      remaining: number;
+      mapping: string | null;
+      displayId: string;
+      row: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+    };
+
+    expect(payload.result.success).toBe(1);
+    expect(payload.result.failed).toBe(0);
+    expect(payload.result.deferred).toBe(0);
+    expect(payload.result.remoteProcessed).toBe(0);
+    expect(payload.remaining).toBe(0);
+    expect(payload.mapping).toBe("LIN-9014");
+    expect(payload.displayId).toBe("LIN-9014");
+    expect(payload.row?.linear_identifier).toBe("LIN-9014");
     expect(payload.row?.sync_status).toBe("synced");
   });
 
