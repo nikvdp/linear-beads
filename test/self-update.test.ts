@@ -102,7 +102,7 @@ describe("self-update", () => {
     expect(result.remoteVersion).toBe(normalizeReleaseTag(`v${version}`));
     expect(result.updatedPath).toBeUndefined();
     expect(readFileSync(binaryPath, "utf8")).toBe("old-binary");
-    expect(statuses).toEqual(["checking", "locating_binary"]);
+    expect(statuses).toEqual(["checking", "locating_binary", "current_version"]);
   });
 
   test("uses embedded binary version even when .version sidecar is stale", () => {
@@ -138,6 +138,7 @@ describe("self-update", () => {
     expect(statuses).toEqual([
       "checking",
       "locating_binary",
+      "current_version",
       "checking_checksums",
       "downloading",
       "verifying",
