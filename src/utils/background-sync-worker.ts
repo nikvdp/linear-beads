@@ -16,7 +16,7 @@ import { isLocalOnly } from "./config.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
 import {
   formatRemoteSyncPauseNotice,
-  getActiveRemoteSyncPause,
+  getAutomaticRemoteSyncPause,
   recordRemoteSyncPause,
 } from "./remote-sync-state.js";
 
@@ -38,7 +38,7 @@ async function processOutbox(): Promise<void> {
 
   try {
     while (true) {
-      const activePause = getActiveRemoteSyncPause();
+      const activePause = getAutomaticRemoteSyncPause();
       if (activePause) {
         console.error(formatRemoteSyncPauseNotice(activePause, { prefix: "Background sync:" }));
         break;
@@ -94,7 +94,7 @@ async function processOutbox(): Promise<void> {
     }
 
     // Check if we should run a full sync (every 3rd run or >24h since last)
-    if (!isLocalOnly() && !getActiveRemoteSyncPause() && needsFullSync()) {
+    if (!isLocalOnly() && !getAutomaticRemoteSyncPause() && needsFullSync()) {
       if (!teamId) {
         teamId = await getTeamId();
       }
@@ -112,7 +112,7 @@ async function processOutbox(): Promise<void> {
       }
     }
 
-    if (!isLocalOnly() && !getActiveRemoteSyncPause()) {
+    if (!isLocalOnly() && !getAutomaticRemoteSyncPause()) {
       try {
         await getMailBackendAdapter().ingest();
       } catch (error) {

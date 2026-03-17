@@ -27,7 +27,11 @@ import { ensureOutboxProcessed } from "./spawn-worker.js";
 import { processOutboxQueue } from "./outbox-processor.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
 import { getRepoName, getRepoScope, getTeamKey } from "./config.js";
-import { getActiveRemoteSyncPause, recordRemoteSyncPause } from "./remote-sync-state.js";
+import {
+  getActiveRemoteSyncPause,
+  getAutomaticRemoteSyncPause,
+  recordRemoteSyncPause,
+} from "./remote-sync-state.js";
 
 /**
  * Process outbox queue - push pending mutations to Linear
@@ -440,7 +444,7 @@ export async function smartSync(
  * Called after incremental sync to check if it's time for a full refresh.
  */
 export function scheduleBackgroundFullSyncIfNeeded(): void {
-  if (!getActiveRemoteSyncPause() && needsFullSync() && !isWorkerRunning()) {
+  if (!getAutomaticRemoteSyncPause() && needsFullSync() && !isWorkerRunning()) {
     // Spawn background worker which will detect needsFullSync and do a full sync
     ensureOutboxProcessed();
   }

@@ -1,15 +1,228 @@
+import { Database } from "bun:sqlite";
+import { createHash } from "crypto";
+import { mkdirSync } from "fs";
+import { dirname, join } from "path";
 import {
-  clearRemoteSyncPauseRecord,
-  getRemoteSyncPauseRecord,
-  setRemoteSyncPauseRecord,
-  type RemoteSyncPauseRecord,
+  clearRemoteSyncPauseRecord as clearLegacyRemoteSyncPauseRecord,
+  getRemoteSyncPauseRecord as getLegacyRemoteSyncPauseRecord,
+  runWithBusyRetry,
 } from "./database.js";
-import { getApiKey } from "./config.js";
+import { getApiKey, getGlobalConfigPath } from "./config.js";
 import { getLinearRequestPolicy, linearFetchWithRetry } from "./graphql.js";
 
 const DEFAULT_RATE_LIMIT_PAUSE_MS = 60 * 60 * 1000;
 const DEFAULT_NETWORK_PAUSE_MS = 30 * 1000;
+const DEFAULT_RATE_LIMIT_PROBE_MS = 15000;
+const MAX_RATE_LIMIT_PROBE_MS = 60000;
 const LINEAR_ENDPOINT = "https://api.linear.app/graphql";
+const GLOBAL_STATE_DB_FILENAME = "state.db";
+const GLOBAL_REMOTE_SYNC_PAUSE_KEY_PREFIX = "remote_sync_pause:";
+
+type StoredRemoteSyncPauseRecord = {
+  kind: "rate_limit" | "network";
+  until: string;
+  backgroundUntil?: string;
+  message?: string;
+};
+
+let globalStateDb: Database | null = null;
+
+function getGlobalStateDbPath(): string {
+  return join(dirname(getGlobalConfigPath()), GLOBAL_STATE_DB_FILENAME);
+}
+
+function getGlobalStateDb(): Database {
+  if (globalStateDb) {
+    return globalStateDb;
+  }
+
+  const dbPath = getGlobalStateDbPath();
+  mkdirSync(dirname(dbPath), { recursive: true });
+
+  const db = new Database(dbPath);
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA busy_timeout = 10000");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `);
+
+  globalStateDb = db;
+  return db;
+}
+
+function getRemoteSyncPauseKey(): string {
+  const fingerprint = createHash("sha256").update(getApiKey()).digest("hex").slice(0, 24);
+  return `${GLOBAL_REMOTE_SYNC_PAUSE_KEY_PREFIX}${fingerprint}`;
+}
+
+function parseStoredPauseRecord(raw: string): StoredRemoteSyncPauseRecord | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<StoredRemoteSyncPauseRecord>;
+    if (
+      (parsed.kind !== "rate_limit" && parsed.kind !== "network") ||
+      typeof parsed.until !== "string"
+    ) {
+      return null;
+    }
+
+    return {
+      kind: parsed.kind,
+      until: parsed.until,
+      backgroundUntil:
+        typeof parsed.backgroundUntil === "string" ? parsed.backgroundUntil : undefined,
+      message: typeof parsed.message === "string" ? parsed.message : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getBackgroundUntil(record: StoredRemoteSyncPauseRecord): string {
+  return record.backgroundUntil || record.until;
+}
+
+function getStoredUntilMs(value: string): number | null {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeStoredRateLimitPauseRecord(
+  record: StoredRemoteSyncPauseRecord,
+  nowMs: number
+): StoredRemoteSyncPauseRecord {
+  if (record.kind !== "rate_limit") {
+    return record;
+  }
+
+  const backgroundUntil = getBackgroundUntil(record);
+  const untilMs = getStoredUntilMs(record.until);
+  if (untilMs === null) {
+    return record;
+  }
+
+  if (backgroundUntil === record.until && untilMs - nowMs > MAX_RATE_LIMIT_PROBE_MS) {
+    return {
+      ...record,
+      until: new Date(nowMs + DEFAULT_RATE_LIMIT_PROBE_MS).toISOString(),
+      backgroundUntil,
+    };
+  }
+
+  return {
+    ...record,
+    backgroundUntil,
+  };
+}
+
+function clearStoredRemoteSyncPauseRecord(): void {
+  const db = getGlobalStateDb();
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM metadata WHERE key = ?", [getRemoteSyncPauseKey()]);
+  });
+  clearLegacyRemoteSyncPauseRecord();
+}
+
+function setStoredRemoteSyncPauseRecord(record: StoredRemoteSyncPauseRecord): void {
+  const db = getGlobalStateDb();
+  runWithBusyRetry(() => {
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [
+      getRemoteSyncPauseKey(),
+      JSON.stringify(record),
+    ]);
+  });
+  clearLegacyRemoteSyncPauseRecord();
+}
+
+function migrateLegacyRemoteSyncPauseRecord(nowMs: number): void {
+  const db = getGlobalStateDb();
+  const existing = db.query("SELECT value FROM metadata WHERE key = ?").get(
+    getRemoteSyncPauseKey()
+  ) as { value: string } | null;
+  if (existing?.value) {
+    clearLegacyRemoteSyncPauseRecord();
+    return;
+  }
+
+  const legacy = getLegacyRemoteSyncPauseRecord();
+  if (!legacy) {
+    return;
+  }
+
+  const legacyUntilMs = getStoredUntilMs(legacy.until);
+  if (legacyUntilMs === null || legacyUntilMs <= nowMs) {
+    clearLegacyRemoteSyncPauseRecord();
+    return;
+  }
+
+  setStoredRemoteSyncPauseRecord({
+    kind: legacy.kind,
+    until:
+      legacy.kind === "rate_limit"
+        ? new Date(Math.min(legacyUntilMs, nowMs + DEFAULT_RATE_LIMIT_PROBE_MS)).toISOString()
+        : legacy.until,
+    backgroundUntil: legacy.until,
+    message: legacy.message,
+  });
+}
+
+function getStoredRemoteSyncPauseRecord(
+  nowMs: number = Date.now()
+): StoredRemoteSyncPauseRecord | null {
+  migrateLegacyRemoteSyncPauseRecord(nowMs);
+
+  const db = getGlobalStateDb();
+  const row = db.query("SELECT value FROM metadata WHERE key = ?").get(
+    getRemoteSyncPauseKey()
+  ) as { value: string } | null;
+
+  if (!row?.value) {
+    return null;
+  }
+
+  const record = parseStoredPauseRecord(row.value);
+  if (!record) {
+    clearStoredRemoteSyncPauseRecord();
+    return null;
+  }
+
+  const normalizedRecord = normalizeStoredRateLimitPauseRecord(record, nowMs);
+  if (
+    normalizedRecord.until !== record.until ||
+    normalizedRecord.backgroundUntil !== record.backgroundUntil
+  ) {
+    setStoredRemoteSyncPauseRecord(normalizedRecord);
+  }
+
+  const untilMs = getStoredUntilMs(normalizedRecord.until);
+  const backgroundUntilMs = getStoredUntilMs(getBackgroundUntil(normalizedRecord));
+  const commandActive = untilMs !== null && untilMs > nowMs;
+  const backgroundActive = backgroundUntilMs !== null && backgroundUntilMs > nowMs;
+
+  if (!commandActive && !backgroundActive) {
+    clearStoredRemoteSyncPauseRecord();
+    return null;
+  }
+
+  if (untilMs === null) {
+    clearStoredRemoteSyncPauseRecord();
+    return null;
+  }
+
+  if (backgroundUntilMs === null) {
+    return {
+      ...normalizedRecord,
+      backgroundUntil: normalizedRecord.until,
+    };
+  }
+
+  return {
+    ...normalizedRecord,
+    backgroundUntil: getBackgroundUntil(normalizedRecord),
+  };
+}
 
 function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -72,26 +285,97 @@ function extractRetryAfterMs(message: string, nowMs: number): number | null {
   return null;
 }
 
-export type ActiveRemoteSyncPause = RemoteSyncPauseRecord & {
-  retryAfterMs: number;
-};
-
-export function getActiveRemoteSyncPause(nowMs: number = Date.now()): ActiveRemoteSyncPause | null {
-  const record = getRemoteSyncPauseRecord();
-  if (!record) {
-    return null;
+function computeRateLimitAutomaticPauseMs(message: string, nowMs: number): number {
+  const retryAfterMs = extractRetryAfterMs(message, nowMs);
+  if (retryAfterMs && retryAfterMs > 0) {
+    return retryAfterMs;
   }
 
-  const untilMs = Date.parse(record.until);
-  if (!Number.isFinite(untilMs) || untilMs <= nowMs) {
-    clearRemoteSyncPauseRecord();
+  return DEFAULT_RATE_LIMIT_PAUSE_MS;
+}
+
+function extractRateLimitMeta(message: string): {
+  durationMs?: number;
+  limit?: number;
+  requested?: number;
+} {
+  const durationMatch = message.match(/["']duration["']\s*:\s*(\d{1,12})/i);
+  const limitMatch = message.match(/["']limit["']\s*:\s*(\d{1,12})/i);
+  const requestedMatch = message.match(/["']requested["']\s*:\s*(\d{1,12})/i);
+
+  const durationMs = durationMatch ? Number.parseInt(durationMatch[1], 10) : undefined;
+  const limit = limitMatch ? Number.parseInt(limitMatch[1], 10) : undefined;
+  const requested = requestedMatch ? Number.parseInt(requestedMatch[1], 10) : undefined;
+
+  return {
+    durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
+    limit: Number.isFinite(limit) ? limit : undefined,
+    requested: Number.isFinite(requested) ? requested : undefined,
+  };
+}
+
+function computeRateLimitProbeMs(message: string, nowMs: number): number {
+  const meta = extractRateLimitMeta(message);
+  if (meta.durationMs && meta.limit && meta.limit > 0) {
+    const requested = Math.max(1, meta.requested || 1);
+    const msPerToken = meta.durationMs / meta.limit;
+    const conservativeProbeMs = Math.ceil(msPerToken * requested * 20);
+    return Math.min(MAX_RATE_LIMIT_PROBE_MS, Math.max(DEFAULT_RATE_LIMIT_PROBE_MS, conservativeProbeMs));
+  }
+
+  const retryAfterMs = extractRetryAfterMs(message, nowMs);
+  if (retryAfterMs && retryAfterMs > 0) {
+    return Math.min(MAX_RATE_LIMIT_PROBE_MS, Math.max(DEFAULT_RATE_LIMIT_PROBE_MS, retryAfterMs));
+  }
+
+  return DEFAULT_RATE_LIMIT_PROBE_MS;
+}
+
+export type ActiveRemoteSyncPause = StoredRemoteSyncPauseRecord & {
+  retryAfterMs: number;
+  backgroundUntil: string;
+  backgroundRetryAfterMs: number;
+};
+
+function toActivePause(
+  record: StoredRemoteSyncPauseRecord,
+  activeUntil: string,
+  nowMs: number
+): ActiveRemoteSyncPause | null {
+  const untilMs = getStoredUntilMs(activeUntil);
+  const backgroundUntil = getBackgroundUntil(record);
+  const backgroundUntilMs = getStoredUntilMs(backgroundUntil);
+  if (untilMs === null || untilMs <= nowMs || backgroundUntilMs === null) {
     return null;
   }
 
   return {
     ...record,
+    until: activeUntil,
+    backgroundUntil,
     retryAfterMs: untilMs - nowMs,
+    backgroundRetryAfterMs: Math.max(0, backgroundUntilMs - nowMs),
   };
+}
+
+export function getActiveRemoteSyncPause(nowMs: number = Date.now()): ActiveRemoteSyncPause | null {
+  const record = getStoredRemoteSyncPauseRecord(nowMs);
+  if (!record) {
+    return null;
+  }
+
+  return toActivePause(record, record.until, nowMs);
+}
+
+export function getAutomaticRemoteSyncPause(
+  nowMs: number = Date.now()
+): ActiveRemoteSyncPause | null {
+  const record = getStoredRemoteSyncPauseRecord(nowMs);
+  if (!record) {
+    return null;
+  }
+
+  return toActivePause(record, getBackgroundUntil(record), nowMs);
 }
 
 function buildProbeFailureMessage(response: Response, body: string): string {
@@ -109,11 +393,14 @@ function buildPauseRecord(error: unknown, nowMs: number): ActiveRemoteSyncPause 
   const message = normalizeErrorMessage(error);
 
   if (isRateLimitErrorMessage(message)) {
-    const retryAfterMs = extractRetryAfterMs(message, nowMs) || DEFAULT_RATE_LIMIT_PAUSE_MS;
+    const retryAfterMs = computeRateLimitProbeMs(message, nowMs);
+    const backgroundRetryAfterMs = computeRateLimitAutomaticPauseMs(message, nowMs);
     return {
       kind: "rate_limit",
       until: new Date(nowMs + retryAfterMs).toISOString(),
+      backgroundUntil: new Date(nowMs + backgroundRetryAfterMs).toISOString(),
       retryAfterMs,
+      backgroundRetryAfterMs,
       message: normalizeForDisplay(message),
     };
   }
@@ -122,12 +409,28 @@ function buildPauseRecord(error: unknown, nowMs: number): ActiveRemoteSyncPause 
     return {
       kind: "network",
       until: new Date(nowMs + DEFAULT_NETWORK_PAUSE_MS).toISOString(),
+      backgroundUntil: new Date(nowMs + DEFAULT_NETWORK_PAUSE_MS).toISOString(),
       retryAfterMs: DEFAULT_NETWORK_PAUSE_MS,
+      backgroundRetryAfterMs: DEFAULT_NETWORK_PAUSE_MS,
       message: normalizeForDisplay(message),
     };
   }
 
   return null;
+}
+
+function clampActiveUntil(currentIso: string | undefined, nextIso: string, nowMs: number): string {
+  const nextUntilMs = getStoredUntilMs(nextIso);
+  if (nextUntilMs === null) {
+    return nextIso;
+  }
+
+  const currentUntilMs = currentIso ? getStoredUntilMs(currentIso) : null;
+  if (currentUntilMs !== null && currentUntilMs > nowMs && nextUntilMs > currentUntilMs) {
+    return new Date(currentUntilMs).toISOString();
+  }
+
+  return nextIso;
 }
 
 export function recordRemoteSyncPause(
@@ -139,41 +442,44 @@ export function recordRemoteSyncPause(
     return null;
   }
 
-  const current = getActiveRemoteSyncPause(nowMs);
-  if (current) {
-    const currentUntilMs = Date.parse(current.until);
-    const nextUntilMs = Date.parse(next.until);
-    if (Number.isFinite(currentUntilMs) && Number.isFinite(nextUntilMs)) {
-      const clampedUntilMs = Math.min(currentUntilMs, nextUntilMs);
-      if (clampedUntilMs === currentUntilMs) {
-        return current;
+  const current = getStoredRemoteSyncPauseRecord(nowMs);
+  const merged: StoredRemoteSyncPauseRecord = current
+    ? {
+        kind: next.kind,
+        until: clampActiveUntil(current.until, next.until, nowMs),
+        backgroundUntil: clampActiveUntil(
+          getBackgroundUntil(current),
+          next.backgroundUntil,
+          nowMs
+        ),
+        message: next.message,
       }
-
-      const clamped: ActiveRemoteSyncPause = {
-        ...next,
-        until: new Date(clampedUntilMs).toISOString(),
-        retryAfterMs: Math.max(0, clampedUntilMs - nowMs),
+    : {
+        kind: next.kind,
+        until: next.until,
+        backgroundUntil: next.backgroundUntil,
+        message: next.message,
       };
-      setRemoteSyncPauseRecord({
-        kind: clamped.kind,
-        until: clamped.until,
-        message: clamped.message,
-      });
-      return clamped;
-    }
+
+  setStoredRemoteSyncPauseRecord(merged);
+
+  const active = getActiveRemoteSyncPause(nowMs);
+  if (active) {
+    return active;
   }
 
-  setRemoteSyncPauseRecord({
-    kind: next.kind,
-    until: next.until,
-    message: next.message,
-  });
-  return next;
+  return getAutomaticRemoteSyncPause(nowMs);
 }
 
 export async function getCommandRemoteSyncPause(): Promise<ActiveRemoteSyncPause | null> {
-  const currentPause = getActiveRemoteSyncPause();
-  if (!currentPause) {
+  const nowMs = Date.now();
+  const activePause = getActiveRemoteSyncPause(nowMs);
+  if (activePause) {
+    return activePause;
+  }
+
+  const storedPause = getStoredRemoteSyncPauseRecord(nowMs);
+  if (!storedPause) {
     return null;
   }
 
@@ -209,7 +515,7 @@ export async function getCommandRemoteSyncPause(): Promise<ActiveRemoteSyncPause
     const body = await response.text();
     if (!response.ok) {
       const pause = recordRemoteSyncPause(buildProbeFailureMessage(response, body));
-      return pause || getActiveRemoteSyncPause() || currentPause;
+      return pause || getActiveRemoteSyncPause() || getAutomaticRemoteSyncPause() || null;
     }
 
     let parsed: { errors?: unknown[] } | null = null;
@@ -221,14 +527,14 @@ export async function getCommandRemoteSyncPause(): Promise<ActiveRemoteSyncPause
 
     if (parsed?.errors && parsed.errors.length > 0) {
       const pause = recordRemoteSyncPause(body);
-      return pause || getActiveRemoteSyncPause() || currentPause;
+      return pause || getActiveRemoteSyncPause() || getAutomaticRemoteSyncPause() || null;
     }
 
-    clearRemoteSyncPauseRecord();
+    clearStoredRemoteSyncPauseRecord();
     return null;
   } catch (error) {
     const pause = recordRemoteSyncPause(error);
-    return pause || getActiveRemoteSyncPause() || currentPause;
+    return pause || getActiveRemoteSyncPause() || getAutomaticRemoteSyncPause() || null;
   }
 }
 

@@ -37,7 +37,7 @@ import {
 } from "./issue-backend.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
 import { toCanonicalLocalDescription } from "./linear.js";
-import { getActiveRemoteSyncPause, recordRemoteSyncPause } from "./remote-sync-state.js";
+import { getAutomaticRemoteSyncPause, recordRemoteSyncPause } from "./remote-sync-state.js";
 
 type ResolutionContext = {
   pendingCreateLocalIds: Set<string>;
@@ -550,7 +550,7 @@ export async function processOutboxQueue(
   options: { propagateParent?: boolean } = {}
 ): Promise<{ success: number; failed: number; deferred: number; remoteProcessed: number }> {
   const items = getPendingOutboxItems();
-  const activePause = getActiveRemoteSyncPause();
+  const activePause = getAutomaticRemoteSyncPause();
   if (activePause) {
     return { success: 0, failed: 0, deferred: items.length, remoteProcessed: 0 };
   }

@@ -48,6 +48,7 @@ import { cachePreparedDescriptionMedia, planDescriptionMediaInput } from "../uti
 import {
   formatRemoteSyncPauseNotice,
   getActiveRemoteSyncPause,
+  getAutomaticRemoteSyncPause,
   getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
@@ -112,7 +113,7 @@ async function loadCurrentDescriptionForUpdate(issueId: string): Promise<string 
     return cached.description;
   }
 
-  if (isLocalId(issueId) || getActiveRemoteSyncPause()) {
+  if (isLocalId(issueId) || getAutomaticRemoteSyncPause() || getActiveRemoteSyncPause()) {
     return undefined;
   }
 
