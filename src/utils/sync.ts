@@ -406,7 +406,9 @@ export async function smartSync(
       return result;
     } else {
       // Incremental sync
-      const result = await measureSyncPhase("smartSync.incremental", () => incrementalSync(teamKey));
+      const result = await measureSyncPhase("smartSync.incremental", () =>
+        incrementalSync(teamKey)
+      );
       if (result) {
         if (result.type !== "skipped") {
           updateLastSyncContext(contextKey);

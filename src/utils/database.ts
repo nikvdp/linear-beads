@@ -1039,9 +1039,9 @@ export function getIncrementalSyncTimestamp(): string | null {
 
 export function getRemoteSyncPauseRecord(): RemoteSyncPauseRecord | null {
   const db = getDatabase();
-  const row = db.query("SELECT value FROM metadata WHERE key = ?").get(
-    REMOTE_SYNC_PAUSE_METADATA_KEY
-  ) as {
+  const row = db
+    .query("SELECT value FROM metadata WHERE key = ?")
+    .get(REMOTE_SYNC_PAUSE_METADATA_KEY) as {
     value: string;
   } | null;
 
@@ -2579,7 +2579,9 @@ export function isPlaceholderIssueInput(value: unknown): boolean {
   }
 
   const normalized = value.trim().toLowerCase();
-  return normalized === "" || normalized === "-" || normalized === "null" || normalized === "undefined";
+  return (
+    normalized === "" || normalized === "-" || normalized === "null" || normalized === "undefined"
+  );
 }
 
 /**

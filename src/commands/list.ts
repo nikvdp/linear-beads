@@ -194,7 +194,9 @@ export const listCommand = new Command("list")
             : formatIssuesListHuman(renderedIssues)
         );
         if (visibleIssues.length < totalIssues) {
-          output(`\n(showing ${visibleIssues.length} of ${totalIssues} issues; use --limit to adjust)`);
+          output(
+            `\n(showing ${visibleIssues.length} of ${totalIssues} issues; use --limit to adjust)`
+          );
         }
 
         // Show stale cache warning if sync failed or cache is old (skip in local-only mode)

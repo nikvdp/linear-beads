@@ -54,7 +54,9 @@ async function runLb(
 async function runLbJson<T>(cwd: string, ...args: string[]): Promise<T> {
   const result = await runLb(cwd, ...args, "--json");
   if (result.exitCode !== 0) {
-    throw new Error(`lb ${args.join(" ")} failed\nstdout=${result.stdout}\nstderr=${result.stderr}`);
+    throw new Error(
+      `lb ${args.join(" ")} failed\nstdout=${result.stdout}\nstderr=${result.stderr}`
+    );
   }
   return JSON.parse(result.stdout) as T;
 }
@@ -63,7 +65,13 @@ describe("placeholder issue ref handling", () => {
   test("create treats --parent - as an unset parent instead of queueing a bogus ref", async () => {
     const repoDir = createLocalRepo();
 
-    const created = await runLbJson<Array<{ id: string }>>(repoDir, "create", "Child issue", "--parent", "-");
+    const created = await runLbJson<Array<{ id: string }>>(
+      repoDir,
+      "create",
+      "Child issue",
+      "--parent",
+      "-"
+    );
     const shown = await runLbJson<Array<{ parent: string | null }>>(repoDir, "show", created[0].id);
 
     expect(created[0].id).toMatch(/^LOCAL-\d+$/);

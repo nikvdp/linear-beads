@@ -168,9 +168,9 @@ function migrateLegacyRemoteSyncPauseRecord(nowMs: number): void {
   }
 
   const db = getGlobalStateDb();
-  const existing = db.query("SELECT value FROM metadata WHERE key = ?").get(pauseKey) as
-    | { value: string }
-    | null;
+  const existing = db.query("SELECT value FROM metadata WHERE key = ?").get(pauseKey) as {
+    value: string;
+  } | null;
   if (existing?.value) {
     clearLegacyRemoteSyncPauseRecord();
     return;
@@ -209,9 +209,9 @@ function getStoredRemoteSyncPauseRecord(
   migrateLegacyRemoteSyncPauseRecord(nowMs);
 
   const db = getGlobalStateDb();
-  const row = db.query("SELECT value FROM metadata WHERE key = ?").get(pauseKey) as
-    | { value: string }
-    | null;
+  const row = db.query("SELECT value FROM metadata WHERE key = ?").get(pauseKey) as {
+    value: string;
+  } | null;
 
   if (!row?.value) {
     return null;
@@ -279,8 +279,8 @@ function isRateLimitErrorMessage(message: string): boolean {
   return (
     normalized.includes("rate limit exceeded") ||
     normalized.includes("ratelimited") ||
-    normalized.includes("\"code\":\"ratelimited\"") ||
-    normalized.includes("\"type\":\"ratelimited\"")
+    normalized.includes('"code":"ratelimited"') ||
+    normalized.includes('"type":"ratelimited"')
   );
 }
 
@@ -372,7 +372,10 @@ function computeRateLimitProbeMs(message: string, nowMs: number): number {
     const requested = Math.max(1, meta.requested || 1);
     const msPerToken = meta.durationMs / meta.limit;
     const conservativeProbeMs = Math.ceil(msPerToken * requested * 20);
-    return Math.min(MAX_RATE_LIMIT_PROBE_MS, Math.max(DEFAULT_RATE_LIMIT_PROBE_MS, conservativeProbeMs));
+    return Math.min(
+      MAX_RATE_LIMIT_PROBE_MS,
+      Math.max(DEFAULT_RATE_LIMIT_PROBE_MS, conservativeProbeMs)
+    );
   }
 
   const retryAfterMs = extractRetryAfterMs(message, nowMs);
@@ -499,11 +502,7 @@ export function recordRemoteSyncPause(
     ? {
         kind: next.kind,
         until: clampActiveUntil(current.until, next.until, nowMs),
-        backgroundUntil: clampActiveUntil(
-          getBackgroundUntil(current),
-          next.backgroundUntil,
-          nowMs
-        ),
+        backgroundUntil: clampActiveUntil(getBackgroundUntil(current), next.backgroundUntil, nowMs),
         message: next.message,
       }
     : {
@@ -672,7 +671,9 @@ function formatRateLimitDetails(pause: ActiveRemoteSyncPause): string | null {
     retryParts.push(`retry-after ${formatPauseDuration(meta.retryAfterMs)}`);
   }
   if (meta.resetAtMs !== undefined) {
-    retryParts.push(`reset header ${formatPauseUntilLocal(new Date(meta.resetAtMs).toISOString())}`);
+    retryParts.push(
+      `reset header ${formatPauseUntilLocal(new Date(meta.resetAtMs).toISOString())}`
+    );
   }
   if (retryParts.length > 0) {
     details.push(`Last rate-limit headers: ${retryParts.join(", ")}`);

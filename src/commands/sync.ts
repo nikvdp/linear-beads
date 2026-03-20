@@ -156,10 +156,7 @@ export const syncCommand = new Command("sync")
         output("  Local cache is still available for reads");
         return;
       }
-      if (
-        error instanceof Error &&
-        isNetworkErrorMessage(error.message)
-      ) {
+      if (error instanceof Error && isNetworkErrorMessage(error.message)) {
         const pending = getPendingOutboxItems();
         outputError("Offline: Unable to connect to Linear");
         if (pending.length > 0) {

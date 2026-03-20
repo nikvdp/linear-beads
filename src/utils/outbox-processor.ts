@@ -106,7 +106,9 @@ function reviveIssueFromCreateOutbox(item: OutboxItem): boolean {
       ? item.created_at
       : new Date().toISOString();
   const syncKey =
-    typeof payload.syncKey === "string" && payload.syncKey.trim() ? payload.syncKey.trim() : undefined;
+    typeof payload.syncKey === "string" && payload.syncKey.trim()
+      ? payload.syncKey.trim()
+      : undefined;
 
   cacheIssue({
     id: item.local_id,
@@ -117,7 +119,8 @@ function reviveIssueFromCreateOutbox(item: OutboxItem): boolean {
         : undefined,
     status: "open",
     priority,
-    issue_type: typeof payload.issueType === "string" ? (payload.issueType as IssueType) : undefined,
+    issue_type:
+      typeof payload.issueType === "string" ? (payload.issueType as IssueType) : undefined,
     sync_status: "pending",
     created_at: createdAt,
     updated_at: createdAt,
@@ -135,7 +138,10 @@ function reviveIssueFromCreateOutbox(item: OutboxItem): boolean {
   }
 
   if (typeof payload.deps === "string") {
-    for (const dep of payload.deps.split(",").map((value) => value.trim()).filter(Boolean)) {
+    for (const dep of payload.deps
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean)) {
       const [type, targetId] = dep.split(":");
       if (!targetId || isPlaceholderIssueRef(targetId)) {
         continue;

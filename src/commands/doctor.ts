@@ -139,8 +139,8 @@ function isRateLimitMessage(message: string): boolean {
   return (
     normalized.includes("rate limit exceeded") ||
     normalized.includes("ratelimited") ||
-    normalized.includes("\"code\":\"ratelimited\"") ||
-    normalized.includes("\"type\":\"ratelimited\"")
+    normalized.includes('"code":"ratelimited"') ||
+    normalized.includes('"type":"ratelimited"')
   );
 }
 
@@ -244,15 +244,13 @@ async function probeLinear(apiKey: string | undefined): Promise<ProbeResult> {
       };
     }
 
-    let parsed:
-      | {
-          data?: {
-            viewer?: { id?: string; name?: string };
-            teams?: { nodes?: Array<{ id: string; key: string; name: string }> };
-          };
-          errors?: Array<{ message?: string; extensions?: { userPresentableMessage?: string } }>;
-        }
-      | null = null;
+    let parsed: {
+      data?: {
+        viewer?: { id?: string; name?: string };
+        teams?: { nodes?: Array<{ id: string; key: string; name: string }> };
+      };
+      errors?: Array<{ message?: string; extensions?: { userPresentableMessage?: string } }>;
+    } | null = null;
 
     try {
       parsed = JSON.parse(body);
@@ -427,20 +425,21 @@ export const doctorCommand = new Command("doctor")
         },
         team_key: config.team_key || null,
       },
-      connectivity: probe.kind === "ok"
-        ? {
-            status: probe.kind,
-            message: probe.message,
-            http_status: probe.httpStatus,
-            viewer: probe.viewer,
-            teams: probe.teams,
-          }
-        : {
-            status: probe.kind,
-            message: probe.message,
-            http_status: probe.httpStatus,
-            error_summary: probe.errorSummary || null,
-          },
+      connectivity:
+        probe.kind === "ok"
+          ? {
+              status: probe.kind,
+              message: probe.message,
+              http_status: probe.httpStatus,
+              viewer: probe.viewer,
+              teams: probe.teams,
+            }
+          : {
+              status: probe.kind,
+              message: probe.message,
+              http_status: probe.httpStatus,
+              error_summary: probe.errorSummary || null,
+            },
       remote_sync: {
         active_pause: activePause
           ? {
@@ -509,7 +508,7 @@ export const doctorCommand = new Command("doctor")
       if ("http_status" in doctorReport.connectivity && doctorReport.connectivity.http_status) {
         lines.push(`- HTTP status: ${doctorReport.connectivity.http_status}`);
       }
-      if ("viewer" in doctorReport.connectivity) {
+      if (doctorReport.connectivity.status === "ok") {
         lines.push(
           `- viewer: ${doctorReport.connectivity.viewer.name} (${doctorReport.connectivity.viewer.id})`
         );

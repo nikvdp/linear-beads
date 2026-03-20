@@ -152,10 +152,18 @@ export const readyCommand = new Command("ready")
                 ).values()
               )
             : [];
-        const totalRenderedIssues = style === "beads" ? dedupedBeadsIssues.length : readyDisplayIssues.length;
-        const visibleReadyDisplayIssues = style === "beads" ? readyDisplayIssues : limit ? readyDisplayIssues.slice(0, limit) : readyDisplayIssues;
+        const totalRenderedIssues =
+          style === "beads" ? dedupedBeadsIssues.length : readyDisplayIssues.length;
+        const visibleReadyDisplayIssues =
+          style === "beads"
+            ? readyDisplayIssues
+            : limit
+              ? readyDisplayIssues.slice(0, limit)
+              : readyDisplayIssues;
 
-        if ((style === "beads" ? dedupedBeadsIssues.length : visibleReadyDisplayIssues.length) === 0) {
+        if (
+          (style === "beads" ? dedupedBeadsIssues.length : visibleReadyDisplayIssues.length) === 0
+        ) {
           output("No ready issues.");
           if (!options.all && !localOnly && !remoteDisabled) {
             output("Hint: ready defaults to issues assigned to you (or unassigned). Try --all.");
@@ -172,15 +180,21 @@ export const readyCommand = new Command("ready")
             if (a.priority !== b.priority) return a.priority - b.priority;
             return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
           });
-          const visibleBeadsIssues = limit ? dedupedBeadsIssues.slice(0, limit) : dedupedBeadsIssues;
+          const visibleBeadsIssues = limit
+            ? dedupedBeadsIssues.slice(0, limit)
+            : dedupedBeadsIssues;
           output(formatReadyHumanBeads(visibleBeadsIssues));
           if (visibleBeadsIssues.length < totalRenderedIssues) {
-            output(`(showing ${visibleBeadsIssues.length} of ${totalRenderedIssues} issues in ready view; use --limit to adjust)`);
+            output(
+              `(showing ${visibleBeadsIssues.length} of ${totalRenderedIssues} issues in ready view; use --limit to adjust)`
+            );
           }
         } else {
           output(formatReadyHuman(visibleReadyDisplayIssues));
           if (visibleReadyDisplayIssues.length < totalReadyIssues) {
-            output(`(showing ${visibleReadyDisplayIssues.length} of ${totalReadyIssues} ready issues; use --limit to adjust)`);
+            output(
+              `(showing ${visibleReadyDisplayIssues.length} of ${totalReadyIssues} ready issues; use --limit to adjust)`
+            );
           }
         }
 

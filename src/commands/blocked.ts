@@ -173,7 +173,9 @@ export const blockedCommand = new Command("blocked")
           output("");
         }
         if (visibleBlockedIssues.length < totalBlockedIssues) {
-          output(`(showing ${visibleBlockedIssues.length} of ${totalBlockedIssues} blocked issues; use --limit to adjust)`);
+          output(
+            `(showing ${visibleBlockedIssues.length} of ${totalBlockedIssues} blocked issues; use --limit to adjust)`
+          );
         }
       }
     } catch (error) {
