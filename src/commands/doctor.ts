@@ -21,6 +21,13 @@ import {
 } from "../utils/graphql.js";
 import { output } from "../utils/output.js";
 import {
+  getPidFilePath,
+  getWorkerPidFromFile,
+  inspectWorkerProcesses,
+  isProcessAlive,
+  reapZombieWorkerProcesses,
+} from "../utils/pid-manager.js";
+import {
   clearRemoteSyncPause,
   getActiveRemoteSyncPause,
   getActiveRemoteSyncPauses,
@@ -345,8 +352,22 @@ export const doctorCommand = new Command("doctor")
     const envApiKey = process.env.LINEAR_API_KEY;
     const apiKey = typeof config.api_key === "string" ? config.api_key.trim() : "";
     const fixes: string[] = [];
+    const repoWorkerPidFile = getPidFilePath();
+    const repoWorkerPid = getWorkerPidFromFile();
+    let workers = inspectWorkerProcesses();
+    let zombieWorkers = workers.filter((worker) => worker.zombieCandidate);
 
     if (options.fix) {
+      if (zombieWorkers.length > 0) {
+        const reaped = await reapZombieWorkerProcesses(zombieWorkers);
+        const reapedPids = reaped.filter((result) => result.success).map((result) => result.pid);
+        if (reapedPids.length > 0) {
+          fixes.push(`Terminated zombie worker process(es): ${reapedPids.join(", ")}.`);
+        }
+        workers = inspectWorkerProcesses();
+        zombieWorkers = workers.filter((worker) => worker.zombieCandidate);
+      }
+
       const globalApiKey =
         typeof globalConfig.data?.api_key === "string" ? globalConfig.data.api_key : undefined;
       if (globalApiKey && globalApiKey.trim() && globalApiKey.trim() !== globalApiKey) {
@@ -475,6 +496,36 @@ export const doctorCommand = new Command("doctor")
           message: pause.message || null,
         })),
       },
+      workers: {
+        repo_pid_file: {
+          path: repoWorkerPidFile,
+          pid: repoWorkerPid,
+          alive: repoWorkerPid !== null ? isProcessAlive(repoWorkerPid) : false,
+        },
+        running: workers.map((worker) => ({
+          pid: worker.pid,
+          ppid: worker.ppid,
+          elapsed: worker.elapsed,
+          command: worker.command,
+          cwd: worker.cwd,
+          repo_pid_file: worker.repoPidFilePath,
+          repo_pid: worker.repoPidFilePid,
+          current_repo: worker.currentRepo,
+          tracked_by_current_repo: worker.trackedByCurrentRepo,
+          tracked_by_repo: worker.trackedByRepo,
+          zombie_candidate: worker.zombieCandidate,
+          zombie_reasons: worker.zombieReasons,
+        })),
+        zombie_candidates: zombieWorkers.map((worker) => ({
+          pid: worker.pid,
+          elapsed: worker.elapsed,
+          command: worker.command,
+          cwd: worker.cwd,
+          repo_pid_file: worker.repoPidFilePath,
+          repo_pid: worker.repoPidFilePid,
+          reasons: worker.zombieReasons,
+        })),
+      },
       outbox: {
         pending_count: pendingOutbox.length,
         recent_errors: recentErrors,
@@ -583,6 +634,32 @@ export const doctorCommand = new Command("doctor")
         }
       } else {
         lines.push("- recent errors: none");
+      }
+      lines.push("");
+      lines.push("Workers");
+      lines.push(
+        `- repo pid file: ${doctorReport.workers.repo_pid_file.path} (${doctorReport.workers.repo_pid_file.pid ? `pid ${doctorReport.workers.repo_pid_file.pid}` : "no pid"})`
+      );
+      if (doctorReport.workers.running.length > 0) {
+        for (const worker of doctorReport.workers.running) {
+          const workerBits = [
+            `pid ${worker.pid}`,
+            worker.elapsed,
+            worker.current_repo ? "current-repo" : "other-repo",
+            worker.tracked_by_repo ? "repo-tracked" : "repo-untracked",
+            worker.zombie_candidate ? `zombie:${worker.zombie_reasons.join(",")}` : "ok",
+          ];
+          lines.push(`- worker: ${workerBits.join(" | ")}`);
+          lines.push(`- worker cwd: ${worker.cwd || "unknown"}`);
+          if (worker.repo_pid_file) {
+            lines.push(
+              `- worker repo pid file: ${worker.repo_pid_file} (${worker.repo_pid ? `pid ${worker.repo_pid}` : "no pid"})`
+            );
+          }
+          lines.push(`- worker cmd: ${summarizeText(worker.command, 160)}`);
+        }
+      } else {
+        lines.push("- running workers: none");
       }
       if (doctorReport.fixes_applied.length > 0) {
         lines.push("");

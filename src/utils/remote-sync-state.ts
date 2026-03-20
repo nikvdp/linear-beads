@@ -64,14 +64,22 @@ function getGlobalStateDb(): Database {
   mkdirSync(dirname(dbPath), { recursive: true });
 
   const db = new Database(dbPath);
-  db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 10000");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS metadata (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )
-  `);
+  runWithBusyRetry(() => {
+    const journalModeRow = db.query("PRAGMA journal_mode").get() as {
+      journal_mode?: string;
+    } | null;
+    const journalMode = journalModeRow?.journal_mode?.toLowerCase();
+    if (journalMode !== "wal") {
+      db.exec("PRAGMA journal_mode = WAL");
+    }
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+  });
 
   globalStateDb = db;
   return db;
@@ -261,9 +269,12 @@ function migrateLegacyRemoteSyncPauseRecord(nowMs: number): void {
   }
 
   const db = getGlobalStateDb();
-  const existing = db
-    .query("SELECT key FROM metadata WHERE key LIKE ? LIMIT 1")
-    .get(`${prefix}%`) as { key: string } | null;
+  const existing = runWithBusyRetry(
+    () =>
+      db.query("SELECT key FROM metadata WHERE key LIKE ? LIMIT 1").get(`${prefix}%`) as {
+        key: string;
+      } | null
+  );
   if (existing?.key) {
     clearLegacyRemoteSyncPauseRecord();
     return;
@@ -271,9 +282,12 @@ function migrateLegacyRemoteSyncPauseRecord(nowMs: number): void {
 
   const legacyKey = getLegacyRemoteSyncPauseKey();
   if (legacyKey) {
-    const legacyRow = db.query("SELECT value FROM metadata WHERE key = ?").get(legacyKey) as {
-      value: string;
-    } | null;
+    const legacyRow = runWithBusyRetry(
+      () =>
+        db.query("SELECT value FROM metadata WHERE key = ?").get(legacyKey) as {
+          value: string;
+        } | null
+    );
     if (legacyRow?.value) {
       const legacyRecord = parseStoredPauseRecord(legacyRow.value);
       deletePauseKey(legacyKey);
@@ -314,9 +328,12 @@ function listStoredPauseRows(): Array<{ key: string; value: string }> {
   }
 
   const db = getGlobalStateDb();
-  return db
-    .query("SELECT key, value FROM metadata WHERE key LIKE ? ORDER BY key ASC")
-    .all(`${prefix}%`) as Array<{ key: string; value: string }>;
+  return runWithBusyRetry(
+    () =>
+      db
+        .query("SELECT key, value FROM metadata WHERE key LIKE ? ORDER BY key ASC")
+        .all(`${prefix}%`) as Array<{ key: string; value: string }>
+  );
 }
 
 function pauseSortWeight(pause: StoredRemoteSyncPauseRecord | ActiveRemoteSyncPause): number {

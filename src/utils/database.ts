@@ -1351,9 +1351,12 @@ export function getCachedIssue(id: string): Issue | null {
  */
 export function getCachedIssues(): Issue[] {
   const db = getDatabase();
-  const rows = db.query("SELECT * FROM issues ORDER BY updated_at DESC").all() as Array<
-    Record<string, unknown>
-  >;
+  const rows = runWithBusyRetry(
+    () =>
+      db.query("SELECT * FROM issues ORDER BY updated_at DESC").all() as Array<
+        Record<string, unknown>
+      >
+  );
 
   return rows.map((row) => rowToIssue(row));
 }
@@ -1703,9 +1706,12 @@ export function deleteRelatedDependency(issueId: string, relatedIssueId: string)
 export function getDependencies(issueId: string): Dependency[] {
   const db = getDatabase();
   const resolvedId = resolveIssueLocalId(issueId);
-  const rows = db.query("SELECT * FROM dependencies WHERE issue_id = ?").all(resolvedId) as Array<
-    Record<string, unknown>
-  >;
+  const rows = runWithBusyRetry(
+    () =>
+      db.query("SELECT * FROM dependencies WHERE issue_id = ?").all(resolvedId) as Array<
+        Record<string, unknown>
+      >
+  );
 
   return rows.map((row) => ({
     issue_id: row.issue_id as string,
@@ -1731,9 +1737,14 @@ export function getParentId(issueId: string): string | null {
 export function getChildIds(issueId: string): string[] {
   const db = getDatabase();
   const resolvedId = resolveIssueLocalId(issueId);
-  const rows = db
-    .query("SELECT issue_id FROM dependencies WHERE depends_on_id = ? AND type = 'parent-child'")
-    .all(resolvedId) as Array<{ issue_id: string }>;
+  const rows = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          "SELECT issue_id FROM dependencies WHERE depends_on_id = ? AND type = 'parent-child'"
+        )
+        .all(resolvedId) as Array<{ issue_id: string }>
+  );
   return rows.map((r) => r.issue_id);
 }
 
@@ -1743,9 +1754,12 @@ export function getChildIds(issueId: string): string[] {
 export function getInverseDependencies(issueId: string): Dependency[] {
   const db = getDatabase();
   const resolvedId = resolveIssueLocalId(issueId);
-  const rows = db
-    .query("SELECT * FROM dependencies WHERE depends_on_id = ?")
-    .all(resolvedId) as Array<Record<string, unknown>>;
+  const rows = runWithBusyRetry(
+    () =>
+      db
+        .query("SELECT * FROM dependencies WHERE depends_on_id = ?")
+        .all(resolvedId) as Array<Record<string, unknown>>
+  );
 
   return rows.map((row) => ({
     issue_id: row.issue_id as string,
@@ -1762,9 +1776,12 @@ export function getInverseDependencies(issueId: string): Dependency[] {
 export function getDependents(issueId: string): Dependency[] {
   const db = getDatabase();
   const resolvedId = resolveIssueLocalId(issueId);
-  const rows = db
-    .query("SELECT * FROM dependencies WHERE depends_on_id = ?")
-    .all(resolvedId) as Array<Record<string, unknown>>;
+  const rows = runWithBusyRetry(
+    () =>
+      db
+        .query("SELECT * FROM dependencies WHERE depends_on_id = ?")
+        .all(resolvedId) as Array<Record<string, unknown>>
+  );
 
   return rows.map((row) => ({
     issue_id: row.issue_id as string,
@@ -1783,16 +1800,19 @@ export function getBlockedIssueIds(): Set<string> {
   const db = getDatabase();
 
   // Direct blocks: if dep = {issue_id: A, depends_on_id: B, type: blocks}, then A blocks B
-  const directlyBlocked = db
-    .query(
-      `
+  const directlyBlocked = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
     SELECT DISTINCT d.depends_on_id as blocked_id
     FROM dependencies d
     JOIN issues i ON d.issue_id = i.local_id
     WHERE d.type = 'blocks' AND i.status != 'closed'
   `
-    )
-    .all() as Array<{ blocked_id: string }>;
+        )
+        .all() as Array<{ blocked_id: string }>
+  );
 
   const blocked = new Set(directlyBlocked.map((r) => r.blocked_id));
 
@@ -1801,15 +1821,18 @@ export function getBlockedIssueIds(): Set<string> {
   let added = true;
   while (added) {
     added = false;
-    const children = db
-      .query(
-        `
+    const children = runWithBusyRetry(
+      () =>
+        db
+          .query(
+            `
       SELECT DISTINCT d.issue_id as child_id
       FROM dependencies d
       WHERE d.type = 'parent-child' AND d.depends_on_id IN (${[...blocked].map(() => "?").join(",") || "''"})
     `
-      )
-      .all(...blocked) as Array<{ child_id: string }>;
+          )
+          .all(...blocked) as Array<{ child_id: string }>
+    );
 
     for (const child of children) {
       if (!blocked.has(child.child_id)) {
@@ -2597,11 +2620,14 @@ export function resolveIssueLocalId(id: string): string {
   const normalizedId = normalizeIssueInputId(id);
   const db = getDatabase();
 
-  const direct = db
-    .query(
-      "SELECT local_id FROM issues WHERE local_id = ? OR linear_identifier = ? OR linear_id = ? LIMIT 1"
-    )
-    .get(normalizedId, normalizedId, normalizedId) as { local_id: string } | null;
+  const direct = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          "SELECT local_id FROM issues WHERE local_id = ? OR linear_identifier = ? OR linear_id = ? LIMIT 1"
+        )
+        .get(normalizedId, normalizedId, normalizedId) as { local_id: string } | null
+  );
   if (direct?.local_id) {
     return direct.local_id;
   }
@@ -2609,11 +2635,14 @@ export function resolveIssueLocalId(id: string): string {
   if (isLocalId(normalizedId)) {
     const mappedLinear = getIssueIdMapping(normalizedId);
     if (mappedLinear) {
-      const mappedRow = db
-        .query(
-          "SELECT local_id FROM issues WHERE local_id = ? OR linear_identifier = ? OR linear_id = ? LIMIT 1"
-        )
-        .get(mappedLinear, mappedLinear, mappedLinear) as { local_id: string } | null;
+      const mappedRow = runWithBusyRetry(
+        () =>
+          db
+            .query(
+              "SELECT local_id FROM issues WHERE local_id = ? OR linear_identifier = ? OR linear_id = ? LIMIT 1"
+            )
+            .get(mappedLinear, mappedLinear, mappedLinear) as { local_id: string } | null
+      );
       if (mappedRow?.local_id) {
         return mappedRow.local_id;
       }
@@ -2626,17 +2655,23 @@ export function resolveIssueLocalId(id: string): string {
 
 export function getLinearIdentifierForLocalId(localId: string): string | null {
   const db = getDatabase();
-  const row = db.query("SELECT linear_identifier FROM issues WHERE local_id = ?").get(localId) as {
-    linear_identifier: string | null;
-  } | null;
+  const row = runWithBusyRetry(
+    () =>
+      db.query("SELECT linear_identifier FROM issues WHERE local_id = ?").get(localId) as {
+        linear_identifier: string | null;
+      } | null
+  );
   return row?.linear_identifier || null;
 }
 
 export function getLinearIdForLocalId(localId: string): string | null {
   const db = getDatabase();
-  const row = db.query("SELECT linear_id FROM issues WHERE local_id = ?").get(localId) as {
-    linear_id: string | null;
-  } | null;
+  const row = runWithBusyRetry(
+    () =>
+      db.query("SELECT linear_id FROM issues WHERE local_id = ?").get(localId) as {
+        linear_id: string | null;
+      } | null
+  );
   return row?.linear_id || null;
 }
 
