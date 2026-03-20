@@ -426,12 +426,13 @@ export function setRuntimeOverrides(overrides: Partial<LoadedConfig>): void {
  */
 export function getApiKey(): string {
   const key = getOption("api_key");
-  if (!key) {
+  const normalized = typeof key === "string" ? key.trim() : "";
+  if (!normalized) {
     throw new Error(
-      "LINEAR_API_KEY environment variable is required. Set it via LINEAR_API_KEY env var."
+      "Linear API key is required. Set it via `lb auth` or the LINEAR_API_KEY environment variable."
     );
   }
-  return key;
+  return normalized;
 }
 
 /**

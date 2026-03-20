@@ -3,10 +3,16 @@
  */
 
 import { Command } from "commander";
-import { writeFileSync, mkdirSync, existsSync, chmodSync, readFileSync, unlinkSync } from "fs";
+import { existsSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
-import { getGlobalConfigPath, getConfig } from "../utils/config.js";
+import {
+  getGlobalConfigPath,
+  getConfig,
+  reloadConfig,
+  writeGlobalConfig,
+} from "../utils/config.js";
 import { verifyConnection } from "../utils/issue-backend.js";
+import { resetGraphQLClient } from "../utils/graphql.js";
 import { output } from "../utils/output.js";
 
 export const authCommand = new Command("auth")
@@ -40,6 +46,8 @@ export const authCommand = new Command("auth")
 
       // Set env var temporarily for verification
       process.env.LINEAR_API_KEY = apiKey;
+      reloadConfig();
+      resetGraphQLClient();
 
       // Verify the key works
       console.log("\nVerifying API key...");
@@ -62,19 +70,8 @@ export const authCommand = new Command("auth")
       }
 
       // Save to global config
-      const configPath = getGlobalConfigPath();
-      const configDir = dirname(configPath);
-
-      // Create directory if needed
-      if (!existsSync(configDir)) {
-        mkdirSync(configDir, { recursive: true });
-      }
-
-      // Write config file
-      writeFileSync(configPath, JSON.stringify(config, null, 2));
-
-      // Set file permissions to 0600 (read/write for owner only)
-      chmodSync(configPath, 0o600);
+      const configPath = writeGlobalConfig(config);
+      resetGraphQLClient();
 
       // Show success
       output(`\nAuthenticated as: ${userInfo.userName}`);
@@ -169,21 +166,25 @@ function showConfig(): void {
     source = "environment variable (LINEAR_API_KEY)";
   } else {
     // Check for project config files
-    const projectConfigs = [".lb.json", ".lb/config.json"];
+    const projectConfigs = [".lb/config.jsonc", ".lb/config.json"];
 
     // Also check git root
     const gitRoot = findGitRoot();
     if (gitRoot) {
-      projectConfigs.push(join(gitRoot, ".lb.json"));
+      projectConfigs.push(join(gitRoot, ".lb", "config.jsonc"));
       projectConfigs.push(join(gitRoot, ".lb", "config.json"));
     }
 
     const hasProjectConfig = projectConfigs.some((p) => existsSync(p));
 
     if (hasProjectConfig) {
-      source = "project config (.lb.json)";
-    } else if (existsSync(globalConfigPath)) {
-      source = `global config (${globalConfigPath})`;
+      source = "project config (.lb/config.jsonc)";
+    } else {
+      const globalCandidates = [globalConfigPath, globalConfigPath.replace(/\.jsonc$/, ".json")];
+      const existingGlobalPath = globalCandidates.find((path) => existsSync(path));
+      if (existingGlobalPath) {
+        source = `global config (${existingGlobalPath})`;
+      }
     }
   }
 
@@ -222,14 +223,22 @@ function findGitRoot(): string | null {
  */
 function clearConfig(): void {
   const globalConfigPath = getGlobalConfigPath();
+  const candidates = [globalConfigPath, globalConfigPath.replace(/\.jsonc$/, ".json")].filter(
+    (path, index, items) => items.indexOf(path) === index
+  );
+  const existing = candidates.filter((path) => existsSync(path));
 
-  if (!existsSync(globalConfigPath)) {
+  if (existing.length === 0) {
     output("No global config to clear");
     return;
   }
 
-  unlinkSync(globalConfigPath);
-  output(`Global config removed: ${globalConfigPath}`);
+  for (const path of existing) {
+    unlinkSync(path);
+  }
+  reloadConfig();
+  resetGraphQLClient();
+  output(`Global config removed: ${existing.join(", ")}`);
 }
 
 /**
