@@ -112,14 +112,14 @@ export const readyCommand = new Command("ready")
         return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
       });
       const totalReadyIssues = readyIssues.length;
-      const visibleReadyIssues = limit ? readyIssues.slice(0, limit) : readyIssues;
 
       // Output
       if (options.json) {
+        const visibleReadyIssues = limit ? readyIssues.slice(0, limit) : readyIssues;
         output(formatReadyJson(visibleReadyIssues, getDependencies));
       } else {
         const style = getHumanOutputStyle(requestedStyle);
-        const readyDisplayIssues = visibleReadyIssues.map((issue) => {
+        const readyDisplayIssues = readyIssues.map((issue) => {
           const deps = getDependencies(issue.id);
           const parentDep = deps.find((d) => d.type === "parent-child");
           return {
@@ -131,7 +131,7 @@ export const readyCommand = new Command("ready")
 
         const beadsReadyIssues =
           style === "beads"
-            ? [...scopedIssues.filter((issue) => issue.status === "in_progress"), ...visibleReadyIssues]
+            ? [...scopedIssues.filter((issue) => issue.status === "in_progress"), ...readyIssues]
             : [];
         const dedupedBeadsIssues =
           style === "beads"
@@ -152,8 +152,10 @@ export const readyCommand = new Command("ready")
                 ).values()
               )
             : [];
+        const totalRenderedIssues = style === "beads" ? dedupedBeadsIssues.length : readyDisplayIssues.length;
+        const visibleReadyDisplayIssues = style === "beads" ? readyDisplayIssues : limit ? readyDisplayIssues.slice(0, limit) : readyDisplayIssues;
 
-        if ((style === "beads" ? dedupedBeadsIssues.length : readyDisplayIssues.length) === 0) {
+        if ((style === "beads" ? dedupedBeadsIssues.length : visibleReadyDisplayIssues.length) === 0) {
           output("No ready issues.");
           if (!options.all && !localOnly && !remoteDisabled) {
             output("Hint: ready defaults to issues assigned to you (or unassigned). Try --all.");
@@ -170,12 +172,16 @@ export const readyCommand = new Command("ready")
             if (a.priority !== b.priority) return a.priority - b.priority;
             return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
           });
-          output(formatReadyHumanBeads(dedupedBeadsIssues));
+          const visibleBeadsIssues = limit ? dedupedBeadsIssues.slice(0, limit) : dedupedBeadsIssues;
+          output(formatReadyHumanBeads(visibleBeadsIssues));
+          if (visibleBeadsIssues.length < totalRenderedIssues) {
+            output(`(showing ${visibleBeadsIssues.length} of ${totalRenderedIssues} issues in ready view; use --limit to adjust)`);
+          }
         } else {
-          output(formatReadyHuman(readyDisplayIssues));
-        }
-        if (visibleReadyIssues.length < totalReadyIssues) {
-          output(`(showing ${visibleReadyIssues.length} of ${totalReadyIssues} ready issues; use --limit to adjust)`);
+          output(formatReadyHuman(visibleReadyDisplayIssues));
+          if (visibleReadyDisplayIssues.length < totalReadyIssues) {
+            output(`(showing ${visibleReadyDisplayIssues.length} of ${totalReadyIssues} ready issues; use --limit to adjust)`);
+          }
         }
 
         // Show stale cache warning if sync failed or cache is old (skip in local-only mode)
