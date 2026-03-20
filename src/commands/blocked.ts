@@ -28,6 +28,18 @@ import {
   getCommandRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
+function parseLimitOption(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.error(`Invalid limit '${value}'. Must be a positive integer.`);
+    process.exit(1);
+  }
+  return parsed;
+}
+
 /**
  * Get the blockers for a specific issue
  */
@@ -50,12 +62,14 @@ function getBlockersForIssue(issueId: string): string[] {
 export const blockedCommand = new Command("blocked")
   .description("List blocked issues (waiting on blockers)")
   .option("-j, --json", "Output as JSON")
+  .option("-l, --limit <count>", "Show at most this many blocked issues")
   .option("--sync", "Force sync before listing")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
   .action(async (options) => {
     try {
       const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      const limit = parseLimitOption(options.limit);
       if (options.style && !requestedStyle) {
         console.error(
           `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
@@ -99,10 +113,12 @@ export const blockedCommand = new Command("blocked")
         if (a.priority !== b.priority) return a.priority - b.priority;
         return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
       });
+      const totalBlockedIssues = blockedIssues.length;
+      const visibleBlockedIssues = limit ? blockedIssues.slice(0, limit) : blockedIssues;
 
       if (options.json) {
         // JSON output with blocker info
-        const result = blockedIssues.map((issue) => ({
+        const result = visibleBlockedIssues.map((issue) => ({
           ...issue,
           blocked_by: getBlockersForIssue(issue.id),
         }));
@@ -110,7 +126,7 @@ export const blockedCommand = new Command("blocked")
       } else {
         const style = getHumanOutputStyle(requestedStyle);
         if (style === "beads") {
-          for (const issue of blockedIssues) {
+          for (const issue of visibleBlockedIssues) {
             output(
               formatIssueSummaryBeads({
                 ...issue,
@@ -142,9 +158,9 @@ export const blockedCommand = new Command("blocked")
           output("");
         } else {
           // Human output
-          output(`\n🚫 Blocked issues (${blockedIssues.length}):\n`);
+          output(`\n🚫 Blocked issues (${visibleBlockedIssues.length}):\n`);
 
-          for (const issue of blockedIssues) {
+          for (const issue of visibleBlockedIssues) {
             const blockers = getBlockersForIssue(issue.id);
             output(`[P${issue.priority}] ${getDisplayId(issue.id)}: ${issue.title}`);
             if (blockers.length > 0) {
@@ -155,6 +171,9 @@ export const blockedCommand = new Command("blocked")
             }
           }
           output("");
+        }
+        if (visibleBlockedIssues.length < totalBlockedIssues) {
+          output(`(showing ${visibleBlockedIssues.length} of ${totalBlockedIssues} blocked issues; use --limit to adjust)`);
         }
       }
     } catch (error) {

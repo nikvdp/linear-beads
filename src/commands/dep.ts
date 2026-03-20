@@ -93,6 +93,17 @@ function requireConcreteIssueInput(value: string, flagName: string): string {
   return value;
 }
 
+function parseLimitOption(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Invalid limit '${value}'. Must be a positive integer.`);
+  }
+  return parsed;
+}
+
 /**
  * Print dependency tree recursively
  */
@@ -498,10 +509,12 @@ const listCommand = new Command("list")
   .description("List all dependencies for an issue")
   .argument("<issue>", "Issue ID")
   .option("-j, --json", "Output as JSON")
+  .option("-l, --limit <count>", "Show at most this many dependencies per section")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .action(async (issueId: string, options) => {
     try {
       const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      const limit = parseLimitOption(options.limit);
       if (options.style && !requestedStyle) {
         console.error(
           `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
@@ -526,6 +539,10 @@ const listCommand = new Command("list")
       const related = outgoing.filter((d) => d.type === "related");
       const relatedIncoming = incoming.filter((d) => d.type === "related");
       const relatedUnique = uniqueRelatedDependencies([...related, ...relatedIncoming], resolvedId);
+      const visibleChildren = limit ? children.slice(0, limit) : children;
+      const visibleBlocks = limit ? blocks.slice(0, limit) : blocks;
+      const visibleBlockedBy = limit ? blockedBy.slice(0, limit) : blockedBy;
+      const visibleRelated = limit ? relatedUnique.slice(0, limit) : relatedUnique;
 
       if (options.json) {
         const formatDep = (d: Dependency) => {
@@ -548,10 +565,10 @@ const listCommand = new Command("list")
                 priority: issue.priority,
               },
               parent: parent ? formatDep(parent) : null,
-              children: children.map(formatDep),
-              blocks: blocks.map(formatDep),
-              blockedBy: blockedBy.map(formatDep),
-              related: relatedUnique.map(formatDep),
+              children: visibleChildren.map(formatDep),
+              blocks: visibleBlocks.map(formatDep),
+              blockedBy: visibleBlockedBy.map(formatDep),
+              related: visibleRelated.map(formatDep),
             },
             null,
             2
@@ -595,7 +612,7 @@ const listCommand = new Command("list")
           output(
             formatIssueRelationSectionBeads(
               "Children",
-              children.map((child) => toEntry(child.issue_id))
+              visibleChildren.map((child) => toEntry(child.issue_id))
             )
           );
         }
@@ -604,7 +621,7 @@ const listCommand = new Command("list")
           output(
             formatIssueRelationSectionBeads(
               "Blocked by",
-              blockedBy.map((dep) => toEntry(dep.issue_id))
+              visibleBlockedBy.map((dep) => toEntry(dep.issue_id))
             )
           );
         }
@@ -613,11 +630,11 @@ const listCommand = new Command("list")
           output(
             formatIssueRelationSectionBeads(
               "Blocks",
-              blocks.map((dep) => toEntry(dep.depends_on_id))
+              visibleBlocks.map((dep) => toEntry(dep.depends_on_id))
             )
           );
         }
-        const allRelated = relatedUnique;
+        const allRelated = visibleRelated;
         if (allRelated.length > 0) {
           if (parent || children.length > 0 || blockedBy.length > 0 || blocks.length > 0)
             output("");
@@ -641,6 +658,15 @@ const listCommand = new Command("list")
           output("No dependency relationships.");
         }
         output("");
+        if (
+          visibleChildren.length < children.length ||
+          visibleBlockedBy.length < blockedBy.length ||
+          visibleBlocks.length < blocks.length ||
+          visibleRelated.length < relatedUnique.length
+        ) {
+          output("(some dependency sections were truncated; use --limit to adjust)");
+          output("");
+        }
       } else {
         // Human-readable output
         output(`\n📋 Dependencies for ${getDisplayId(resolvedId)}: ${issue.title}\n`);
@@ -656,9 +682,9 @@ const listCommand = new Command("list")
 
         output("");
 
-        if (children.length > 0) {
+        if (visibleChildren.length > 0) {
           output(`Children (${children.length}):`);
-          children.forEach((child) => {
+          visibleChildren.forEach((child) => {
             const childIssue = getCachedIssue(child.issue_id);
             output(
               `  ${getDisplayId(child.issue_id)} - ${childIssue?.title || "Unknown"} (${childIssue?.status || "unknown"})`
@@ -670,9 +696,9 @@ const listCommand = new Command("list")
 
         output("");
 
-        if (blockedBy.length > 0) {
+        if (visibleBlockedBy.length > 0) {
           output(`Blocked By (${blockedBy.length}):`);
-          blockedBy.forEach((dep) => {
+          visibleBlockedBy.forEach((dep) => {
             const blockerIssue = getCachedIssue(dep.issue_id);
             const status = blockerIssue?.status || "unknown";
             const isOpen = status !== "closed";
@@ -687,9 +713,9 @@ const listCommand = new Command("list")
 
         output("");
 
-        if (blocks.length > 0) {
+        if (visibleBlocks.length > 0) {
           output(`Blocks (${blocks.length}):`);
-          blocks.forEach((dep) => {
+          visibleBlocks.forEach((dep) => {
             const blockedIssue = getCachedIssue(dep.depends_on_id);
             output(
               `  ${getDisplayId(dep.depends_on_id)} - ${blockedIssue?.title || "Unknown"} (${blockedIssue?.status || "unknown"})`
@@ -701,7 +727,7 @@ const listCommand = new Command("list")
 
         output("");
 
-        const allRelated = relatedUnique;
+        const allRelated = visibleRelated;
         if (allRelated.length > 0) {
           output(`Related (${allRelated.length}):`);
           allRelated.forEach((dep) => {
@@ -716,6 +742,15 @@ const listCommand = new Command("list")
         }
 
         output("");
+        if (
+          visibleChildren.length < children.length ||
+          visibleBlockedBy.length < blockedBy.length ||
+          visibleBlocks.length < blocks.length ||
+          visibleRelated.length < relatedUnique.length
+        ) {
+          output("(some dependency sections were truncated; use --limit to adjust)");
+          output("");
+        }
       }
     } catch (error) {
       outputError(error instanceof Error ? error.message : String(error));

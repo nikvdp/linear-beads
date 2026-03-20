@@ -34,16 +34,30 @@ import {
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
+function parseLimitOption(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.error(`Invalid limit '${value}'. Must be a positive integer.`);
+    process.exit(1);
+  }
+  return parsed;
+}
+
 export const readyCommand = new Command("ready")
   .description("List unblocked issues ready to work on")
   .option("-j, --json", "Output as JSON")
   .option("-a, --all", "Show all ready issues (not just mine)")
+  .option("-l, --limit <count>", "Show at most this many issues")
   .option("--sync", "Force sync before listing")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
   .action(async (options) => {
     try {
       const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      const limit = parseLimitOption(options.limit);
       if (options.style && !requestedStyle) {
         console.error(
           `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
@@ -97,13 +111,15 @@ export const readyCommand = new Command("ready")
         if (a.priority !== b.priority) return a.priority - b.priority;
         return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
       });
+      const totalReadyIssues = readyIssues.length;
+      const visibleReadyIssues = limit ? readyIssues.slice(0, limit) : readyIssues;
 
       // Output
       if (options.json) {
-        output(formatReadyJson(readyIssues, getDependencies));
+        output(formatReadyJson(visibleReadyIssues, getDependencies));
       } else {
         const style = getHumanOutputStyle(requestedStyle);
-        const readyDisplayIssues = readyIssues.map((issue) => {
+        const readyDisplayIssues = visibleReadyIssues.map((issue) => {
           const deps = getDependencies(issue.id);
           const parentDep = deps.find((d) => d.type === "parent-child");
           return {
@@ -115,7 +131,7 @@ export const readyCommand = new Command("ready")
 
         const beadsReadyIssues =
           style === "beads"
-            ? [...scopedIssues.filter((issue) => issue.status === "in_progress"), ...readyIssues]
+            ? [...scopedIssues.filter((issue) => issue.status === "in_progress"), ...visibleReadyIssues]
             : [];
         const dedupedBeadsIssues =
           style === "beads"
@@ -157,6 +173,9 @@ export const readyCommand = new Command("ready")
           output(formatReadyHumanBeads(dedupedBeadsIssues));
         } else {
           output(formatReadyHuman(readyDisplayIssues));
+        }
+        if (visibleReadyIssues.length < totalReadyIssues) {
+          output(`(showing ${visibleReadyIssues.length} of ${totalReadyIssues} ready issues; use --limit to adjust)`);
         }
 
         // Show stale cache warning if sync failed or cache is old (skip in local-only mode)

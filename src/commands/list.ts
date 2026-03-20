@@ -39,10 +39,23 @@ import {
 
 const VALID_STATUSES: IssueStatus[] = ["open", "in_progress", "closed"];
 
+function parseLimitOption(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.error(`Invalid limit '${value}'. Must be a positive integer.`);
+    process.exit(1);
+  }
+  return parsed;
+}
+
 export const listCommand = new Command("list")
   .description("List issues")
   .option("-j, --json", "Output as JSON")
   .option("-a, --all", "Show all issues (not just mine)")
+  .option("-l, --limit <count>", "Show at most this many issues")
   .option("-s, --status <status>", "Filter by status: open, in_progress, closed")
   .option(
     "-p, --priority <priority>",
@@ -55,6 +68,7 @@ export const listCommand = new Command("list")
   .action(async (options) => {
     try {
       const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      const limit = parseLimitOption(options.limit);
       if (options.style && !requestedStyle) {
         console.error(
           `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
@@ -134,11 +148,13 @@ export const listCommand = new Command("list")
         if (a.priority !== b.priority) return a.priority - b.priority;
         return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
       });
+      const totalIssues = issues.length;
+      const visibleIssues = limit ? issues.slice(0, limit) : issues;
 
       // Output
       if (options.json) {
         // Add parent info to JSON output
-        const issuesWithParent = issues.map((issue) => {
+        const issuesWithParent = visibleIssues.map((issue) => {
           const deps = getDependencies(issue.id);
           const parentDep = deps.find((d) => d.type === "parent-child");
           return {
@@ -150,7 +166,7 @@ export const listCommand = new Command("list")
         });
         output(JSON.stringify(issuesWithParent, null, 2));
       } else {
-        if (issues.length === 0) {
+        if (visibleIssues.length === 0) {
           output("No issues found.");
           if (!options.all && !localOnly && !remoteDisabled) {
             output("Hint: list defaults to issues assigned to you (or unassigned). Try --all.");
@@ -161,7 +177,7 @@ export const listCommand = new Command("list")
 
         const style = getHumanOutputStyle(requestedStyle);
         const blockedIds = style === "beads" ? getBlockedIssueIds() : undefined;
-        const renderedIssues = issues.map((issue) => {
+        const renderedIssues = visibleIssues.map((issue) => {
           const deps = getDependencies(issue.id);
           const parentDep = deps.find((d) => d.type === "parent-child");
           return {
@@ -177,6 +193,9 @@ export const listCommand = new Command("list")
             ? formatIssuesListHumanBeads(renderedIssues)
             : formatIssuesListHuman(renderedIssues)
         );
+        if (visibleIssues.length < totalIssues) {
+          output(`\n(showing ${visibleIssues.length} of ${totalIssues} issues; use --limit to adjust)`);
+        }
 
         // Show stale cache warning if sync failed or cache is old (skip in local-only mode)
         if (!localOnly) {
