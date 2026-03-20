@@ -29,6 +29,7 @@ import { mailCommand } from "./commands/mail.js";
 import { dedupeCommand } from "./commands/dedupe.js";
 import { skillCommand } from "./commands/skill.js";
 import { styleCommand } from "./commands/style.js";
+import { doctorCommand } from "./commands/doctor.js";
 import { verifyConnection } from "./utils/issue-backend.js";
 import { closeDatabase } from "./utils/database.js";
 import { getRuntimeCliVersion } from "./utils/runtime-version.js";
@@ -103,6 +104,7 @@ if (process.argv.includes("--worker")) {
   // Setup
   program.addCommand(initCommand);
   program.addCommand(authCommand);
+  program.addCommand(doctorCommand);
   program.addCommand(onboardCommand);
 
   // Issue operations

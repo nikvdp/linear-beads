@@ -141,6 +141,10 @@ function clearStoredRemoteSyncPauseRecord(): void {
   clearLegacyRemoteSyncPauseRecord();
 }
 
+export function clearRemoteSyncPause(): void {
+  clearStoredRemoteSyncPauseRecord();
+}
+
 function setStoredRemoteSyncPauseRecord(record: StoredRemoteSyncPauseRecord): void {
   const pauseKey = getRemoteSyncPauseKey();
   if (!pauseKey) {
