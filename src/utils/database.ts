@@ -2224,7 +2224,7 @@ export function updateOutboxItemError(
   const isRateLimited = error.toLowerCase().includes("rate limit");
   const explicitRetryAfterMs = options.retryAfterMs;
   const parsedRetryAfterMs = retryAfterSeconds ? retryAfterSeconds * 1000 : null;
-  const backoffMs =
+  const baseBackoffMs =
     explicitRetryAfterMs && explicitRetryAfterMs > 0
       ? explicitRetryAfterMs
       : parsedRetryAfterMs && parsedRetryAfterMs > 0
@@ -2235,6 +2235,12 @@ export function updateOutboxItemError(
               OUTBOX_RETRY_BASE_DELAY_MS * 2 ** Math.min(nextRetryCount - 1, 8),
               OUTBOX_RETRY_MAX_DELAY_MS
             );
+  // Spread retries slightly so many failed rows do not all re-fire at the exact same instant.
+  const jitterMultiplier =
+    explicitRetryAfterMs && explicitRetryAfterMs > 0
+      ? 1 + Math.random() * 0.25
+      : 1 + Math.random() * 0.1;
+  const backoffMs = Math.max(1000, Math.round(baseBackoffMs * jitterMultiplier));
   const nextAttemptAt = new Date(Date.now() + backoffMs).toISOString();
 
   runWithBusyRetry(() => {

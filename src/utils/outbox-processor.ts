@@ -40,7 +40,10 @@ import {
 } from "./issue-backend.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
 import { toCanonicalLocalDescription } from "./linear.js";
-import { getAutomaticRemoteSyncPause, recordRemoteSyncPause } from "./remote-sync-state.js";
+import {
+  getAutomaticRemoteSyncPauseForEndpoints,
+  recordRemoteSyncPause,
+} from "./remote-sync-state.js";
 
 type ResolutionContext = {
   pendingCreateLocalIds: Set<string>;
@@ -630,6 +633,29 @@ export function operationRequiresTeamId(operation: OutboxItem["operation"]): boo
   }
 }
 
+function getOutboxItemEndpointNames(item: OutboxItem): string[] {
+  switch (item.operation) {
+    case "create":
+      return ["issueCreate", "issues", "issue"];
+    case "update":
+      return ["issueUpdate", "issue", "issueRelationCreate"];
+    case "close":
+      return ["issueUpdate", "issue", "commentCreate"];
+    case "delete":
+      return ["issueDelete"];
+    case "create_relation":
+      return ["issue", "issueRelationCreate"];
+    case "delete_relation":
+      return ["issue", "issueRelationDelete"];
+    case "mail_send":
+    case "mail_reply":
+      return getMailBackendAdapter().name === "linear" ? ["commentCreate"] : [];
+    case "mail_mark_read":
+    case "mail_ack":
+      return [];
+  }
+}
+
 function isPermanentEntityError(errorMessage: string): boolean {
   const msg = errorMessage.toLowerCase();
   return msg.includes("entity not found") || msg.includes("entity is trashed");
@@ -640,10 +666,6 @@ export async function processOutboxQueue(
   options: { propagateParent?: boolean } = {}
 ): Promise<{ success: number; failed: number; deferred: number; remoteProcessed: number }> {
   const items = getPendingOutboxItems();
-  const activePause = getAutomaticRemoteSyncPause();
-  if (activePause) {
-    return { success: 0, failed: 0, deferred: items.length, remoteProcessed: 0 };
-  }
   const pendingCreateLocalIds = new Set(
     items
       .filter((item) => item.operation === "create" && typeof item.local_id === "string")
@@ -686,6 +708,11 @@ export async function processOutboxQueue(
         success++;
         continue;
       }
+    }
+
+    if (getAutomaticRemoteSyncPauseForEndpoints(getOutboxItemEndpointNames(item))) {
+      deferred++;
+      continue;
     }
 
     const resolution = resolveOutboxItem(item, resolutionContext);
@@ -756,10 +783,6 @@ export async function processOutboxQueue(
       const pause = recordRemoteSyncPause(error);
       updateOutboxItemError(item.id, errorMsg, { retryAfterMs: pause?.retryAfterMs });
       failed++;
-      if (pause) {
-        deferred += items.length - index - 1;
-        break;
-      }
     }
   }
 

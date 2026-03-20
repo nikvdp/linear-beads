@@ -28,8 +28,9 @@ import { processOutboxQueue } from "./outbox-processor.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
 import { getRepoName, getRepoScope, getTeamKey } from "./config.js";
 import {
-  getActiveRemoteSyncPause,
-  getAutomaticRemoteSyncPause,
+  getActiveRemoteSyncPauseForEndpoints,
+  getBlockingActiveRemoteSyncPause,
+  getBlockingAutomaticRemoteSyncPause,
   recordRemoteSyncPause,
 } from "./remote-sync-state.js";
 
@@ -49,6 +50,9 @@ type SmartSyncResult = {
 };
 
 type SmartSyncRunner = (teamKey?: string, forceFullSync?: boolean) => Promise<SmartSyncResult>;
+
+const ISSUE_PULL_ENDPOINTS = ["issues"];
+const MAIL_INGEST_ENDPOINTS = ["comments"];
 
 let smartSyncRunnerForTests: SmartSyncRunner | null = null;
 
@@ -238,20 +242,31 @@ export async function incrementalSync(teamKey?: string): Promise<{
 
   // Push first
   const pushed = await measureSyncPhase("incremental.pushOutbox", () => pushOutbox(teamId));
-  if (getActiveRemoteSyncPause()) {
-    return {
-      pushed,
-      pulled: 0,
-      type: "skipped",
-    };
+  let pulled = 0;
+
+  if (!getActiveRemoteSyncPauseForEndpoints(ISSUE_PULL_ENDPOINTS)) {
+    try {
+      const issues = await measureSyncPhase("incremental.pullUpdated", () =>
+        fetchAllUpdatedIssues(teamId, since)
+      );
+      updateIssueUpdateWatermarkFromIssues(issues);
+      pulled = issues.length;
+    } catch (error) {
+      if (!recordRemoteSyncPause(error)) {
+        throw error;
+      }
+    }
   }
 
-  // Pull only updated issues
-  const issues = await measureSyncPhase("incremental.pullUpdated", () =>
-    fetchAllUpdatedIssues(teamId, since)
-  );
-  updateIssueUpdateWatermarkFromIssues(issues);
-  await measureSyncPhase("incremental.mailIngest", () => getMailBackendAdapter().ingest());
+  if (!getActiveRemoteSyncPauseForEndpoints(MAIL_INGEST_ENDPOINTS)) {
+    try {
+      await measureSyncPhase("incremental.mailIngest", () => getMailBackendAdapter().ingest());
+    } catch (error) {
+      if (!recordRemoteSyncPause(error)) {
+        throw error;
+      }
+    }
+  }
 
   // Export to JSONL
   await measureSyncPhase("incremental.export", async () => {
@@ -263,7 +278,7 @@ export async function incrementalSync(teamKey?: string): Promise<{
 
   return {
     pushed,
-    pulled: issues.length,
+    pulled,
     type: "incremental",
   };
 }
@@ -281,21 +296,33 @@ export async function fullSyncPaginated(teamKey?: string): Promise<{
 
   // Push first
   const pushed = await measureSyncPhase("full.pushOutbox", () => pushOutbox(teamId));
-  if (getActiveRemoteSyncPause()) {
-    return {
-      pushed,
-      pulled: 0,
-      pruned: 0,
-      type: "skipped",
-    };
+  let pulled = 0;
+  let pruned = 0;
+
+  if (!getActiveRemoteSyncPauseForEndpoints(ISSUE_PULL_ENDPOINTS)) {
+    try {
+      const pullResult = await measureSyncPhase("full.pullAllPaginated", () =>
+        fetchAllIssuesPaginated(teamId)
+      );
+      updateIssueUpdateWatermarkFromIssues(pullResult.issues);
+      pulled = pullResult.issues.length;
+      pruned = pullResult.pruned;
+    } catch (error) {
+      if (!recordRemoteSyncPause(error)) {
+        throw error;
+      }
+    }
   }
 
-  // Pull all issues with pagination
-  const { issues, pruned } = await measureSyncPhase("full.pullAllPaginated", () =>
-    fetchAllIssuesPaginated(teamId)
-  );
-  updateIssueUpdateWatermarkFromIssues(issues);
-  await measureSyncPhase("full.mailIngest", () => getMailBackendAdapter().ingest());
+  if (!getActiveRemoteSyncPauseForEndpoints(MAIL_INGEST_ENDPOINTS)) {
+    try {
+      await measureSyncPhase("full.mailIngest", () => getMailBackendAdapter().ingest());
+    } catch (error) {
+      if (!recordRemoteSyncPause(error)) {
+        throw error;
+      }
+    }
+  }
 
   // Export to JSONL
   await measureSyncPhase("full.export", async () => {
@@ -307,7 +334,7 @@ export async function fullSyncPaginated(teamKey?: string): Promise<{
 
   return {
     pushed,
-    pulled: issues.length,
+    pulled,
     pruned,
     type: "full",
   };
@@ -325,18 +352,29 @@ export async function fullSync(teamKey?: string): Promise<{
 
   // Push first
   const pushed = await measureSyncPhase("legacyFull.pushOutbox", () => pushOutbox(teamId));
-  if (getActiveRemoteSyncPause()) {
-    return {
-      pushed,
-      pulled: 0,
-      type: "skipped",
-    };
+  let pulled = 0;
+
+  if (!getActiveRemoteSyncPauseForEndpoints(ISSUE_PULL_ENDPOINTS)) {
+    try {
+      const issues = await measureSyncPhase("legacyFull.pull", () => pullFromLinear(teamId));
+      updateIssueUpdateWatermarkFromIssues(issues);
+      pulled = issues.length;
+    } catch (error) {
+      if (!recordRemoteSyncPause(error)) {
+        throw error;
+      }
+    }
   }
 
-  // Then pull
-  const issues = await measureSyncPhase("legacyFull.pull", () => pullFromLinear(teamId));
-  updateIssueUpdateWatermarkFromIssues(issues);
-  await measureSyncPhase("legacyFull.mailIngest", () => getMailBackendAdapter().ingest());
+  if (!getActiveRemoteSyncPauseForEndpoints(MAIL_INGEST_ENDPOINTS)) {
+    try {
+      await measureSyncPhase("legacyFull.mailIngest", () => getMailBackendAdapter().ingest());
+    } catch (error) {
+      if (!recordRemoteSyncPause(error)) {
+        throw error;
+      }
+    }
+  }
 
   // Export to JSONL
   await measureSyncPhase("legacyFull.export", async () => {
@@ -345,7 +383,7 @@ export async function fullSync(teamKey?: string): Promise<{
 
   return {
     pushed,
-    pulled: issues.length,
+    pulled,
   };
 }
 
@@ -358,7 +396,7 @@ export async function smartSync(
   teamKey?: string,
   forceFullSync: boolean = false
 ): Promise<SmartSyncResult> {
-  const activePause = getActiveRemoteSyncPause();
+  const activePause = getBlockingActiveRemoteSyncPause();
   if (activePause) {
     syncDebug(`smartSync skipped until ${activePause.until}`);
     return {
@@ -446,7 +484,7 @@ export async function smartSync(
  * Called after incremental sync to check if it's time for a full refresh.
  */
 export function scheduleBackgroundFullSyncIfNeeded(): void {
-  if (!getAutomaticRemoteSyncPause() && needsFullSync() && !isWorkerRunning()) {
+  if (!getBlockingAutomaticRemoteSyncPause() && needsFullSync() && !isWorkerRunning()) {
     // Spawn background worker which will detect needsFullSync and do a full sync
     ensureOutboxProcessed();
   }

@@ -16,7 +16,8 @@ import { isLocalOnly } from "./config.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
 import {
   formatRemoteSyncPauseNotice,
-  getAutomaticRemoteSyncPause,
+  getAutomaticRemoteSyncPauseForEndpoints,
+  getBlockingAutomaticRemoteSyncPause,
   recordRemoteSyncPause,
 } from "./remote-sync-state.js";
 
@@ -38,7 +39,7 @@ async function processOutbox(): Promise<void> {
 
   try {
     while (true) {
-      const activePause = getAutomaticRemoteSyncPause();
+      const activePause = getBlockingAutomaticRemoteSyncPause();
       if (activePause) {
         console.error(formatRemoteSyncPauseNotice(activePause, { prefix: "Background sync:" }));
         break;
@@ -94,30 +95,34 @@ async function processOutbox(): Promise<void> {
     }
 
     // Check if we should run a full sync (every 3rd run or >24h since last)
-    if (!isLocalOnly() && !getAutomaticRemoteSyncPause() && needsFullSync()) {
+    if (!isLocalOnly() && !getBlockingAutomaticRemoteSyncPause() && needsFullSync()) {
       if (!teamId) {
         teamId = await getTeamId();
       }
-      try {
-        const { pruned } = await fetchAllIssuesPaginated(teamId);
-        if (pruned > 0) {
-          console.log(`Background full sync: pruned ${pruned} stale issues`);
+      if (!getAutomaticRemoteSyncPauseForEndpoints(["issues"])) {
+        try {
+          const { pruned } = await fetchAllIssuesPaginated(teamId);
+          if (pruned > 0) {
+            console.log(`Background full sync: pruned ${pruned} stale issues`);
+          }
+          exportToJsonl();
+          incrementSyncRunCount();
+        } catch (error) {
+          recordRemoteSyncPause(error);
+          console.error("Background full sync failed:", error);
+          // Don't fail the worker, just log and continue
         }
-        exportToJsonl();
-        incrementSyncRunCount();
-      } catch (error) {
-        recordRemoteSyncPause(error);
-        console.error("Background full sync failed:", error);
-        // Don't fail the worker, just log and continue
       }
     }
 
-    if (!isLocalOnly() && !getAutomaticRemoteSyncPause()) {
-      try {
-        await getMailBackendAdapter().ingest();
-      } catch (error) {
-        recordRemoteSyncPause(error);
-        console.error("Background mail ingest failed:", error);
+    if (!isLocalOnly() && !getBlockingAutomaticRemoteSyncPause()) {
+      if (!getAutomaticRemoteSyncPauseForEndpoints(["comments"])) {
+        try {
+          await getMailBackendAdapter().ingest();
+        } catch (error) {
+          recordRemoteSyncPause(error);
+          console.error("Background mail ingest failed:", error);
+        }
       }
     }
 

@@ -9,7 +9,7 @@ import { getPendingOutboxItems } from "../utils/database.js";
 import { isLocalOnly } from "../utils/config.js";
 import {
   formatRemoteSyncPauseNotice,
-  getActiveRemoteSyncPause,
+  getBlockingActiveRemoteSyncPause,
   getCommandRemoteSyncPause,
   isNetworkErrorMessage,
   recordRemoteSyncPause,
@@ -69,7 +69,7 @@ export const syncCommand = new Command("sync")
       const result = await smartSync(options.team, options.full);
 
       if (result.type === "skipped") {
-        const pause = getActiveRemoteSyncPause();
+        const pause = getBlockingActiveRemoteSyncPause();
         if (options.json) {
           output(
             JSON.stringify(

@@ -23,7 +23,9 @@ import { output } from "../utils/output.js";
 import {
   clearRemoteSyncPause,
   getActiveRemoteSyncPause,
+  getActiveRemoteSyncPauses,
   getAutomaticRemoteSyncPause,
+  getAutomaticRemoteSyncPauses,
   isNetworkErrorMessage,
 } from "../utils/remote-sync-state.js";
 import { getRuntimeCliVersion } from "../utils/runtime-version.js";
@@ -138,6 +140,7 @@ function isRateLimitMessage(message: string): boolean {
   const normalized = message.toLowerCase();
   return (
     normalized.includes("rate limit exceeded") ||
+    normalized.includes("usage limit exceeded") ||
     normalized.includes("ratelimited") ||
     normalized.includes('"code":"ratelimited"') ||
     normalized.includes('"type":"ratelimited"')
@@ -369,12 +372,16 @@ export const doctorCommand = new Command("doctor")
     const probe = await probeLinear(apiKey || envApiKey);
     let activePause = getActiveRemoteSyncPause();
     let backgroundPause = getAutomaticRemoteSyncPause();
+    let activePauses = getActiveRemoteSyncPauses();
+    let backgroundPauses = getAutomaticRemoteSyncPauses();
 
     if (options.fix && probe.kind === "ok" && (activePause || backgroundPause)) {
       clearRemoteSyncPause();
       fixes.push("Cleared stored remote sync pause after a successful Linear probe.");
       activePause = getActiveRemoteSyncPause();
       backgroundPause = getAutomaticRemoteSyncPause();
+      activePauses = getActiveRemoteSyncPauses();
+      backgroundPauses = getAutomaticRemoteSyncPauses();
     }
 
     const pendingOutbox = getPendingOutboxItems();
@@ -448,6 +455,12 @@ export const doctorCommand = new Command("doctor")
               message: activePause.message || null,
             }
           : null,
+        active_pauses: activePauses.map((pause) => ({
+          kind: pause.kind,
+          scope: pause.scope,
+          until: pause.until,
+          message: pause.message || null,
+        })),
         background_pause: backgroundPause
           ? {
               kind: backgroundPause.kind,
@@ -455,6 +468,12 @@ export const doctorCommand = new Command("doctor")
               message: backgroundPause.message || null,
             }
           : null,
+        background_pauses: backgroundPauses.map((pause) => ({
+          kind: pause.kind,
+          scope: pause.scope,
+          until: pause.backgroundUntil,
+          message: pause.message || null,
+        })),
       },
       outbox: {
         pending_count: pendingOutbox.length,
@@ -530,12 +549,30 @@ export const doctorCommand = new Command("doctor")
       } else {
         lines.push("- active pause: none");
       }
+      if (doctorReport.remote_sync.active_pauses.length > 0) {
+        for (const pause of doctorReport.remote_sync.active_pauses) {
+          const scopeLabel =
+            pause.scope.kind === "endpoint"
+              ? `endpoint:${pause.scope.endpointName}`
+              : pause.scope.kind;
+          lines.push(`- active scope: ${scopeLabel} (${pause.kind}) until ${pause.until}`);
+        }
+      }
       if (doctorReport.remote_sync.background_pause) {
         lines.push(
           `- background pause: ${doctorReport.remote_sync.background_pause.kind} until ${doctorReport.remote_sync.background_pause.until}`
         );
       } else {
         lines.push("- background pause: none");
+      }
+      if (doctorReport.remote_sync.background_pauses.length > 0) {
+        for (const pause of doctorReport.remote_sync.background_pauses) {
+          const scopeLabel =
+            pause.scope.kind === "endpoint"
+              ? `endpoint:${pause.scope.endpointName}`
+              : pause.scope.kind;
+          lines.push(`- background scope: ${scopeLabel} (${pause.kind}) until ${pause.until}`);
+        }
       }
       lines.push("");
       lines.push("Outbox");
