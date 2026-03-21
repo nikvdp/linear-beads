@@ -15,12 +15,75 @@ import {
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
+const SYNC_PROGRESS_DELAY_MS = 800;
+const SYNC_PROGRESS_FRAME_INTERVAL_MS = 100;
+const SYNC_PROGRESS_FRAMES = ["|", "/", "-", "\\"] as const;
+
 function summarizeOutboxError(error: string): string {
   const compact = error.replace(/\s+/g, " ").trim();
   if (compact.length <= 180) {
     return compact;
   }
   return `${compact.slice(0, 177)}...`;
+}
+
+function getSyncProgressDelayMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.LB_PROGRESS_DELAY_MS;
+  if (!raw) {
+    return SYNC_PROGRESS_DELAY_MS;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return SYNC_PROGRESS_DELAY_MS;
+  }
+
+  return parsed;
+}
+
+export async function runWithSyncProgress<T>(
+  operation: () => Promise<T>,
+  options: {
+    json?: boolean;
+    stderrIsTTY?: boolean;
+    delayMs?: number;
+    write?: (chunk: string) => void;
+  } = {}
+): Promise<T> {
+  const jsonMode = options.json === true;
+  const stderrIsTTY = options.stderrIsTTY ?? Boolean(process.stderr.isTTY);
+  if (jsonMode || !stderrIsTTY) {
+    return await operation();
+  }
+
+  const delayMs = options.delayMs ?? getSyncProgressDelayMs();
+  const write = options.write ?? ((chunk: string) => process.stderr.write(chunk));
+  let spinnerTimer: ReturnType<typeof setInterval> | null = null;
+  let spinnerStarted = false;
+  let frameIndex = 0;
+
+  const startSpinner = (): void => {
+    spinnerStarted = true;
+    write(`\r${SYNC_PROGRESS_FRAMES[frameIndex]} Syncing with Linear...`);
+    spinnerTimer = setInterval(() => {
+      frameIndex = (frameIndex + 1) % SYNC_PROGRESS_FRAMES.length;
+      write(`\r${SYNC_PROGRESS_FRAMES[frameIndex]} Syncing with Linear...`);
+    }, SYNC_PROGRESS_FRAME_INTERVAL_MS);
+  };
+
+  const delayTimer = setTimeout(startSpinner, delayMs);
+
+  try {
+    return await operation();
+  } finally {
+    clearTimeout(delayTimer);
+    if (spinnerTimer) {
+      clearInterval(spinnerTimer);
+    }
+    if (spinnerStarted) {
+      write("\r\x1b[K");
+    }
+  }
 }
 
 export const syncCommand = new Command("sync")
@@ -66,7 +129,10 @@ export const syncCommand = new Command("sync")
         return;
       }
 
-      const result = await smartSync(options.team, options.full);
+      const result = await runWithSyncProgress(
+        () => smartSync(options.team, options.full),
+        { json: Boolean(options.json) }
+      );
 
       if (result.type === "skipped") {
         const pause = getBlockingActiveRemoteSyncPause();
