@@ -44,7 +44,7 @@ import {
  */
 function getAllDependencies(issueId: string): { outgoing: Dependency[]; incoming: Dependency[] } {
   const db = getDatabase();
-  const resolvedId = resolveIssueId(issueId);
+  const resolvedId = resolveIssueLocalId(issueId);
 
   const outgoing = db
     .query("SELECT * FROM dependencies WHERE issue_id = ?")
@@ -188,7 +188,7 @@ const addCommand = new Command("add")
   .option("--sync", "Sync immediately (block on network)")
   .action(async (issueId: string, options) => {
     try {
-      const resolvedIssueId = resolveIssueId(issueId);
+      const resolvedIssueId = resolveIssueLocalId(issueId);
       const hasOption = options.blocks || options.blockedBy || options.related || options.parent;
       if (!hasOption) {
         outputError("Must specify --blocks, --blocked-by, --related, or --parent");
@@ -204,7 +204,9 @@ const addCommand = new Command("add")
       const now = new Date().toISOString();
 
       if (options.blocks) {
-        const targetId = resolveIssueId(requireConcreteIssueInput(options.blocks, "--blocks"));
+        const targetId = resolveIssueLocalId(
+          requireConcreteIssueInput(options.blocks, "--blocks")
+        );
         const dep: Dependency = {
           issue_id: resolvedIssueId,
           depends_on_id: targetId,
@@ -215,11 +217,13 @@ const addCommand = new Command("add")
         if (localOnly) {
           cacheDependency(dep);
         } else if (useImmediateSync) {
-          if (isLocalId(resolvedIssueId) || isLocalId(targetId)) {
+          const remoteIssueId = resolveIssueId(resolvedIssueId);
+          const remoteTargetId = resolveIssueId(targetId);
+          if (isLocalId(remoteIssueId) || isLocalId(remoteTargetId)) {
             outputError("Dependency target not synced yet.");
             process.exit(1);
           }
-          await createRelation(resolvedIssueId, targetId, "blocks");
+          await createRelation(remoteIssueId, remoteTargetId, "blocks");
         } else {
           cacheDependency(dep);
           queueOperation(
@@ -237,7 +241,7 @@ const addCommand = new Command("add")
 
       if (options.blockedBy) {
         // blocked-by is inverse: target blocks this issue
-        const targetId = resolveIssueId(
+        const targetId = resolveIssueLocalId(
           requireConcreteIssueInput(options.blockedBy, "--blocked-by")
         );
         const dep: Dependency = {
@@ -250,11 +254,13 @@ const addCommand = new Command("add")
         if (localOnly) {
           cacheDependency(dep);
         } else if (useImmediateSync) {
-          if (isLocalId(resolvedIssueId) || isLocalId(targetId)) {
+          const remoteIssueId = resolveIssueId(resolvedIssueId);
+          const remoteTargetId = resolveIssueId(targetId);
+          if (isLocalId(remoteIssueId) || isLocalId(remoteTargetId)) {
             outputError("Dependency target not synced yet.");
             process.exit(1);
           }
-          await createRelation(targetId, resolvedIssueId, "blocks");
+          await createRelation(remoteTargetId, remoteIssueId, "blocks");
         } else {
           cacheDependency(dep);
           queueOperation(
@@ -271,7 +277,9 @@ const addCommand = new Command("add")
       }
 
       if (options.related) {
-        const targetId = resolveIssueId(requireConcreteIssueInput(options.related, "--related"));
+        const targetId = resolveIssueLocalId(
+          requireConcreteIssueInput(options.related, "--related")
+        );
         if (hasRelatedDependencyBetween(resolvedIssueId, targetId)) {
           output(`Already related: ${getDisplayId(resolvedIssueId)} and ${getDisplayId(targetId)}`);
           return;
@@ -286,11 +294,13 @@ const addCommand = new Command("add")
         if (localOnly) {
           cacheDependency(dep);
         } else if (useImmediateSync) {
-          if (isLocalId(resolvedIssueId) || isLocalId(targetId)) {
+          const remoteIssueId = resolveIssueId(resolvedIssueId);
+          const remoteTargetId = resolveIssueId(targetId);
+          if (isLocalId(remoteIssueId) || isLocalId(remoteTargetId)) {
             outputError("Dependency target not synced yet.");
             process.exit(1);
           }
-          await createRelation(resolvedIssueId, targetId, "related");
+          await createRelation(remoteIssueId, remoteTargetId, "related");
         } else {
           cacheDependency(dep);
           queueOperation(
@@ -307,7 +317,7 @@ const addCommand = new Command("add")
       }
 
       if (options.parent) {
-        const parentId = resolveIssueId(requireConcreteIssueInput(options.parent, "--parent"));
+        const parentId = resolveIssueLocalId(requireConcreteIssueInput(options.parent, "--parent"));
         const dep: Dependency = {
           issue_id: resolvedIssueId,
           depends_on_id: parentId,
@@ -318,11 +328,13 @@ const addCommand = new Command("add")
         if (localOnly) {
           cacheDependency(dep);
         } else if (useImmediateSync) {
-          if (isLocalId(resolvedIssueId) || isLocalId(parentId)) {
+          const remoteIssueId = resolveIssueId(resolvedIssueId);
+          const remoteParentId = resolveIssueId(parentId);
+          if (isLocalId(remoteIssueId) || isLocalId(remoteParentId)) {
             outputError("Parent issue not synced yet.");
             process.exit(1);
           }
-          await updateIssueParent(resolvedIssueId, parentId);
+          await updateIssueParent(remoteIssueId, remoteParentId);
         } else {
           cacheDependency(dep);
           queueOperation(
