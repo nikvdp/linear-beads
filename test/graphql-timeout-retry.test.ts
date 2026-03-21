@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { ClientError } from "graphql-request";
 import {
   createLinearPaginationGuard,
   computeRetryDelayMs,
+  getLinearApiErrorInfo,
+  getLinearRateLimitErrorInfo,
   getLinearPaginationPolicy,
   getLinearRequestPolicy,
   linearFetchWithRetry,
@@ -272,5 +275,98 @@ describe("linearFetchWithRetry", () => {
 
     expect(calls).toBe(3);
     expect(delays).toEqual([10, 10]);
+  });
+});
+
+describe("structured Linear API error helpers", () => {
+  test("extracts endpoint rate-limit metadata from a ClientError", () => {
+    const error = new ClientError(
+      {
+        status: 429,
+        headers: new Headers({
+          "retry-after": "2",
+          "x-ratelimit-endpoint-name": "issueCreate",
+          "x-ratelimit-endpoint-requests-reset": "1742544000000",
+        }),
+        body: JSON.stringify({
+          errors: [
+            {
+              message: "usage limit exceeded",
+              extensions: {
+                code: "RATELIMITED",
+                userPresentableMessage: "usage limit exceeded",
+              },
+            },
+          ],
+        }),
+        errors: [
+          {
+            message: "usage limit exceeded",
+            extensions: {
+              code: "RATELIMITED",
+              userPresentableMessage: "usage limit exceeded",
+            },
+          },
+        ],
+      },
+      {
+        query: "mutation IssueCreate { issueCreate { success } }",
+      }
+    );
+
+    const info = getLinearApiErrorInfo(error);
+    expect(info).not.toBeNull();
+    expect(info?.status).toBe(429);
+    expect(info?.headers["x-ratelimit-endpoint-name"]).toBe("issueCreate");
+    expect(info?.graphqlErrors[0]?.extensions?.code).toBe("RATELIMITED");
+
+    const rateLimit = getLinearRateLimitErrorInfo(error);
+    expect(rateLimit).not.toBeNull();
+    expect(rateLimit?.bucketKind).toBe("endpoint");
+    expect(rateLimit?.endpointName).toBe("issueCreate");
+    expect(rateLimit?.retryAfterMs).toBe(2000);
+    expect(rateLimit?.resetAtMs).toBe(1742544000000);
+  });
+
+  test("extracts complexity bucket metadata from response headers", () => {
+    const error = new ClientError(
+      {
+        status: 200,
+        headers: new Headers({
+          "x-ratelimit-complexity-reset": "1742545000000",
+        }),
+        body: JSON.stringify({
+          errors: [
+            {
+              message: "complexity exceeded",
+              extensions: {
+                type: "RATELIMITED",
+              },
+            },
+          ],
+        }),
+        errors: [
+          {
+            message: "complexity exceeded",
+            extensions: {
+              type: "RATELIMITED",
+            },
+          },
+        ],
+      },
+      {
+        query: "query HeavyQuery { viewer { id } }",
+      }
+    );
+
+    const rateLimit = getLinearRateLimitErrorInfo(error);
+    expect(rateLimit).not.toBeNull();
+    expect(rateLimit?.bucketKind).toBe("complexity");
+    expect(rateLimit?.resetAtMs).toBe(1742545000000);
+  });
+
+  test("returns null for non-Linear generic errors", () => {
+    expect(getLinearApiErrorInfo(new Error("fetch failed"))).toBeNull();
+    expect(getLinearRateLimitErrorInfo(new Error("fetch failed"))).toBeNull();
   });
 });
