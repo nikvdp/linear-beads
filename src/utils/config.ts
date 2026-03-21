@@ -508,6 +508,12 @@ export function getMailBackendKind(): "linear" | "local" {
   return value === "linear" ? "linear" : "local";
 }
 
+export function getMailRegistryWorkItem(): string | undefined {
+  const value = getOption("mail_registry_work_item") as string | undefined;
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
 export function getHumanOutputStyle(cliValue?: HumanOutputStyle): HumanOutputStyle {
   return parseHumanOutputStyle(getOption("human_output_style", cliValue)) || "classic";
 }

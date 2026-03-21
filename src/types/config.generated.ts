@@ -47,6 +47,10 @@ export interface HttpsLbCliDevConfigSchemaJson {
    */
   mail_backend?: "local" | "linear";
   /**
+   * Shared mail directory issue reference for cross-client handle discovery, using the same work-item form as mail threads (for example: 'linear:LIN-123').
+   */
+  mail_registry_work_item?: string;
+  /**
    * Default human-readable output style for commands like 'lb list' and 'lb ready'. JSON output is unchanged.
    */
   human_output_style?: "classic" | "beads";

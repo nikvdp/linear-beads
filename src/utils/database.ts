@@ -704,6 +704,17 @@ function initSchema(db: Database, dbPath: string): void {
     db.exec("PRAGMA user_version = 9");
   }
 
+  if (currentVersion < 10) {
+    addColumnIfMissing(
+      db,
+      "agents",
+      "source",
+      "ALTER TABLE agents ADD COLUMN source TEXT NOT NULL DEFAULT 'local'"
+    );
+
+    db.exec("PRAGMA user_version = 10");
+  }
+
   ensureDependencyAliasIntegrity(db);
   ensureRelatedDependencyIntegrity(db);
 }
@@ -2930,31 +2941,110 @@ export function registerAgent(
     pubkey?: string;
   } = {}
 ): AgentIdentity {
+  return upsertAgentIdentity({
+    id: crypto.randomUUID(),
+    handle: nextUniqueHandle(options.preferredHandle),
+    displayName: options.displayName,
+    pubkey: options.pubkey,
+    source: "local",
+  });
+}
+
+export function upsertAgentIdentity(input: {
+  id: string;
+  handle: string;
+  displayName?: string;
+  pubkey?: string;
+  source?: "local" | "shared";
+  createdAt?: string;
+  updatedAt?: string;
+}): AgentIdentity {
   const db = getDatabase();
-  const id = crypto.randomUUID();
-  const handle = nextUniqueHandle(options.preferredHandle);
-  const createdAt = nowIso();
-  const displayName = options.displayName?.trim() || null;
-  const pubkey = options.pubkey?.trim() || null;
+  const displayName = input.displayName?.trim() || null;
+  const pubkey = input.pubkey?.trim() || null;
+  const source = input.source || "local";
+
+  const existingById = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT id, handle, display_name, pubkey, source, created_at, updated_at
+          FROM agents
+          WHERE id = ?
+          LIMIT 1
+          `
+        )
+        .get(input.id) as {
+        id: string;
+        handle: string;
+        display_name: string | null;
+        pubkey: string | null;
+        source: string | null;
+        created_at: string;
+        updated_at: string;
+      } | null
+  );
+
+  const existingByHandle =
+    existingById?.handle === input.handle
+      ? existingById
+      : (runWithBusyRetry(
+          () =>
+            db
+              .query(
+                `
+                SELECT id, handle, display_name, pubkey, source, created_at, updated_at
+                FROM agents
+                WHERE handle = ?
+                LIMIT 1
+                `
+              )
+              .get(input.handle) as {
+              id: string;
+              handle: string;
+              display_name: string | null;
+              pubkey: string | null;
+              source: string | null;
+              created_at: string;
+              updated_at: string;
+            } | null
+        ) as {
+          id: string;
+          handle: string;
+          display_name: string | null;
+          pubkey: string | null;
+          source: string | null;
+          created_at: string;
+          updated_at: string;
+        } | null);
+
+  const rowId = existingById?.id || existingByHandle?.id || input.id;
+  const createdAt = input.createdAt || existingById?.created_at || existingByHandle?.created_at || nowIso();
+  const updatedAt = input.updatedAt || nowIso();
+  const handle = existingByHandle && existingByHandle.id !== input.id ? existingByHandle.handle : input.handle;
 
   runWithBusyRetry(() => {
     db.run(
       `
-      INSERT INTO agents (id, handle, display_name, pubkey, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO agents (id, handle, display_name, pubkey, source, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        handle = excluded.handle,
+        display_name = COALESCE(excluded.display_name, agents.display_name),
+        pubkey = COALESCE(excluded.pubkey, agents.pubkey),
+        source = excluded.source,
+        updated_at = excluded.updated_at
       `,
-      [id, handle, displayName, pubkey, createdAt, createdAt]
+      [rowId, handle, displayName, pubkey, source, createdAt, updatedAt]
     );
   });
 
-  return {
-    id,
-    handle,
-    display_name: displayName || undefined,
-    pubkey: pubkey || undefined,
-    created_at: createdAt,
-    updated_at: createdAt,
-  };
+  const agent = getAgentById(rowId);
+  if (!agent) {
+    throw new Error(`Failed to upsert agent identity for handle ${input.handle}`);
+  }
+  return agent;
 }
 
 export function getAgentByHandle(handle: string): AgentIdentity | null {
@@ -2964,7 +3054,7 @@ export function getAgentByHandle(handle: string): AgentIdentity | null {
       db
         .query(
           `
-          SELECT id, handle, display_name, pubkey, created_at, updated_at
+          SELECT id, handle, display_name, pubkey, source, created_at, updated_at
           FROM agents
           WHERE handle = ?
           LIMIT 1
@@ -2975,6 +3065,7 @@ export function getAgentByHandle(handle: string): AgentIdentity | null {
         handle: string;
         display_name: string | null;
         pubkey: string | null;
+        source: string | null;
         created_at: string;
         updated_at: string;
       } | null
@@ -2986,6 +3077,7 @@ export function getAgentByHandle(handle: string): AgentIdentity | null {
     handle: row.handle,
     display_name: row.display_name || undefined,
     pubkey: row.pubkey || undefined,
+    source: row.source === "shared" ? "shared" : "local",
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -2998,7 +3090,7 @@ export function getAgentById(id: string): AgentIdentity | null {
       db
         .query(
           `
-          SELECT id, handle, display_name, pubkey, created_at, updated_at
+          SELECT id, handle, display_name, pubkey, source, created_at, updated_at
           FROM agents
           WHERE id = ?
           LIMIT 1
@@ -3009,6 +3101,7 @@ export function getAgentById(id: string): AgentIdentity | null {
         handle: string;
         display_name: string | null;
         pubkey: string | null;
+        source: string | null;
         created_at: string;
         updated_at: string;
       } | null
@@ -3020,6 +3113,7 @@ export function getAgentById(id: string): AgentIdentity | null {
     handle: row.handle,
     display_name: row.display_name || undefined,
     pubkey: row.pubkey || undefined,
+    source: row.source === "shared" ? "shared" : "local",
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -3032,7 +3126,7 @@ export function listAgents(): AgentIdentity[] {
       db
         .query(
           `
-          SELECT id, handle, display_name, pubkey, created_at, updated_at
+          SELECT id, handle, display_name, pubkey, source, created_at, updated_at
           FROM agents
           ORDER BY created_at ASC
           `
@@ -3042,6 +3136,7 @@ export function listAgents(): AgentIdentity[] {
         handle: string;
         display_name: string | null;
         pubkey: string | null;
+        source: string | null;
         created_at: string;
         updated_at: string;
       }>
@@ -3052,6 +3147,7 @@ export function listAgents(): AgentIdentity[] {
     handle: row.handle,
     display_name: row.display_name || undefined,
     pubkey: row.pubkey || undefined,
+    source: row.source === "shared" ? "shared" : "local",
     created_at: row.created_at,
     updated_at: row.updated_at,
   }));

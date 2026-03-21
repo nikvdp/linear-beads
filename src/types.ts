@@ -179,6 +179,7 @@ export interface AgentIdentity {
   handle: string;
   display_name?: string;
   pubkey?: string;
+  source?: "local" | "shared";
   created_at: string;
   updated_at: string;
 }

@@ -1,5 +1,10 @@
 import { Command } from "commander";
 import {
+  isLinearMailDirectoryConfigured,
+  publishLinearMailAgentIdentity,
+  refreshLinearMailAgentDirectory,
+} from "../adapters/linear-mail.js";
+import {
   getAgentByHandle,
   getCurrentAgentHandle,
   listAgents,
@@ -17,13 +22,16 @@ agentCommand
   .option("--handle <preferred>", "Preferred handle")
   .option("--pubkey <pubkey>", "Optional public key")
   .option("-j, --json", "Output as JSON")
-  .action((options) => {
+  .action(async (options) => {
     try {
       const agent = registerAgent({
         preferredHandle: options.handle,
         displayName: options.name,
         pubkey: options.pubkey,
       });
+      if (isLinearMailDirectoryConfigured()) {
+        await publishLinearMailAgentIdentity(agent);
+      }
       setCurrentAgentHandle(agent.handle);
 
       if (options.json) {
@@ -65,7 +73,11 @@ agentCommand
   .command("list")
   .description("List local agent identities")
   .option("-j, --json", "Output as JSON")
-  .action((options) => {
+  .action(async (options) => {
+    if (isLinearMailDirectoryConfigured()) {
+      await refreshLinearMailAgentDirectory();
+    }
+
     const agents = listAgents();
 
     if (options.json) {

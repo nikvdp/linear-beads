@@ -54,6 +54,10 @@
       "default": "local",
       "description": "Mail backend adapter. 'local' keeps mail in local SQLite. 'linear' projects mail through Linear comments."
     },
+    "mail_registry_work_item": {
+      "type": "string",
+      "description": "Shared mail directory issue reference for cross-client handle discovery, using the same work-item form as mail threads (for example: 'linear:LIN-123')."
+    },
     "human_output_style": {
       "type": "string",
       "enum": ["classic", "beads"],

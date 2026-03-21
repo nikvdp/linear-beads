@@ -1,5 +1,9 @@
 import { Command } from "commander";
 import {
+  isLinearMailDirectoryConfigured,
+  resolveLinearMailAgentByHandle,
+} from "../adapters/linear-mail.js";
+import {
   ackMessage,
   fetchInbox,
   fetchThread,
@@ -13,6 +17,7 @@ import {
 } from "../utils/database.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import { output, outputError } from "../utils/output.js";
+import { getMailBackendKind } from "../utils/config.js";
 import type { MailRecipientKind } from "../types.js";
 
 function splitHandles(raw: string | undefined): string[] {
@@ -41,12 +46,36 @@ function resolveSender(optionsFrom?: string) {
   return requireAgentByHandle(senderHandle);
 }
 
-function resolveRecipients(handles: string[], kind: MailRecipientKind = "to") {
+async function resolveAgentHandleForSend(handle: string) {
+  const local = getAgentByHandle(handle);
+  if (local) {
+    return local;
+  }
+
+  if (getMailBackendKind() === "linear") {
+    const shared = await resolveLinearMailAgentByHandle(handle);
+    if (shared) {
+      return shared;
+    }
+
+    if (!isLinearMailDirectoryConfigured()) {
+      outputError(
+        `Unknown agent handle: ${handle}. Cross-client mail lookup requires mail_registry_work_item in .lb/config.jsonc.`
+      );
+      process.exit(1);
+    }
+  }
+
+  outputError(`Unknown agent handle: ${handle}`);
+  process.exit(1);
+}
+
+async function resolveRecipients(handles: string[], kind: MailRecipientKind = "to") {
   const seen = new Set<string>();
   const recipients: Array<{ recipientAgentId: string; kind: MailRecipientKind }> = [];
 
   for (const handle of handles) {
-    const agent = requireAgentByHandle(handle);
+    const agent = await resolveAgentHandleForSend(handle);
     if (seen.has(agent.id)) continue;
     seen.add(agent.id);
     recipients.push({ recipientAgentId: agent.id, kind });
@@ -74,7 +103,7 @@ mailCommand
   .option("--thread <threadId>", "Existing thread ID")
   .option("--work-item <ref>", "Optional linked work item ref, e.g. linear:LIN-123")
   .option("-j, --json", "Output as JSON")
-  .action((options) => {
+  .action(async (options) => {
     const sender = resolveSender(options.from);
     const toHandles = splitHandles(options.to);
     if (toHandles.length === 0) {
@@ -82,7 +111,7 @@ mailCommand
       process.exit(1);
     }
 
-    const recipients = resolveRecipients(toHandles, "to").filter(
+    const recipients = (await resolveRecipients(toHandles, "to")).filter(
       (recipient) => recipient.recipientAgentId !== sender.id
     );
     if (recipients.length === 0) {
