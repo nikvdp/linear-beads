@@ -71,6 +71,7 @@ Commit atomically as you work (one logical change per commit) unless told otherw
 - Sync adapters are pluggable. Linear is the current adapter, not the architectural center of the app.
 - Internal issue identity must remain stable across the full lifecycle from local creation through remote reconciliation. Do not treat surface `LOCAL-*` names as the canonical identity.
 - `LOCAL-*` identifiers are temporary user-facing aliases. They are useful at the CLI boundary, but internal logic should prefer the stable lb-side canonical identity and sync-key-based resolution.
+- Default agent workflows should keep using local ids and transparent local-to-remote healing. Reach for `lb create --wait --json` only when a script truly needs an immediate resolved `LIN-*`, and prefer `--wait-timeout-ms` so that wait budget is explicit.
 - Adapter and codec layers that write outward should opportunistically prefer resolved `LIN-*` identifiers whenever resolution is known.
 - If stale unresolved local references make it into stored content, later reads or writes should heal them toward resolved `LIN-*` references whenever enough information is available.
 - Keep the layers distinct:

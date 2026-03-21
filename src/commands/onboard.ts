@@ -82,6 +82,26 @@ Also supported:
 
 \`lb\` auto-corrects likely accidental escaped newlines and prints a loud warning so agents stop doing it.
 
+### Remote IDs: default local-first, opt into \`--wait\` only when needed
+
+Most agent workflows should stay local-first:
+- create issues normally and keep using the returned local id
+- build parent, blocker, and related graphs with those local ids
+- let background sync resolve them later
+
+Use \`lb create --wait\` only when a script truly needs a resolved remote \`LIN-*\` immediately:
+
+\`\`\`bash
+lb create "Needs remote id now" --wait --json
+lb create "Short budget" --wait --wait-timeout-ms 5000 --json
+\`\`\`
+
+Wait contract:
+- success returns normal issue output with a resolved \`LIN-*\` id
+- timeout exits non-zero and includes the preserved local id
+- paused or offline waits also exit non-zero
+- local-only repos reject \`--wait\`
+
 ### Planning Work (SUBISSUES, NOT BUILT-IN TODOS)
 
 When you need to break down a task into steps, **create subissues in lb**:
@@ -218,6 +238,11 @@ lb dep tree LIN-XXX
 ### Multiline Descriptions
 
 Do not pass literal \`\\n\` in descriptions. Use real multiline input via heredoc, \`--description-file\`, or \`--description-stdin\`.
+
+### Remote IDs
+
+Default to local-first issue creation and keep using the returned local id for normal graph building.
+Use \`lb create --wait --json\` only when a script truly needs a resolved remote \`LIN-*\` immediately.
 
 ### Keep Guidance Persistent
 

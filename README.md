@@ -199,6 +199,25 @@ Mail backends implement a stable adapter contract so future backends do not requ
 
 `lb` remains local-first: writes always hit local SQLite first, then outbox/worker projection runs second.
 
+### Remote ID waiting
+
+Normal `lb` workflows should keep using local ids and let background sync reconcile them later.
+You usually do not need to wait for a remote `LIN-*` id just to build parent, blocker, or related graphs.
+
+Use `--wait` only when a script truly needs a resolved remote id immediately:
+
+```bash
+lb create "Needs remote id now" --wait --json
+lb create "Needs a short wait budget" --wait --wait-timeout-ms 5000 --json
+```
+
+Contract:
+
+- success prints the normal issue JSON with a resolved `LIN-*` id
+- timeout exits non-zero with structured JSON on stderr, including the preserved local id
+- paused or offline waits also exit non-zero with structured JSON on stderr
+- local-only repos reject `--wait` because no remote id can ever resolve there
+
 ### Validation matrix
 
 The following phase-2 checks were run:
