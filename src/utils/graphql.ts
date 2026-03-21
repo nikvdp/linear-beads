@@ -310,11 +310,69 @@ function isRateLimitGraphQLError(graphqlErrors: LinearGraphQLErrorInfo[]): boole
   });
 }
 
+function hasRateLimitResetHeaders(headers: Record<string, string>): boolean {
+  return Boolean(
+    headerValue(headers, "x-ratelimit-endpoint-requests-reset") ||
+      headerValue(headers, "x-ratelimit-endpoint-name") ||
+      headerValue(headers, "x-ratelimit-complexity-reset") ||
+      headerValue(headers, "x-ratelimit-requests-reset")
+  );
+}
+
+function hasRateLimitMessageSignal(
+  graphqlErrors: LinearGraphQLErrorInfo[],
+  body: string
+): boolean {
+  const messages = graphqlErrors
+    .map((error) => {
+      const extensionJson =
+        error.extensions && Object.keys(error.extensions).length > 0
+          ? JSON.stringify(error.extensions)
+          : "";
+      return [error.message || "", extensionJson].filter(Boolean).join(" ");
+    })
+    .filter((value) => value.trim().length > 0);
+  const haystacks = [...messages, body].filter((value) => value.trim().length > 0);
+
+  return haystacks.some((value) => {
+    const normalized = value.toLowerCase();
+    return (
+      normalized.includes("rate limit exceeded") ||
+      normalized.includes("usage limit exceeded") ||
+      normalized.includes("\"code\":\"ratelimited\"") ||
+      normalized.includes("\"type\":\"ratelimited\"")
+    );
+  });
+}
+
+function hasRateLimitSignal(
+  status: number,
+  headers: Record<string, string>,
+  graphqlErrors: LinearGraphQLErrorInfo[],
+  body: string
+): boolean {
+  if (status === 429 || isRateLimitGraphQLError(graphqlErrors)) {
+    return true;
+  }
+
+  if (headerValue(headers, "retry-after") && hasRateLimitResetHeaders(headers)) {
+    return true;
+  }
+
+  // Fallback for cases where a client strips structured extensions but keeps the server message.
+  return hasRateLimitMessageSignal(graphqlErrors, body);
+}
+
 function inferRateLimitBucket(
   headers: Record<string, string>,
   graphqlErrors: LinearGraphQLErrorInfo[],
-  status: number
+  status: number,
+  body: string
 ): LinearRateLimitBucketKind | null {
+  if (!hasRateLimitSignal(status, headers, graphqlErrors, body)) {
+    return null;
+  }
+
   if (
     headerValue(headers, "x-ratelimit-endpoint-requests-reset") ||
     headerValue(headers, "x-ratelimit-endpoint-name")
@@ -339,7 +397,7 @@ function buildRateLimitInfo(
   graphqlErrors: LinearGraphQLErrorInfo[],
   body: string
 ): LinearRateLimitErrorInfo | undefined {
-  const bucketKind = inferRateLimitBucket(headers, graphqlErrors, status);
+  const bucketKind = inferRateLimitBucket(headers, graphqlErrors, status, body);
   if (!bucketKind) {
     return undefined;
   }

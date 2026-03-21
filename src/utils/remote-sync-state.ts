@@ -701,10 +701,10 @@ function extractErrorInfo(error: unknown): ExtractedErrorInfo {
     rateLimit?.endpointName ||
     normalizeEndpointName(headers["x-ratelimit-endpoint-name"]) ||
     extractEndpointNameFromMessage(message);
+  const fallbackRateLimited = !rateLimit && isRateLimitErrorMessage(message);
   const complexityLimited =
     rateLimit?.bucketKind === "complexity" ||
-    Boolean(headers["x-ratelimit-complexity-reset"]) ||
-    message.toLowerCase().includes("complexity");
+    (fallbackRateLimited && message.toLowerCase().includes("complexity"));
   const rateLimitDetails = rateLimit
     ? {
         bucketKind: rateLimit.bucketKind,
@@ -722,7 +722,7 @@ function extractErrorInfo(error: unknown): ExtractedErrorInfo {
     message,
     headers,
     endpointName,
-    rateLimited: Boolean(rateLimit) || isRateLimitErrorMessage(message),
+    rateLimited: Boolean(rateLimit) || fallbackRateLimited,
     complexityLimited,
     networkError: isNetworkErrorMessage(message),
     rateLimit,
