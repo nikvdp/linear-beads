@@ -102,6 +102,26 @@ Wait contract:
 - paused or offline waits also exit non-zero
 - local-only repos reject \`--wait\`
 
+### Agent Mail Identity Model
+
+Mail handles are local-first identities, not automatically global usernames.
+
+Without a shared Linear directory:
+- \`lb agent register --handle Alpha\` keeps a local handle when available
+- \`lb agent list\` shows the local cache only
+- \`lb mail send --to Beta\` only works if \`Beta\` already exists in the same repo cache
+
+With \`mail_backend: "linear"\`, \`issue_backend: "linear"\`, and \`mail_registry_work_item\` configured:
+- \`lb agent register --handle Alpha\` may return a final allocated handle like \`Alpha-ab12\`
+- that final returned handle is the one to use for \`--from\`, \`--to\`, scripts, and handoffs
+- \`lb agent list\` refreshes the shared directory before listing cached identities
+- \`lb mail send\` can resolve unknown local handles through the shared directory
+
+Safe failure modes:
+- if \`mail_registry_work_item\` is missing, cross-client lookup fails with an explicit config hint
+- if the directory is unavailable, local mail still persists and remote sync can retry later
+- local-only mode never claims local handles are globally discoverable
+
 ### Planning Work (SUBISSUES, NOT BUILT-IN TODOS)
 
 When you need to break down a task into steps, **create subissues in lb**:
@@ -243,6 +263,13 @@ Do not pass literal \`\\n\` in descriptions. Use real multiline input via heredo
 
 Default to local-first issue creation and keep using the returned local id for normal graph building.
 Use \`lb create --wait --json\` only when a script truly needs a resolved remote \`LIN-*\` immediately.
+
+### Agent Mail
+
+If you use shared Linear mail addressing:
+- configure \`mail_backend: "linear"\`, \`issue_backend: "linear"\`, and \`mail_registry_work_item\`
+- treat the handle returned by \`lb agent register\` as the real address, even if it gained a short suffix
+- do not assume repo-local handles are globally discoverable without the shared directory
 
 ### Keep Guidance Persistent
 

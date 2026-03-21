@@ -174,6 +174,8 @@ In local-only mode:
 - `lb mail reply --agent <handle> --message <id> --body <md>`
 - `lb mail thread --thread <id>`
 
+Mail handles only become cross-client discoverable when the Linear mail backend is paired with a shared registry issue.
+
 ### Mail backend config
 
 Add to `.lb/config.jsonc`:
@@ -182,12 +184,36 @@ Add to `.lb/config.jsonc`:
 {
   "mail_backend": "local", // or "linear"
   "issue_backend": "linear",
+  "mail_registry_work_item": "linear:LIN-123" // required for shared cross-client lookup
 }
 ```
 
 - `mail_backend: "local"` keeps mail fully local in SQLite.
 - `mail_backend: "linear"` projects local mail operations to Linear comments and polls Linear comments back into local inbox.
+- `mail_registry_work_item` is optional for repo-local mail, but required for shared cross-client handle discovery.
 - `local_only: true` always forces local behavior, regardless of backend settings.
+
+### Identity and address resolution
+
+Without `mail_registry_work_item`:
+
+- `lb agent register --handle Alpha` keeps `Alpha` as a local handle when available.
+- `lb agent list` shows the local cache only.
+- `lb mail send --to Beta` only works if `Beta` already exists in the same local cache.
+
+With `mail_backend: "linear"` and `mail_registry_work_item` configured:
+
+- `lb agent register --handle Alpha` returns the final allocated handle, which may be `Alpha-ab12` instead of plain `Alpha`.
+- `lb agent list` refreshes the shared directory before listing cached identities.
+- `lb mail send --to Alpha-ab12` can resolve unknown local handles through the shared directory.
+
+Use the final registered handle in scripts, prompts, and handoffs. Do not assume the unsuffixed requested base is globally unique.
+
+### Safe failure modes
+
+- If the shared directory is not configured, cross-client lookup fails with an explicit `mail_registry_work_item` hint.
+- If the shared directory is unavailable, local mail state still persists and remote projection can retry later.
+- `local_only: true` never pretends repo-local handles are globally discoverable.
 
 ### Adapter contract (mail)
 
@@ -243,10 +269,12 @@ lb agent register --handle Beta
 lb create "Mail smoke issue" --sync --json
 # then use returned issue id in --work-item linear:<ID>
 
-lb mail send --from Alpha --to Beta --subject "Smoke" --body "Hello" --work-item linear:LIN-123 --json
+lb mail send --from Alpha-ab12 --to Beta-cd34 --subject "Smoke" --body "Hello" --work-item linear:LIN-123 --json
 lb sync --json
-lb mail inbox --agent Beta --json
+lb mail inbox --agent Beta-cd34 --json
 ```
+
+In shared-directory mode, use the final handles returned by `lb agent register`, not the raw requested bases.
 
 ### Smoke runbook (in-repo dev CLI)
 
