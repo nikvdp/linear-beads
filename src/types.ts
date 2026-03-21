@@ -4,7 +4,7 @@
  */
 
 // Issue status - matches bd semantics, maps to Linear workflow states
-export type IssueStatus = "open" | "in_progress" | "closed";
+export type IssueStatus = "open" | "in_progress" | "closed" | "cancelled";
 
 // Issue type - matches bd
 export type IssueType = "bug" | "feature" | "task" | "epic" | "chore";
@@ -226,6 +226,26 @@ export interface Config {
   human_output_style?: "classic" | "beads";
 }
 
+export const VALID_ISSUE_STATUSES: IssueStatus[] = ["open", "in_progress", "closed", "cancelled"];
+
+export function parseIssueStatus(input: string): IssueStatus | null {
+  const normalized = input.trim().toLowerCase();
+  if (normalized === "canceled") {
+    return "cancelled";
+  }
+  return VALID_ISSUE_STATUSES.includes(normalized as IssueStatus)
+    ? (normalized as IssueStatus)
+    : null;
+}
+
+export function isTerminalStatus(status: IssueStatus | string | undefined | null): boolean {
+  return status === "closed" || status === "cancelled";
+}
+
+export function isReadyStatus(status: IssueStatus | string | undefined | null): boolean {
+  return status === "open";
+}
+
 /**
  * Map bd status to Linear workflow state type
  */
@@ -237,6 +257,8 @@ export function statusToLinearState(status: IssueStatus): string {
       return "started";
     case "closed":
       return "completed";
+    case "cancelled":
+      return "canceled";
   }
 }
 
@@ -248,8 +270,9 @@ export function linearStateToStatus(stateType: string): IssueStatus {
     case "started":
       return "in_progress";
     case "completed":
-    case "canceled":
       return "closed";
+    case "canceled":
+      return "cancelled";
     default:
       return "open";
   }

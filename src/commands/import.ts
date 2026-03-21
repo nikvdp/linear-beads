@@ -5,6 +5,7 @@
 import { Command } from "commander";
 import { existsSync } from "fs";
 import { join, dirname } from "path";
+import { isTerminalStatus } from "../types.js";
 import { getDbPath } from "../utils/config.js";
 import { getTeamId } from "../utils/issue-backend.js";
 import { output } from "../utils/output.js";
@@ -40,7 +41,7 @@ export const importCommand = new Command("import")
 
       // Parse beads JSONL
       const allIssues = parseBeadsJsonl(sourcePath);
-      const openCount = allIssues.filter((i) => i.status !== "closed").length;
+      const openCount = allIssues.filter((i) => !isTerminalStatus(i.status)).length;
       const closedCount = allIssues.length - openCount;
 
       output(`Found ${allIssues.length} issues (${openCount} open, ${closedCount} closed)\n`);
@@ -57,7 +58,9 @@ export const importCommand = new Command("import")
       if (filtered.length < allIssues.length) {
         output("Filtering:");
         if (!options.includeClosed && closedCount > 0) {
-          output(`- Skipping ${closedCount} closed issues (use --include-closed to import)`);
+          output(
+            `- Skipping ${closedCount} terminal issues (closed or cancelled) (use --include-closed to import)`
+          );
         }
         if (options.since) {
           output(`- Filtered by date: --since ${options.since}`);

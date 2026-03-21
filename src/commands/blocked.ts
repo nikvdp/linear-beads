@@ -17,6 +17,7 @@ import {
   output,
   outputError,
 } from "../utils/output.js";
+import { isTerminalStatus } from "../types.js";
 import {
   getHumanOutputStyle,
   HUMAN_OUTPUT_STYLE_CHOICES,
@@ -55,7 +56,7 @@ function getBlockersForIssue(issueId: string): string[] {
     .map((r) => r.issue_id)
     .filter((id) => {
       const blocker = getCachedIssue(id);
-      return blocker && blocker.status !== "closed";
+      return blocker && !isTerminalStatus(blocker.status);
     });
 }
 
@@ -101,7 +102,9 @@ export const blockedCommand = new Command("blocked")
 
       // Get the actual issues
       const allIssues = getCachedIssues();
-      const blockedIssues = allIssues.filter((i) => blockedIds.has(i.id) && i.status !== "closed");
+      const blockedIssues = allIssues.filter(
+        (i) => blockedIds.has(i.id) && !isTerminalStatus(i.status)
+      );
 
       if (blockedIssues.length === 0) {
         output("No blocked issues.");

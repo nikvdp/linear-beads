@@ -33,7 +33,7 @@ import {
   isLocalOnly,
   parseHumanOutputStyle,
 } from "../utils/config.js";
-import type { Dependency } from "../types.js";
+import { isTerminalStatus, type Dependency } from "../types.js";
 import {
   formatRemoteSyncPauseNotice,
   getCommandRemoteSyncPause,
@@ -131,9 +131,9 @@ function printTree(
   const blockers = incoming.filter((d) => d.type === "blocks");
   const openBlockers = blockers.filter((d) => {
     const blockerIssue = getCachedIssue(d.issue_id);
-    return blockerIssue && blockerIssue.status !== "closed";
+    return blockerIssue && !isTerminalStatus(blockerIssue.status);
   });
-  const isReady = openBlockers.length === 0 && status !== "closed";
+  const isReady = openBlockers.length === 0 && !isTerminalStatus(status);
   const readyTag = isReady ? " [READY]" : "";
 
   if (style === "beads") {
@@ -145,7 +145,7 @@ function printTree(
           id: issueId,
           display_id: displayId,
           title: `${title}${readyTag}`,
-          status: status === "closed" ? "closed" : issue?.status || "open",
+          status: issue?.status || "open",
           priority: typeof priority === "number" ? priority : 2,
           is_blocked: blockedIds.has(issueId),
           sync_status: issue?.sync_status,
@@ -713,7 +713,7 @@ const listCommand = new Command("list")
           visibleBlockedBy.forEach((dep) => {
             const blockerIssue = getCachedIssue(dep.issue_id);
             const status = blockerIssue?.status || "unknown";
-            const isOpen = status !== "closed";
+            const isOpen = !isTerminalStatus(status);
             const icon = isOpen ? "🔴" : "✅";
             output(
               `  ${icon} ${getDisplayId(dep.issue_id)} - ${blockerIssue?.title || "Unknown"} (${status})`

@@ -2,7 +2,7 @@
  * Outbox processing with deferred replay for local-first mode
  */
 
-import type { Issue, IssueType, OutboxItem, Priority } from "../types.js";
+import { isTerminalStatus, type Issue, type IssueType, type OutboxItem, type Priority } from "../types.js";
 import {
   cacheIssue,
   getPendingOutboxItems,
@@ -366,7 +366,7 @@ async function propagateStatusToParent(
         return;
       }
     }
-  } else if (newStatus === "closed") {
+  } else if (isTerminalStatus(newStatus)) {
     const siblingIds = getChildIds(parentId);
     const hasActiveWork = siblingIds.some((sibId) => {
       if (sibId === issueId) return false;

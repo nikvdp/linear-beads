@@ -19,8 +19,7 @@ import {
   outputError,
 } from "../utils/output.js";
 import { getViewer } from "../utils/issue-backend.js";
-import type { IssueStatus } from "../types.js";
-import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
+import { parseIssueStatus, parsePriority, VALID_ISSUE_STATUSES, VALID_ISSUE_TYPES } from "../types.js";
 import {
   getHumanOutputStyle,
   getRepoName,
@@ -36,8 +35,6 @@ import {
   getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
-
-const VALID_STATUSES: IssueStatus[] = ["open", "in_progress", "closed"];
 
 function parseLimitOption(value: unknown): number | undefined {
   if (value === undefined) {
@@ -56,7 +53,7 @@ export const listCommand = new Command("list")
   .option("-j, --json", "Output as JSON")
   .option("-a, --all", "Show all issues (not just mine)")
   .option("-l, --limit <count>", "Show at most this many issues")
-  .option("-s, --status <status>", "Filter by status: open, in_progress, closed")
+  .option("-s, --status <status>", "Filter by status: open, in_progress, closed, cancelled")
   .option(
     "-p, --priority <priority>",
     "Filter by priority: urgent, high, medium, low, backlog (or 0-4)"
@@ -113,13 +110,14 @@ export const listCommand = new Command("list")
 
       // Apply filters with validation
       if (options.status) {
-        if (!VALID_STATUSES.includes(options.status)) {
+        const parsedStatus = parseIssueStatus(options.status);
+        if (!parsedStatus) {
           console.error(
-            `Invalid status '${options.status}'. Must be one of: ${VALID_STATUSES.join(", ")}`
+            `Invalid status '${options.status}'. Must be one of: ${VALID_ISSUE_STATUSES.join(", ")}`
           );
           process.exit(1);
         }
-        issues = issues.filter((i) => i.status === options.status);
+        issues = issues.filter((i) => i.status === parsedStatus);
       }
       if (options.priority !== undefined) {
         const { priority, error: priorityError } = parsePriority(options.priority);

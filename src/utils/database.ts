@@ -1808,7 +1808,7 @@ export function getBlockedIssueIds(): Set<string> {
     SELECT DISTINCT d.depends_on_id as blocked_id
     FROM dependencies d
     JOIN issues i ON d.issue_id = i.local_id
-    WHERE d.type = 'blocks' AND i.status != 'closed'
+    WHERE d.type = 'blocks' AND i.status NOT IN ('closed', 'cancelled')
   `
         )
         .all() as Array<{ blocked_id: string }>

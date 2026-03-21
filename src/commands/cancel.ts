@@ -1,5 +1,5 @@
 /**
- * lb close - Close an issue
+ * lb cancel - Cancel an issue without treating it as completed work
  */
 
 import { Command } from "commander";
@@ -12,7 +12,7 @@ import {
   resolveIssueId,
   isLocalId,
 } from "../utils/database.js";
-import { closeIssue, getTeamId, fetchIssue } from "../utils/issue-backend.js";
+import { updateIssue, getTeamId, fetchIssue } from "../utils/issue-backend.js";
 import {
   formatIssueJson,
   formatIssueHuman,
@@ -21,24 +21,23 @@ import {
   outputError,
 } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
-import { isTerminalStatus } from "../types.js";
 import {
   getHumanOutputStyle,
   HUMAN_OUTPUT_STYLE_CHOICES,
   isLocalOnly,
   parseHumanOutputStyle,
 } from "../utils/config.js";
+import { isTerminalStatus } from "../types.js";
 import {
   formatRemoteSyncPauseNotice,
   getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
-export const closeCommand = new Command("close")
-  .description("Close an issue")
+export const cancelCommand = new Command("cancel")
+  .description("Cancel an issue without marking it done")
   .argument("<id>", "Issue ID")
-  .option("-r, --reason <reason>", "Close reason (added as comment)")
-  .option("-f, --force", "Close even if open children remain")
+  .option("-f, --force", "Cancel even if open children remain")
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Sync immediately (block on network)")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
@@ -78,7 +77,7 @@ export const closeCommand = new Command("close")
               {
                 error: "open_children",
                 message:
-                  "Cannot close parent issue while child issues remain open. Re-run with --force to override.",
+                  "Cannot cancel parent issue while child issues remain open. Re-run with --force to override.",
                 parent: getDisplayId(resolvedId),
                 children: openChildren.map((child) => ({
                   id: getDisplayId(child.id),
@@ -91,43 +90,36 @@ export const closeCommand = new Command("close")
             )
           );
         } else {
-          if (style === "beads") {
-            outputError(`Cannot close ${getDisplayId(resolvedId)}: open child issues remain.`);
-            for (const child of openChildren) {
-              outputError(
-                formatIssueHumanBeads(
-                  {
-                    id: child.id,
-                    title: child.title,
-                    status:
-                      child.status === "cancelled"
-                        ? "cancelled"
-                        : child.status === "closed"
+          outputError(`Cannot cancel ${getDisplayId(resolvedId)}: open child issues remain.`);
+          for (const child of openChildren) {
+            outputError(
+              style === "beads"
+                ? formatIssueHumanBeads(
+                    {
+                      id: child.id,
+                      title: child.title,
+                      status:
+                        child.status === "closed"
                           ? "closed"
-                          : child.status === "in_progress"
-                            ? "in_progress"
-                            : "open",
-                    priority: child.priority,
-                    created_at: child.created_at,
-                    updated_at: child.updated_at,
-                  },
-                  getDisplayId(child.id)
-                )
-              );
-            }
-            outputError("Use --force to close the parent anyway.");
-          } else {
-            outputError(`Cannot close ${getDisplayId(resolvedId)}: open child issues remain.`);
-            for (const child of openChildren) {
-              outputError(`- ${getDisplayId(child.id)} [${child.status}] ${child.title}`);
-            }
-            outputError("Use --force to close the parent anyway.");
+                          : child.status === "cancelled"
+                            ? "cancelled"
+                            : child.status === "in_progress"
+                              ? "in_progress"
+                              : "open",
+                      priority: child.priority,
+                      created_at: child.created_at,
+                      updated_at: child.updated_at,
+                    },
+                    getDisplayId(child.id)
+                  )
+                : `- ${getDisplayId(child.id)} [${child.status}] ${child.title}`
+            );
           }
+          outputError("Use --force to cancel the parent anyway.");
         }
         process.exit(1);
       }
 
-      // Local-only mode: update cache directly
       if (isLocalOnly()) {
         const issue = getCachedIssue(resolvedId);
         if (!issue) {
@@ -136,21 +128,21 @@ export const closeCommand = new Command("close")
         }
 
         const now = new Date().toISOString();
-        const closed = {
+        const cancelled = {
           ...issue,
-          status: "closed" as const,
+          status: "cancelled" as const,
           closed_at: now,
           updated_at: now,
         };
-        cacheIssue(closed);
+        cacheIssue(cancelled);
 
         if (options.json) {
-          output(formatIssueJson(closed));
+          output(formatIssueJson(cancelled));
         } else {
           output(
             style === "beads"
-              ? formatIssueHumanBeads(closed, getDisplayId(closed.id))
-              : formatIssueHuman(closed, getDisplayId(closed.id))
+              ? formatIssueHumanBeads(cancelled, getDisplayId(cancelled.id))
+              : formatIssueHuman(cancelled, getDisplayId(cancelled.id))
           );
         }
         return;
@@ -169,9 +161,8 @@ export const closeCommand = new Command("close")
           process.exit(1);
         }
         try {
-          // Sync mode: close directly in Linear
           const teamId = await getTeamId(options.team);
-          const issue = await closeIssue(resolvedId, teamId, options.reason);
+          const issue = await updateIssue(resolvedId, { status: "cancelled" }, teamId);
 
           if (options.json) {
             output(formatIssueJson(issue));
@@ -192,20 +183,16 @@ export const closeCommand = new Command("close")
         }
       }
 
-      // Queue mode: add to outbox and spawn background worker
       queueOutboxItem(
-        "close",
+        "update",
         {
           issueId: resolvedId,
-          reason: options.reason,
+          status: "cancelled",
         },
         resolvedId
       );
-
-      // Ensure worker processes the outbox
       ensureOutboxProcessed();
 
-      // Return cached issue with status updated
       let issue = getCachedIssue(resolvedId);
       if (!issue) {
         try {
@@ -217,24 +204,24 @@ export const closeCommand = new Command("close")
 
       if (issue) {
         const now = new Date().toISOString();
-        const closed = {
+        const cancelled = {
           ...issue,
-          status: "closed" as const,
+          status: "cancelled" as const,
           closed_at: now,
           updated_at: now,
         };
-        cacheIssue(closed);
+        cacheIssue(cancelled);
         if (options.json) {
-          output(formatIssueJson(closed));
+          output(formatIssueJson(cancelled));
         } else {
           output(
             style === "beads"
-              ? formatIssueHumanBeads(closed, getDisplayId(closed.id))
-              : formatIssueHuman(closed, getDisplayId(closed.id))
+              ? formatIssueHumanBeads(cancelled, getDisplayId(cancelled.id))
+              : formatIssueHuman(cancelled, getDisplayId(cancelled.id))
           );
         }
       } else {
-        output(`Closed: ${getDisplayId(resolvedId)}`);
+        output(`Cancelled: ${getDisplayId(resolvedId)}`);
       }
     } catch (error) {
       console.error("Error:", error instanceof Error ? error.message : error);

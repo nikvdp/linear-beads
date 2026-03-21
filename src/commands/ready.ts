@@ -11,6 +11,7 @@ import {
   getCacheInfo,
   getDisplayId,
 } from "../utils/database.js";
+import { isReadyStatus } from "../types.js";
 import {
   formatReadyHuman,
   formatReadyHumanBeads,
@@ -104,7 +105,7 @@ export const readyCommand = new Command("ready")
         }
       }
 
-      let readyIssues = scopedIssues.filter((i) => i.status === "open" && !blockedIds.has(i.id));
+      let readyIssues = scopedIssues.filter((i) => isReadyStatus(i.status) && !blockedIds.has(i.id));
 
       // Sort by priority, then updated_at
       readyIssues.sort((a, b) => {

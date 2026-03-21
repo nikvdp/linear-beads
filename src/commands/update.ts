@@ -33,8 +33,8 @@ import {
   outputError,
 } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
-import type { Priority, IssueStatus } from "../types.js";
-import { parsePriority } from "../types.js";
+import type { Issue, Priority, IssueStatus } from "../types.js";
+import { isTerminalStatus, parseIssueStatus, parsePriority, VALID_ISSUE_STATUSES } from "../types.js";
 import {
   getHumanOutputStyle,
   HUMAN_OUTPUT_STYLE_CHOICES,
@@ -122,6 +122,24 @@ function assertConcreteRelationTarget(value: string, flagName: string): void {
   }
 }
 
+function applyLocalStatusMetadata(
+  issue: Issue,
+  updates: {
+    status?: IssueStatus;
+  },
+  now: string
+): Issue {
+  if (!updates.status) {
+    return { ...issue, ...updates };
+  }
+
+  return {
+    ...issue,
+    ...updates,
+    closed_at: isTerminalStatus(updates.status) ? now : undefined,
+  };
+}
+
 async function loadCurrentDescriptionForUpdate(issueId: string): Promise<string | undefined> {
   const cached = getCachedIssue(issueId);
   if (cached) {
@@ -153,7 +171,7 @@ export const updateCommand = new Command("update")
     "--no-auto-format-escaped-newlines",
     "Preserve literal \\\\n sequences instead of auto-correcting them"
   )
-  .option("-s, --status <status>", "Status: open, in_progress, closed")
+  .option("-s, --status <status>", "Status: open, in_progress, closed, cancelled")
   .option("-p, --priority <priority>", "Priority: urgent, high, medium, low, backlog (or 0-4)")
   .option("--assign <email>", "Assign to user (email or 'me')")
   .option("--unassign", "Remove assignee")
@@ -217,14 +235,14 @@ export const updateCommand = new Command("update")
       if (canonicalDescription !== undefined) updates.description = canonicalDescription;
 
       if (options.status) {
-        const validStatuses = ["open", "in_progress", "closed"];
-        if (!validStatuses.includes(options.status)) {
+        const parsedStatus = parseIssueStatus(options.status);
+        if (!parsedStatus) {
           outputError(
-            `Invalid status '${options.status}'. Must be one of: ${validStatuses.join(", ")}`
+            `Invalid status '${options.status}'. Must be one of: ${VALID_ISSUE_STATUSES.join(", ")}`
           );
           process.exit(1);
         }
-        updates.status = options.status as IssueStatus;
+        updates.status = parsedStatus;
       }
 
       if (options.priority !== undefined) {
@@ -295,7 +313,7 @@ export const updateCommand = new Command("update")
         }
 
         const now = new Date().toISOString();
-        const updated = { ...issue, ...updates, updated_at: now };
+        const updated = { ...applyLocalStatusMetadata(issue, updates, now), updated_at: now };
         cacheIssue(updated);
         cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);
 
@@ -520,7 +538,7 @@ export const updateCommand = new Command("update")
       const now = new Date().toISOString();
 
       if (issue) {
-        const updated = { ...issue, ...updates, updated_at: now };
+        const updated = { ...applyLocalStatusMetadata(issue, updates, now), updated_at: now };
         cacheIssue(updated);
 
         if (normalizedParentInput) {

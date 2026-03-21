@@ -14,6 +14,7 @@ import { showCommand } from "./commands/show.js";
 import { createCommand } from "./commands/create.js";
 import { updateCommand } from "./commands/update.js";
 import { closeCommand } from "./commands/close.js";
+import { cancelCommand } from "./commands/cancel.js";
 import { touchCommand } from "./commands/touch.js";
 import { deleteCommand } from "./commands/delete.js";
 import { depCommand } from "./commands/dep.js";
@@ -115,6 +116,7 @@ if (process.argv.includes("--worker")) {
   program.addCommand(createCommand);
   program.addCommand(updateCommand);
   program.addCommand(closeCommand);
+  program.addCommand(cancelCommand);
   program.addCommand(touchCommand);
   program.addCommand(deleteCommand);
   program.addCommand(depCommand);

@@ -3,7 +3,7 @@
  */
 
 import { readFileSync, existsSync } from "fs";
-import type { IssueType, Priority, IssueStatus } from "../types.js";
+import { isTerminalStatus, type IssueType, type Priority, type IssueStatus } from "../types.js";
 
 /**
  * Beads issue structure (from .beads/issues.jsonl)
@@ -114,7 +114,7 @@ export function filterIssues(issues: BeadsIssue[], options: ImportOptions): Bead
 
   // Filter by status (skip closed unless --include-closed)
   if (!options.includeClosed) {
-    filtered = filtered.filter((issue) => issue.status !== "closed");
+    filtered = filtered.filter((issue) => !isTerminalStatus(issue.status));
   }
 
   // Filter by date (--since)

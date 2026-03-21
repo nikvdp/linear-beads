@@ -134,6 +134,7 @@ const STATUS_SYMBOLS = {
   open: "○",
   in_progress: "◐",
   closed: "✓",
+  cancelled: "✕",
   blocked: "●",
   deferred: "❄",
 } as const;
