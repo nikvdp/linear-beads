@@ -37,7 +37,7 @@ import {
 } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Issue, IssueType } from "../types.js";
-import { parsePriority, VALID_ISSUE_TYPES } from "../types.js";
+import { isActionableStatus, parsePriority, VALID_ISSUE_TYPES } from "../types.js";
 import {
   getHumanOutputStyle,
   HUMAN_OUTPUT_STYLE_CHOICES,
@@ -342,7 +342,7 @@ export const createCommand = new Command("create")
       });
 
       const duplicateCandidates = getCachedIssues().filter(
-        (issue) => issue.status === "open" || issue.status === "in_progress"
+        (issue) => isActionableStatus(issue.status) || issue.status === "backlog"
       );
       const duplicateMatches = findDuplicateMatches(duplicateCandidates, title, description);
 

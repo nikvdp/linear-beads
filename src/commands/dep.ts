@@ -33,7 +33,7 @@ import {
   isLocalOnly,
   parseHumanOutputStyle,
 } from "../utils/config.js";
-import { isTerminalStatus, type Dependency } from "../types.js";
+import { isReadyStatus, isTerminalStatus, type Dependency } from "../types.js";
 import {
   formatRemoteSyncPauseNotice,
   getCommandRemoteSyncPause,
@@ -133,7 +133,7 @@ function printTree(
     const blockerIssue = getCachedIssue(d.issue_id);
     return blockerIssue && !isTerminalStatus(blockerIssue.status);
   });
-  const isReady = openBlockers.length === 0 && !isTerminalStatus(status);
+  const isReady = openBlockers.length === 0 && isReadyStatus(status);
   const readyTag = isReady ? " [READY]" : "";
 
   if (style === "beads") {

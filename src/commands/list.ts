@@ -53,7 +53,7 @@ export const listCommand = new Command("list")
   .option("-j, --json", "Output as JSON")
   .option("-a, --all", "Show all issues (not just mine)")
   .option("-l, --limit <count>", "Show at most this many issues")
-  .option("-s, --status <status>", "Filter by status: open, in_progress, closed, cancelled")
+  .option("-s, --status <status>", "Filter by status: backlog, open, in_progress, closed, cancelled")
   .option(
     "-p, --priority <priority>",
     "Filter by priority: urgent, high, medium, low, backlog (or 0-4)"

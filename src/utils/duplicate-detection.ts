@@ -1,4 +1,4 @@
-import type { Issue } from "../types.js";
+import { isActionableStatus, type Issue } from "../types.js";
 
 export type DuplicateMatchReason = "exact_title" | "normalized_title" | "description_hash";
 
@@ -41,8 +41,9 @@ function parseUpdatedAt(issue: Issue): number {
 }
 
 function canonicalStatusRank(issue: Issue): number {
-  if (issue.status === "in_progress") return 2;
-  if (issue.status === "open") return 1;
+  if (issue.status === "in_progress") return 3;
+  if (issue.status === "open") return 2;
+  if (issue.status === "backlog") return 1;
   return 0;
 }
 
@@ -60,7 +61,7 @@ export function chooseCanonicalIssue(issues: Issue[]): Issue {
 export function chooseReuseIssue(matches: DuplicateMatch[]): Issue {
   const open = matches
     .map((match) => match.issue)
-    .filter((issue) => issue.status === "open")
+    .filter((issue) => isActionableStatus(issue.status) || issue.status === "backlog")
     .sort((a, b) => parseUpdatedAt(b) - parseUpdatedAt(a));
   if (open.length > 0) {
     return open[0];

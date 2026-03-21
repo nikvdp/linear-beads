@@ -4,7 +4,7 @@
  */
 
 // Issue status - matches bd semantics, maps to Linear workflow states
-export type IssueStatus = "open" | "in_progress" | "closed" | "cancelled";
+export type IssueStatus = "backlog" | "open" | "in_progress" | "closed" | "cancelled";
 
 // Issue type - matches bd
 export type IssueType = "bug" | "feature" | "task" | "epic" | "chore";
@@ -226,7 +226,13 @@ export interface Config {
   human_output_style?: "classic" | "beads";
 }
 
-export const VALID_ISSUE_STATUSES: IssueStatus[] = ["open", "in_progress", "closed", "cancelled"];
+export const VALID_ISSUE_STATUSES: IssueStatus[] = [
+  "backlog",
+  "open",
+  "in_progress",
+  "closed",
+  "cancelled",
+];
 
 export function parseIssueStatus(input: string): IssueStatus | null {
   const normalized = input.trim().toLowerCase();
@@ -246,11 +252,17 @@ export function isReadyStatus(status: IssueStatus | string | undefined | null): 
   return status === "open";
 }
 
+export function isActionableStatus(status: IssueStatus | string | undefined | null): boolean {
+  return status === "open" || status === "in_progress";
+}
+
 /**
  * Map bd status to Linear workflow state type
  */
 export function statusToLinearState(status: IssueStatus): string {
   switch (status) {
+    case "backlog":
+      return "backlog";
     case "open":
       return "unstarted";
     case "in_progress":
@@ -267,6 +279,8 @@ export function statusToLinearState(status: IssueStatus): string {
  */
 export function linearStateToStatus(stateType: string): IssueStatus {
   switch (stateType) {
+    case "backlog":
+      return "backlog";
     case "started":
       return "in_progress";
     case "completed":

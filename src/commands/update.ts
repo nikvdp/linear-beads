@@ -171,7 +171,7 @@ export const updateCommand = new Command("update")
     "--no-auto-format-escaped-newlines",
     "Preserve literal \\\\n sequences instead of auto-correcting them"
   )
-  .option("-s, --status <status>", "Status: open, in_progress, closed, cancelled")
+  .option("-s, --status <status>", "Status: backlog, open, in_progress, closed, cancelled")
   .option("-p, --priority <priority>", "Priority: urgent, high, medium, low, backlog (or 0-4)")
   .option("--assign <email>", "Assign to user (email or 'me')")
   .option("--unassign", "Remove assignee")

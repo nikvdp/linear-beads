@@ -131,6 +131,7 @@ const PRIORITY_LABELS: Record<number, string> = {
 
 const BEADS_PRIORITY_LABELS = ["P0", "P1", "P2", "P3", "P4"] as const;
 const STATUS_SYMBOLS = {
+  backlog: "◌",
   open: "○",
   in_progress: "◐",
   closed: "✓",

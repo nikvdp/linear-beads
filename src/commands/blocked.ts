@@ -17,7 +17,7 @@ import {
   output,
   outputError,
 } from "../utils/output.js";
-import { isTerminalStatus } from "../types.js";
+import { isActionableStatus, isTerminalStatus } from "../types.js";
 import {
   getHumanOutputStyle,
   HUMAN_OUTPUT_STYLE_CHOICES,
@@ -103,7 +103,7 @@ export const blockedCommand = new Command("blocked")
       // Get the actual issues
       const allIssues = getCachedIssues();
       const blockedIssues = allIssues.filter(
-        (i) => blockedIds.has(i.id) && !isTerminalStatus(i.status)
+        (i) => blockedIds.has(i.id) && isActionableStatus(i.status)
       );
 
       if (blockedIssues.length === 0) {
