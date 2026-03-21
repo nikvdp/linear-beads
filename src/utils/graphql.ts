@@ -2,7 +2,7 @@
  * GraphQL client for Linear API
  */
 
-import { GraphQLClient } from "graphql-request";
+import { ClientError, GraphQLClient } from "graphql-request";
 import { getApiKey } from "./config.js";
 
 const LINEAR_ENDPOINT = "https://api.linear.app/graphql";
@@ -33,6 +33,32 @@ export type LinearPageInfo = {
   endCursor?: string | null;
 };
 
+export type LinearRateLimitBucketKind = "global" | "endpoint" | "complexity";
+
+export type LinearGraphQLErrorInfo = {
+  message?: string;
+  extensions?: Record<string, unknown>;
+};
+
+export type LinearRateLimitErrorInfo = {
+  bucketKind: LinearRateLimitBucketKind;
+  endpointName?: string;
+  retryAfterMs?: number;
+  resetAtMs?: number;
+  headers: Record<string, string>;
+  graphqlErrors: LinearGraphQLErrorInfo[];
+  status: number;
+  body: string;
+};
+
+export type LinearApiErrorInfo = {
+  status: number;
+  headers: Record<string, string>;
+  graphqlErrors: LinearGraphQLErrorInfo[];
+  body: string;
+  rateLimit?: LinearRateLimitErrorInfo;
+};
+
 type LinearPaginationGuardOptions = {
   policy?: LinearPaginationPolicy;
   now?: () => number;
@@ -43,6 +69,16 @@ type LinearFetchOptions = {
   policy?: LinearRequestPolicy;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
+};
+
+type GraphQLResponseLike = {
+  status?: number;
+  headers?: Headers;
+  body?: string;
+  errors?: Array<{
+    message?: string;
+    extensions?: Record<string, unknown>;
+  }>;
 };
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -166,6 +202,138 @@ export function parseRetryAfterMs(retryAfterHeader: string | null): number | nul
   if (Number.isNaN(date)) return null;
   const diff = date - Date.now();
   return diff > 0 ? diff : 0;
+}
+
+function headerValue(headers: Record<string, string>, name: string): string | undefined {
+  const value = headers[name.toLowerCase()];
+  return value?.trim() || undefined;
+}
+
+function headersToRecord(headers: Headers | undefined): Record<string, string> {
+  if (!headers) {
+    return {};
+  }
+
+  const entries = Array.from(headers.entries()).map(([key, value]) => [key.toLowerCase(), value]);
+  return Object.fromEntries(entries);
+}
+
+function parseResetHeaderMs(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function toGraphQLErrorInfo(
+  errors: GraphQLResponseLike["errors"] | undefined
+): LinearGraphQLErrorInfo[] {
+  return (errors || []).map((error) => ({
+    message: typeof error?.message === "string" ? error.message : undefined,
+    extensions:
+      error?.extensions && typeof error.extensions === "object"
+        ? error.extensions
+        : undefined,
+  }));
+}
+
+function isRateLimitGraphQLError(graphqlErrors: LinearGraphQLErrorInfo[]): boolean {
+  return graphqlErrors.some((error) => {
+    const code = String(error.extensions?.code || "").toLowerCase();
+    const type = String(error.extensions?.type || "").toLowerCase();
+    return code === "ratelimited" || type === "ratelimited";
+  });
+}
+
+function inferRateLimitBucket(
+  headers: Record<string, string>,
+  graphqlErrors: LinearGraphQLErrorInfo[],
+  status: number
+): LinearRateLimitBucketKind | null {
+  if (
+    headerValue(headers, "x-ratelimit-endpoint-requests-reset") ||
+    headerValue(headers, "x-ratelimit-endpoint-name")
+  ) {
+    return "endpoint";
+  }
+  if (headerValue(headers, "x-ratelimit-complexity-reset")) {
+    return "complexity";
+  }
+  if (headerValue(headers, "x-ratelimit-requests-reset") || status === 429) {
+    return "global";
+  }
+  if (isRateLimitGraphQLError(graphqlErrors)) {
+    return "global";
+  }
+  return null;
+}
+
+function buildRateLimitInfo(
+  status: number,
+  headers: Record<string, string>,
+  graphqlErrors: LinearGraphQLErrorInfo[],
+  body: string
+): LinearRateLimitErrorInfo | undefined {
+  const bucketKind = inferRateLimitBucket(headers, graphqlErrors, status);
+  if (!bucketKind) {
+    return undefined;
+  }
+
+  const retryAfterMs = parseRetryAfterMs(headerValue(headers, "retry-after") || null) ?? undefined;
+  const resetAtMs =
+    parseResetHeaderMs(
+      bucketKind === "endpoint"
+        ? headerValue(headers, "x-ratelimit-endpoint-requests-reset")
+        : bucketKind === "complexity"
+          ? headerValue(headers, "x-ratelimit-complexity-reset")
+          : headerValue(headers, "x-ratelimit-requests-reset")
+    ) ??
+    parseResetHeaderMs(headerValue(headers, "x-ratelimit-requests-reset"));
+
+  return {
+    bucketKind,
+    endpointName: headerValue(headers, "x-ratelimit-endpoint-name"),
+    retryAfterMs,
+    resetAtMs,
+    headers,
+    graphqlErrors,
+    status,
+    body,
+  };
+}
+
+function getGraphQLResponseLike(error: unknown): GraphQLResponseLike | null {
+  if (!(error instanceof ClientError)) {
+    return null;
+  }
+
+  return error.response as GraphQLResponseLike;
+}
+
+export function getLinearApiErrorInfo(error: unknown): LinearApiErrorInfo | null {
+  const response = getGraphQLResponseLike(error);
+  if (!response) {
+    return null;
+  }
+
+  const status = typeof response.status === "number" ? response.status : 0;
+  const headers = headersToRecord(response.headers);
+  const body = typeof response.body === "string" ? response.body : "";
+  const graphqlErrors = toGraphQLErrorInfo(response.errors);
+
+  return {
+    status,
+    headers,
+    body,
+    graphqlErrors,
+    rateLimit: buildRateLimitInfo(status, headers, graphqlErrors, body),
+  };
+}
+
+export function getLinearRateLimitErrorInfo(error: unknown): LinearRateLimitErrorInfo | null {
+  return getLinearApiErrorInfo(error)?.rateLimit || null;
 }
 
 export function computeRetryDelayMs(retryNumber: number, retryBaseMs: number): number {
