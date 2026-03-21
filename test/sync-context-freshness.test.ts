@@ -3,6 +3,11 @@ import { mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
+import {
+  shouldPreferRemoteIssueForShow,
+  shouldUseCachedIssueImmediatelyForShow,
+} from "../src/commands/show.js";
+
 const tempDirs: string[] = [];
 const CONFIG_UTILS_PATH = join(import.meta.dir, "..", "src", "utils", "config.ts");
 const DATABASE_UTILS_PATH = join(import.meta.dir, "..", "src", "utils", "database.ts");
@@ -116,6 +121,53 @@ async function runEnsureFresh(
 }
 
 describe("sync context freshness", () => {
+  test("show defaults to cache-first for synced cached issues", () => {
+    expect(
+      shouldUseCachedIssueImmediatelyForShow({
+        forceSync: false,
+        resolvedId: "LIN-5491",
+        hasCachedIssue: true,
+      })
+    ).toBe(true);
+
+    expect(
+      shouldPreferRemoteIssueForShow({
+        forceSync: false,
+        skipRemote: false,
+        resolvedId: "LIN-5491",
+        hasCachedIssue: true,
+      })
+    ).toBe(false);
+  });
+
+  test("show still prefers remote when explicitly synced or cache is missing", () => {
+    expect(
+      shouldUseCachedIssueImmediatelyForShow({
+        forceSync: true,
+        resolvedId: "LIN-5491",
+        hasCachedIssue: true,
+      })
+    ).toBe(false);
+
+    expect(
+      shouldPreferRemoteIssueForShow({
+        forceSync: true,
+        skipRemote: false,
+        resolvedId: "LIN-5491",
+        hasCachedIssue: true,
+      })
+    ).toBe(true);
+
+    expect(
+      shouldPreferRemoteIssueForShow({
+        forceSync: false,
+        skipRemote: false,
+        resolvedId: "LIN-5491",
+        hasCachedIssue: false,
+      })
+    ).toBe(true);
+  });
+
   test("does not sync when cache is fresh and context is unchanged", async () => {
     const repoDir = createRepo();
     const result = await runEnsureFresh(repoDir, "same_context");

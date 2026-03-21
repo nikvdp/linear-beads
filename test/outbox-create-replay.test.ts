@@ -45,6 +45,7 @@ async function runEval(
     | "alias_merge_resolution"
     | "shared_parent_resolution"
     | "local_blocker_relation_replays_after_create_resolution"
+    | "invalid_issue_refs_are_dropped_from_create_payloads"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import { Database } from "bun:sqlite";
@@ -354,6 +355,37 @@ async function runEval(
           blockerMapping: getIssueIdMapping(blockerLocalId),
         })
       );
+      process.exit(0);
+    } else if (mode === "invalid_issue_refs_are_dropped_from_create_payloads") {
+      const outboxId = queueOutboxItem(
+        "create",
+        {
+          title: "Replay guard issue",
+          priority: 2,
+          parentId:
+            "Afterthefixworklands,searchinginscopedroutessuchasclips,private,following,team,anduserstreamsshouldpreservebothscopeandqueryinbrowserhistoryandinAPIrequests,anddifferenttermsshouldyieldmeaningfullydifferentresultsets.",
+          deps: "blocked-by:AscopedsearchforclipsshouldkeepbothclipscopeandqueryintheURLhistoryandintheoutgoing-api-v1-quests-request.Equivalentbehaviorshouldholdfortheotherscopedsearchmodes.",
+        },
+        localId
+      );
+      markOutboxCreateRemoteIssueIdentifier(outboxId, "LIN-9017");
+
+      const result = await processOutboxQueue("TEAM");
+      const pending = getPendingOutboxItems().map((item) => ({
+        operation: item.operation,
+        local_id: item.local_id || null,
+        payload: item.payload,
+      }));
+      const db = new Database(".lb/cache.db", { readonly: true });
+      const depRows = db
+        .query("SELECT issue_id, depends_on_id, type FROM dependencies WHERE issue_id = ?")
+        .all(localId) as Array<{ issue_id: string; depends_on_id: string; type: string }>;
+      const row = db.query(
+        "SELECT local_id, linear_identifier, sync_status FROM issues WHERE local_id = ? LIMIT 1"
+      ).get(localId) as { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+      db.close();
+
+      console.log(JSON.stringify({ result, pending, depRows, row, mapping: getIssueIdMapping(localId) }));
       process.exit(0);
     } else {
       const outboxId = queueOutboxItem(
@@ -801,5 +833,30 @@ describe("outbox create replay protection", () => {
     expect(payload.blockerDisplayId).toBe("LIN-9016");
     expect(payload.pass2.success + payload.pass2.failed).toBe(1);
     expect(payload.pass2.deferred).toBe(0);
+  });
+
+  test("drops malformed parent and dependency refs from queued create payloads", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "invalid_issue_refs_are_dropped_from_create_payloads");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      result: { success: number; failed: number; deferred: number; remoteProcessed: number };
+      pending: Array<{ operation: string; local_id: string | null; payload: unknown }>;
+      depRows: Array<{ issue_id: string; depends_on_id: string; type: string }>;
+      row: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+      mapping: string | null;
+    };
+
+    expect(payload.result.success).toBe(1);
+    expect(payload.result.failed).toBe(0);
+    expect(payload.result.deferred).toBe(0);
+    expect(payload.pending).toHaveLength(0);
+    expect(payload.depRows).toEqual([]);
+    expect(payload.mapping).toBe("LIN-9017");
+    expect(payload.row?.linear_identifier).toBe("LIN-9017");
+    expect(payload.row?.sync_status).toBe("synced");
   });
 });
