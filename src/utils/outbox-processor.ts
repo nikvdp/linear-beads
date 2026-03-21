@@ -22,6 +22,7 @@ import {
   getCachedIssue,
   cacheDependency,
   isLocalId,
+  isPlausibleIssueInput,
   isPlaceholderIssueInput,
   resolveIssueId as resolveRemoteIssueId,
   resolveIssueLocalId,
@@ -199,6 +200,9 @@ function resolveDepsString(
       if (isPlaceholderIssueRef(targetId)) {
         return [];
       }
+      if (!isPlausibleIssueInput(targetId)) {
+        return [];
+      }
       referencedIds.add(targetId);
       const resolvedTarget = resolveRemoteIssueId(targetId);
       if (isLocalId(targetId) && resolvedTarget === targetId) {
@@ -247,6 +251,10 @@ function resolveOutboxItem(item: OutboxItem, context: ResolutionContext): Resolu
       if (options.dropOperationIfOrphan) {
         dropOperation = true;
       }
+      return;
+    }
+    if (options.dropFieldIfOrphan && !isPlausibleIssueInput(value)) {
+      delete payload[key];
       return;
     }
     referencedIds.add(value);

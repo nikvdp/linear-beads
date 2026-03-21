@@ -2616,6 +2616,15 @@ function normalizeIssueInputId(id: string): string {
   return trimmed;
 }
 
+function isIssueInputShape(normalizedId: string): boolean {
+  return (
+    isLocalId(normalizedId) ||
+    LINEAR_ID_WITH_DASH_RE.test(normalizedId) ||
+    LINEAR_ID_NO_DASH_RE.test(normalizedId) ||
+    NUMERIC_ISSUE_ID_RE.test(normalizedId)
+  );
+}
+
 export function isPlaceholderIssueInput(value: unknown): boolean {
   if (typeof value !== "string") {
     return false;
@@ -2625,6 +2634,49 @@ export function isPlaceholderIssueInput(value: unknown): boolean {
   return (
     normalized === "" || normalized === "-" || normalized === "null" || normalized === "undefined"
   );
+}
+
+export function isPlausibleIssueInput(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  if (isPlaceholderIssueInput(value)) {
+    return false;
+  }
+
+  const normalizedId = normalizeIssueInputId(value);
+  if (isIssueInputShape(normalizedId)) {
+    return true;
+  }
+
+  const db = getDatabase();
+  const direct = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          "SELECT 1 as hit FROM issues WHERE local_id = ? OR linear_identifier = ? OR linear_id = ? LIMIT 1"
+        )
+        .get(normalizedId, normalizedId, normalizedId) as { hit: 1 } | null
+  );
+  if (direct?.hit) {
+    return true;
+  }
+
+  const mapped = isLocalId(normalizedId) ? getIssueIdMapping(normalizedId) : null;
+  if (!mapped) {
+    return false;
+  }
+
+  const mappedRow = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          "SELECT 1 as hit FROM issues WHERE local_id = ? OR linear_identifier = ? OR linear_id = ? LIMIT 1"
+        )
+        .get(mapped, mapped, mapped) as { hit: 1 } | null
+  );
+  return Boolean(mappedRow?.hit);
 }
 
 /**

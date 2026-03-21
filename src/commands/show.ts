@@ -37,6 +37,31 @@ import {
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
+export function shouldPreferRemoteIssueForShow(options: {
+  forceSync: boolean;
+  skipRemote: boolean;
+  resolvedId: string;
+  hasCachedIssue: boolean;
+}): boolean {
+  if (options.skipRemote || isLocalId(options.resolvedId)) {
+    return false;
+  }
+
+  if (options.forceSync) {
+    return true;
+  }
+
+  return !options.hasCachedIssue;
+}
+
+export function shouldUseCachedIssueImmediatelyForShow(options: {
+  forceSync: boolean;
+  resolvedId: string;
+  hasCachedIssue: boolean;
+}): boolean {
+  return !options.forceSync && options.hasCachedIssue && !isLocalId(options.resolvedId);
+}
+
 export const showCommand = new Command("show")
   .description("Show issue details")
   .argument("<id>", "Issue ID (e.g., TEAM-123 or 123)")
@@ -55,29 +80,50 @@ export const showCommand = new Command("show")
       }
 
       const resolvedId = resolveIssueId(id);
+      let issue = getCachedIssue(resolvedId);
+      const useCachedImmediately = shouldUseCachedIssueImmediatelyForShow({
+        forceSync: Boolean(options.sync),
+        resolvedId,
+        hasCachedIssue: Boolean(issue),
+      });
       const localOnly = isLocalOnly();
-      let remotePause = await getCommandRemoteSyncPause();
-      let remoteDisabled = Boolean(remotePause);
-      let skipRemote = localOnly || remoteDisabled;
+      let remotePause = null;
+      let remoteDisabled = false;
+      let skipRemote = localOnly || useCachedImmediately;
 
-      // Ensure cache is fresh (skip in local-only mode)
       if (!skipRemote) {
-        if (options.sync) {
-          await ensureFresh(options.team, true);
-        } else {
-          await ensureFreshBestEffort(options.team);
-        }
-        remotePause = getActiveRemoteSyncPause();
+        remotePause = await getCommandRemoteSyncPause();
         remoteDisabled = Boolean(remotePause);
         skipRemote = localOnly || remoteDisabled;
+
+        // Ensure cache is fresh (skip in local-only mode)
+        if (!skipRemote) {
+          if (options.sync) {
+            await ensureFresh(options.team, true);
+          } else {
+            await ensureFreshBestEffort(options.team);
+          }
+          remotePause = getActiveRemoteSyncPause();
+          remoteDisabled = Boolean(remotePause);
+          skipRemote = localOnly || remoteDisabled;
+        } else if (remoteDisabled && !options.json) {
+          outputError(formatRemoteSyncPauseNotice(remotePause as NonNullable<typeof remotePause>));
+        }
+
+        // Re-read cache after the best-effort sync path in case it refreshed the issue.
+        issue = getCachedIssue(resolvedId);
       } else if (remoteDisabled && !options.json) {
         outputError(formatRemoteSyncPauseNotice(remotePause as NonNullable<typeof remotePause>));
       }
 
-      let issue;
-
-      // Prefer a fresh remote fetch for synced issues so show includes current relations and media.
-      if (!skipRemote && !isLocalId(resolvedId)) {
+      if (
+        shouldPreferRemoteIssueForShow({
+          forceSync: Boolean(options.sync),
+          skipRemote,
+          resolvedId,
+          hasCachedIssue: Boolean(issue),
+        })
+      ) {
         try {
           issue = await fetchIssue(resolvedId);
         } catch (error) {
@@ -269,6 +315,7 @@ export const showCommand = new Command("show")
           }
         }
       }
+
     } catch (error) {
       console.error("Error:", error instanceof Error ? error.message : error);
       process.exit(1);
