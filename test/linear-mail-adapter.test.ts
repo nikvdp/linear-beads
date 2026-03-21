@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Command } from "commander";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -11,6 +12,7 @@ import {
   serializeLinearMailDirectoryEntry,
   type LinearMailEnvelope,
 } from "../src/adapters/linear-mail.js";
+import { agentCommand } from "../src/commands/agent.js";
 import { getAgentByHandle, closeDatabase } from "../src/utils/database.js";
 import { reloadConfig } from "../src/utils/config.js";
 import { resetGraphQLClient } from "../src/utils/graphql.js";
@@ -42,6 +44,30 @@ function writeRepoConfig(repoDir: string, config: Record<string, unknown>): void
   const lbDir = join(repoDir, ".lb");
   mkdirSync(lbDir, { recursive: true });
   writeFileSync(join(lbDir, "config.jsonc"), `${JSON.stringify(config, null, 2)}\n`);
+}
+
+async function runAgentCli(...args: string[]): Promise<{ stdout: string; stderr: string }> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...parts) => stdout.push(parts.join(" "));
+  console.error = (...parts) => stderr.push(parts.join(" "));
+
+  try {
+    const program = new Command();
+    program.exitOverride();
+    program.addCommand(agentCommand);
+    await program.parseAsync(["agent", ...args], { from: "user" });
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+
+  return {
+    stdout: stdout.join("\n"),
+    stderr: stderr.join("\n"),
+  };
 }
 
 describe("linear mail adapter envelope", () => {
@@ -271,5 +297,68 @@ describe("linear mail adapter envelope", () => {
       source: "shared",
     });
     expect(getAgentByHandle("RemoteAlpha")?.id).toBe("agent-remote-1");
+  });
+
+  test("shared-mode registration allocates unique suffixed handles", async () => {
+    tempDir = createTempGitRepo("lb-linear-mail-register");
+    process.chdir(tempDir);
+    writeRepoConfig(tempDir, {
+      issue_backend: "linear",
+      mail_backend: "linear",
+      mail_registry_work_item: "linear:LIN-REG-1",
+    });
+    process.env.LINEAR_API_KEY = "test-linear-api-key";
+    reloadConfig();
+
+    const directoryBodies: string[] = [];
+
+    globalThis.fetch = (async (_input, init) => {
+      const payload = JSON.parse(String(init?.body || "{}")) as {
+        query?: string;
+        variables?: { input?: { body?: string } };
+      };
+
+      if (payload.query?.includes("query GetIssue")) {
+        return jsonResponse({ data: { issue: { id: "issue-registry-uuid" } } });
+      }
+
+      if (payload.query?.includes("query LinearIssueComments")) {
+        return jsonResponse({
+          data: {
+            issue: {
+              comments: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: directoryBodies.map((body, index) => ({
+                  id: `comment-${index + 1}`,
+                  body,
+                  createdAt: "2026-03-21T08:00:00.000Z",
+                  updatedAt: "2026-03-21T08:00:00.000Z",
+                  issue: { identifier: "LIN-REG-1" },
+                })),
+              },
+            },
+          },
+        });
+      }
+
+      if (payload.query?.includes("mutation CreateComment")) {
+        directoryBodies.push(payload.variables?.input?.body || "");
+        return jsonResponse({ data: { commentCreate: { success: true } } });
+      }
+
+      throw new Error(`Unexpected GraphQL query: ${payload.query}`);
+    }) as typeof fetch;
+
+    const first = JSON.parse((await runAgentCli("register", "--handle", "Alpha", "--json")).stdout) as {
+      handle: string;
+    };
+    const second = JSON.parse(
+      (await runAgentCli("register", "--handle", "Alpha", "--json")).stdout
+    ) as { handle: string };
+
+    expect(first.handle).toMatch(/^Alpha-[a-z0-9]{4}$/);
+    expect(second.handle).toMatch(/^Alpha-[a-z0-9]{4}$/);
+    expect(second.handle).not.toBe(first.handle);
+    expect(directoryBodies).toHaveLength(2);
   });
 });

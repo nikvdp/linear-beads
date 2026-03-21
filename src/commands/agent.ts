@@ -5,15 +5,46 @@ import {
   refreshLinearMailAgentDirectory,
 } from "../adapters/linear-mail.js";
 import {
+  generateReadableAgentHandleBase,
   getAgentByHandle,
   getCurrentAgentHandle,
   listAgents,
+  normalizeAgentHandleBase,
   registerAgent,
   setCurrentAgentHandle,
 } from "../utils/database.js";
 import { output, outputError } from "../utils/output.js";
 
 export const agentCommand = new Command("agent").description("Manage local agent identities");
+
+function randomHandleSuffix(length = 4): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let suffix = "";
+  for (let i = 0; i < length; i++) {
+    suffix += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return suffix;
+}
+
+async function allocateSharedHandle(preferredHandle?: string): Promise<string> {
+  const remoteAgents = await refreshLinearMailAgentDirectory();
+  const takenHandles = new Set([
+    ...listAgents().map((agent) => agent.handle),
+    ...remoteAgents.map((agent) => agent.handle),
+  ]);
+
+  const rawBase = normalizeAgentHandleBase(preferredHandle) || generateReadableAgentHandleBase();
+  const base = rawBase.slice(0, 59).replace(/[-_]+$/g, "") || "agent";
+
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const candidate = `${base}-${randomHandleSuffix()}`;
+    if (!takenHandles.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`Unable to allocate unique shared handle for base '${base}'`);
+}
 
 agentCommand
   .command("register")
@@ -24,12 +55,17 @@ agentCommand
   .option("-j, --json", "Output as JSON")
   .action(async (options) => {
     try {
+      const sharedDirectoryEnabled = isLinearMailDirectoryConfigured();
+      const allocatedHandle = sharedDirectoryEnabled
+        ? await allocateSharedHandle(options.handle)
+        : undefined;
       const agent = registerAgent({
+        handle: allocatedHandle,
         preferredHandle: options.handle,
         displayName: options.name,
         pubkey: options.pubkey,
       });
-      if (isLinearMailDirectoryConfigured()) {
+      if (sharedDirectoryEnabled) {
         await publishLinearMailAgentIdentity(agent);
       }
       setCurrentAgentHandle(agent.handle);

@@ -2876,6 +2876,10 @@ function sanitizePreferredHandle(handle?: string): string | null {
   return cleaned.slice(0, 64);
 }
 
+export function normalizeAgentHandleBase(handle?: string): string | null {
+  return sanitizePreferredHandle(handle);
+}
+
 function randomInt(maxExclusive: number): number {
   return Math.floor(Math.random() * maxExclusive);
 }
@@ -2884,6 +2888,10 @@ function randomHandleBase(): string {
   const adjective = AGENT_ADJECTIVES[randomInt(AGENT_ADJECTIVES.length)];
   const noun = AGENT_NOUNS[randomInt(AGENT_NOUNS.length)];
   return `${adjective}${noun}`;
+}
+
+export function generateReadableAgentHandleBase(): string {
+  return randomHandleBase();
 }
 
 function handleExists(handle: string): boolean {
@@ -2936,14 +2944,23 @@ function toMailRecipientKind(raw: string): MailRecipientKind {
 
 export function registerAgent(
   options: {
+    handle?: string;
     preferredHandle?: string;
     displayName?: string;
     pubkey?: string;
   } = {}
 ): AgentIdentity {
+  const explicitHandle = options.handle ? sanitizePreferredHandle(options.handle) : null;
+  if (options.handle && !explicitHandle) {
+    throw new Error("Unable to allocate agent handle");
+  }
+  if (explicitHandle && handleExists(explicitHandle)) {
+    throw new Error(`Agent handle already exists: ${explicitHandle}`);
+  }
+
   return upsertAgentIdentity({
     id: crypto.randomUUID(),
-    handle: nextUniqueHandle(options.preferredHandle),
+    handle: explicitHandle || nextUniqueHandle(options.preferredHandle),
     displayName: options.displayName,
     pubkey: options.pubkey,
     source: "local",
