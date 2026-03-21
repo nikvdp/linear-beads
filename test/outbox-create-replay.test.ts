@@ -44,6 +44,7 @@ async function runEval(
     | "missing_cached_issue_row"
     | "alias_merge_resolution"
     | "shared_parent_resolution"
+    | "local_blocker_relation_replays_after_create_resolution"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import { Database } from "bun:sqlite";
@@ -291,6 +292,66 @@ async function runEval(
           siblingLocalId,
           siblingDisplayId: getDisplayId(siblingLocalId),
           siblingRow,
+        })
+      );
+      process.exit(0);
+    } else if (mode === "local_blocker_relation_replays_after_create_resolution") {
+      const blockedLocalId = localId;
+      const blockerLocalId = generateLocalId();
+
+      cacheIssue({
+        id: blockerLocalId,
+        title: "Blocking issue",
+        status: "open",
+        priority: 2,
+        sync_status: "pending",
+        created_at: now,
+        updated_at: now,
+      });
+
+      queueOutboxItem(
+        "create_relation",
+        { issueId: blockerLocalId, relatedIssueId: blockedLocalId, type: "blocks" },
+        blockerLocalId
+      );
+
+      const blockedOutboxId = queueOutboxItem(
+        "create",
+        { title: "Replay guard issue", priority: 2 },
+        blockedLocalId
+      );
+      markOutboxCreateRemoteIssueIdentifier(blockedOutboxId, "LIN-9015");
+
+      const blockerOutboxId = queueOutboxItem(
+        "create",
+        { title: "Blocking issue", priority: 2 },
+        blockerLocalId
+      );
+      markOutboxCreateRemoteIssueIdentifier(blockerOutboxId, "LIN-9016");
+
+      const pass1 = await processOutboxQueue("TEAM");
+      const pendingAfterPass1 = getPendingOutboxItems().map((item) => ({
+        operation: item.operation,
+        local_id: item.local_id || null,
+        payload: item.payload,
+      }));
+      const pass2 = await processOutboxQueue("TEAM");
+      const pendingAfterPass2 = getPendingOutboxItems().map((item) => ({
+        operation: item.operation,
+        local_id: item.local_id || null,
+        payload: item.payload,
+      }));
+
+      console.log(
+        JSON.stringify({
+          pass1,
+          pass2,
+          pendingAfterPass1,
+          pendingAfterPass2,
+          blockedDisplayId: getDisplayId(blockedLocalId),
+          blockerDisplayId: getDisplayId(blockerLocalId),
+          blockedMapping: getIssueIdMapping(blockedLocalId),
+          blockerMapping: getIssueIdMapping(blockerLocalId),
         })
       );
       process.exit(0);
@@ -699,5 +760,46 @@ describe("outbox create replay protection", () => {
     expect(payload.pass3.success).toBe(1);
     expect(payload.pass3.failed).toBe(0);
     expect(payload.pendingFinal).toHaveLength(0);
+  });
+
+  test("defers queued LOCAL blocker relations until both create rows resolve", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "local_blocker_relation_replays_after_create_resolution");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      pass1: { success: number; failed: number; deferred: number; remoteProcessed: number };
+      pass2: { success: number; failed: number; deferred: number; remoteProcessed: number };
+      pendingAfterPass1: Array<{
+        operation: string;
+        local_id: string | null;
+        payload: { issueId?: string; relatedIssueId?: string; type?: string };
+      }>;
+      pendingAfterPass2: Array<{
+        operation: string;
+        local_id: string | null;
+        payload: { issueId?: string; relatedIssueId?: string; type?: string };
+      }>;
+      blockedDisplayId: string;
+      blockerDisplayId: string;
+      blockedMapping: string | null;
+      blockerMapping: string | null;
+    };
+
+    expect(payload.pass1.success).toBe(2);
+    expect(payload.pass1.failed).toBe(0);
+    expect(payload.pass1.deferred).toBe(1);
+    expect(payload.pendingAfterPass1).toHaveLength(1);
+    expect(payload.pendingAfterPass1[0]?.operation).toBe("create_relation");
+    expect(payload.pendingAfterPass1[0]?.payload?.issueId).toMatch(/^LOCAL-/);
+    expect(payload.pendingAfterPass1[0]?.payload?.relatedIssueId).toMatch(/^LOCAL-/);
+    expect(payload.blockedMapping).toBe("LIN-9015");
+    expect(payload.blockerMapping).toBe("LIN-9016");
+    expect(payload.blockedDisplayId).toBe("LIN-9015");
+    expect(payload.blockerDisplayId).toBe("LIN-9016");
+    expect(payload.pass2.success + payload.pass2.failed).toBe(1);
+    expect(payload.pass2.deferred).toBe(0);
   });
 });
