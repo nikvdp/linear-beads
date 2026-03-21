@@ -7,6 +7,7 @@ import {
   shouldPreferRemoteIssueForShow,
   shouldUseCachedIssueImmediatelyForShow,
 } from "../src/commands/show.js";
+import { runWithSyncProgress } from "../src/commands/sync.js";
 
 const tempDirs: string[] = [];
 const CONFIG_UTILS_PATH = join(import.meta.dir, "..", "src", "utils", "config.ts");
@@ -121,6 +122,56 @@ async function runEnsureFresh(
 }
 
 describe("sync context freshness", () => {
+  test("sync progress stays quiet when the operation finishes before the threshold", async () => {
+    const writes: string[] = [];
+    await runWithSyncProgress(
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      },
+      {
+        delayMs: 30,
+        stderrIsTTY: true,
+        write: (chunk) => writes.push(chunk),
+      }
+    );
+
+    expect(writes).toEqual([]);
+  });
+
+  test("sync progress appears after the threshold for long waits", async () => {
+    const writes: string[] = [];
+    await runWithSyncProgress(
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 35));
+      },
+      {
+        delayMs: 5,
+        stderrIsTTY: true,
+        write: (chunk) => writes.push(chunk),
+      }
+    );
+
+    expect(writes.some((chunk) => chunk.includes("Syncing with Linear..."))).toBe(true);
+    expect(writes.at(-1)).toBe("\r\x1b[K");
+  });
+
+  test("sync progress is suppressed for json output", async () => {
+    const writes: string[] = [];
+    await runWithSyncProgress(
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 35));
+      },
+      {
+        json: true,
+        delayMs: 5,
+        stderrIsTTY: true,
+        write: (chunk) => writes.push(chunk),
+      }
+    );
+
+    expect(writes).toEqual([]);
+  });
+
   test("show defaults to cache-first for synced cached issues", () => {
     expect(
       shouldUseCachedIssueImmediatelyForShow({
