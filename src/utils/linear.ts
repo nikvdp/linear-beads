@@ -40,6 +40,7 @@ import {
   getMediaItem,
   getMediaItemByLinearAttachmentId,
   getMediaItemByRemoteUrl,
+  ensureIssueSyncKey,
   getIssueSyncKey,
   isValidMediaId,
   getLinearIdentifierForLocalId,
@@ -975,22 +976,23 @@ function shouldNormalizeLinearMarkdownLink(label: string, linearIdentifier: stri
 
 type TrackedIssueRef = {
   localId: string;
-  syncKey: string;
+  syncKey: string | null;
   linearIdentifier: string | null;
 };
 
 function resolveTrackedIssueRef(token: string): TrackedIssueRef | null {
   const normalized = normalizeIssueToken(token);
   const localId = resolveIssueLocalId(normalized);
+  const linearIdentifier = getLinearIdentifierForLocalId(localId);
   const syncKey = getIssueSyncKey(localId);
-  if (!syncKey) {
+  if (!syncKey && !linearIdentifier) {
     return null;
   }
 
   return {
     localId,
     syncKey,
-    linearIdentifier: getLinearIdentifierForLocalId(localId),
+    linearIdentifier,
   };
 }
 
@@ -1050,6 +1052,9 @@ async function rewriteIssueTokenForLinearDescription(
           : issueIdentifierToGenericLinearUrl(trackedRef.linearIdentifier),
         format: "url",
       };
+    }
+    if (!trackedRef.syncKey) {
+      return null;
     }
     return {
       text: normalized,
@@ -1157,9 +1162,11 @@ export function toCanonicalLocalDescription(
       return null;
     }
 
+    const syncKey = trackedRef.syncKey || ensureIssueSyncKey(trackedRef.localId);
+
     return {
       text: normalized,
-      url: buildLbRefUrl(trackedRef.syncKey, normalized),
+      url: buildLbRefUrl(syncKey, normalized),
     };
   });
 }
