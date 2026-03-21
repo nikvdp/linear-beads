@@ -10,6 +10,7 @@ import {
   cacheIssue,
   cacheDependency,
   getDatabase,
+  getCachedIssue,
   getCachedIssues,
   getDisplayId,
   reassignMediaItemsToIssue,
@@ -51,12 +52,98 @@ import {
 } from "../utils/description-input.js";
 import { cachePreparedDescriptionMedia, planDescriptionMediaInput } from "../utils/media-input.js";
 import {
+  getActiveRemoteSyncPauseForEndpoints,
+  getAutomaticRemoteSyncPauseForEndpoints,
+  getBlockingActiveRemoteSyncPause,
+  getBlockingAutomaticRemoteSyncPause,
   formatRemoteSyncPauseNotice,
   getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
 const VALID_DEP_TYPES = ["blocks", "related", "discovered-from"];
+const CREATE_WAIT_ENDPOINTS = ["issueCreate"];
+const CREATE_WAIT_DEFAULT_TIMEOUT_MS = 20000;
+const CREATE_WAIT_POLL_MS = 100;
+const CREATE_WAIT_KICK_INTERVAL_MS = 1000;
+
+type WaitForCreateResolutionResult =
+  | { status: "resolved"; issue: Issue }
+  | { status: "paused"; issue: Issue | null; pauseNotice: string }
+  | { status: "timeout"; issue: Issue | null }
+  | { status: "missing" };
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function getCreateWaitTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  return parsePositiveInt(env.LB_CREATE_WAIT_TIMEOUT_MS, CREATE_WAIT_DEFAULT_TIMEOUT_MS);
+}
+
+function getCreateWaitPauseNotice(): string | null {
+  const pause =
+    getActiveRemoteSyncPauseForEndpoints(CREATE_WAIT_ENDPOINTS) ||
+    getAutomaticRemoteSyncPauseForEndpoints(CREATE_WAIT_ENDPOINTS) ||
+    getBlockingActiveRemoteSyncPause() ||
+    getBlockingAutomaticRemoteSyncPause();
+  return pause ? formatRemoteSyncPauseNotice(pause) : null;
+}
+
+export async function waitForCreateResolution(
+  localId: string,
+  options: {
+    timeoutMs?: number;
+    pollMs?: number;
+    kickWorker?: () => void;
+  } = {}
+): Promise<WaitForCreateResolutionResult> {
+  const timeoutMs = options.timeoutMs ?? getCreateWaitTimeoutMs();
+  const pollMs = options.pollMs ?? CREATE_WAIT_POLL_MS;
+  const kickWorker = options.kickWorker ?? ensureOutboxProcessed;
+  const deadline = Date.now() + timeoutMs;
+  let nextKickAt = 0;
+
+  while (Date.now() <= deadline) {
+    const issue = getCachedIssue(localId);
+    if (!issue) {
+      return { status: "missing" };
+    }
+    if (issue.linear_identifier) {
+      return { status: "resolved", issue };
+    }
+
+    const pauseNotice = getCreateWaitPauseNotice();
+    if (pauseNotice) {
+      return { status: "paused", issue, pauseNotice };
+    }
+
+    if (Date.now() >= nextKickAt) {
+      kickWorker();
+      nextKickAt = Date.now() + CREATE_WAIT_KICK_INTERVAL_MS;
+    }
+
+    await Bun.sleep(pollMs);
+  }
+
+  return { status: "timeout", issue: getCachedIssue(localId) };
+}
+
+function emitCreateWaitFailure(result: WaitForCreateResolutionResult, localId: string): never {
+  if (result.status === "paused") {
+    outputError(result.pauseNotice);
+    outputError(`Waiting for a remote issue ID stopped. The issue is still queued locally as ${localId}.`);
+  } else if (result.status === "timeout") {
+    outputError(
+      `Timed out waiting for a remote issue ID. The issue is still queued locally as ${localId}.`
+    );
+  } else {
+    outputError(`Created issue ${localId}, but it disappeared from the local cache while waiting.`);
+  }
+  process.exit(1);
+}
 
 /**
  * Parse deps string into array of {type, targetId}
@@ -155,6 +242,7 @@ export const createCommand = new Command("create")
   .option("--reuse-if-duplicate", "Return a matching issue instead of creating a duplicate")
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Sync immediately (block on network)")
+  .option("--wait", "Wait for a resolved remote issue ID after queueing locally")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
   .action(async (title: string, options) => {
@@ -306,6 +394,10 @@ export const createCommand = new Command("create")
 
       // Local-only mode: create locally without Linear
       if (isLocalOnly()) {
+        if (options.wait) {
+          outputError("--wait requires remote sync and is unavailable in local-only mode.");
+          process.exit(1);
+        }
         const localId = generateLocalId();
         const syncKey = generateIssueSyncKey();
         const now = new Date().toISOString();
@@ -565,6 +657,24 @@ export const createCommand = new Command("create")
 
       // Spawn background worker if not already running
       ensureOutboxProcessed();
+
+      if (options.wait) {
+        const result = await waitForCreateResolution(localId);
+        if (result.status !== "resolved") {
+          emitCreateWaitFailure(result, localId);
+        }
+
+        if (options.json) {
+          output(formatIssueJson(result.issue));
+        } else {
+          output(
+            style === "beads"
+              ? formatIssueHumanBeads(result.issue, getDisplayId(result.issue.id))
+              : formatIssueHuman(result.issue, getDisplayId(result.issue.id))
+          );
+        }
+        return;
+      }
 
       if (options.json) {
         output(formatIssueJson(issue));
