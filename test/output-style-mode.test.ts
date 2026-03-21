@@ -127,6 +127,8 @@ describe("human output style modes", () => {
     const blocker = await createIssue(repoDir, "Blocker issue");
     const parent = await createIssue(repoDir, "Parent issue");
     const child = await createIssue(repoDir, "Child issue", ["--parent", parent.id]);
+    const active = await runCli(repoDir, ["update", parent.id, "--status", "in_progress"]);
+    expect(active.exitCode).toBe(0);
 
     const dep = await runCli(repoDir, ["dep", "add", parent.id, "--blocked-by", blocker.id]);
     expect(dep.exitCode).toBe(0);
@@ -137,6 +139,8 @@ describe("human output style modes", () => {
     const shown = await runCli(repoDir, ["show", parent.id]);
     expect(shown.exitCode).toBe(0);
     expect(shown.stdout).toContain(`● ${parent.id} ● P2 Parent issue`);
+    expect(shown.stdout).toContain("  Status: in_progress (blocked)");
+    expect(shown.stdout).toContain("  Priority: medium");
     expect(shown.stdout).toContain("Children (1):");
     expect(shown.stdout).toContain(`└── ● ${child.id} ● P2 Child issue`);
     expect(shown.stdout).toContain("Blocked by (1):");
