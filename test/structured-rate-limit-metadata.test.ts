@@ -145,4 +145,31 @@ describe("structured rate-limit metadata", () => {
     expect(parsed.deltaMs).toBeGreaterThanOrEqual(2000);
     expect(parsed.deltaMs).toBeLessThanOrEqual(2600);
   });
+
+  test("does not record a pause for invalid input errors that carry routine reset headers", () => {
+    const pause = recordRemoteSyncPause(
+      getLinearApiErrorInfoFromResponse({
+        status: 200,
+        headers: {
+          "x-ratelimit-complexity-reset": "1774089461297",
+          "x-ratelimit-requests-reset": "1774089461297",
+        },
+        body: JSON.stringify({
+          errors: [
+            {
+              message: "Argument Validation Error",
+              extensions: {
+                code: "INVALID_INPUT",
+                type: "invalid input",
+                userError: true,
+                userPresentableMessage: "relatedIssueId cannot have the same value as issueId.",
+              },
+            },
+          ],
+        }),
+      })
+    );
+
+    expect(pause).toBeNull();
+  });
 });

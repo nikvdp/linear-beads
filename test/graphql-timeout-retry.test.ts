@@ -365,6 +365,45 @@ describe("structured Linear API error helpers", () => {
     expect(rateLimit?.resetAtMs).toBe(1742545000000);
   });
 
+  test("ignores routine reset headers on non-rate-limited GraphQL validation errors", () => {
+    const error = new ClientError(
+      {
+        status: 200,
+        headers: new Headers({
+          "x-ratelimit-complexity-reset": "1774089461297",
+          "x-ratelimit-requests-reset": "1774089461297",
+        }),
+        body: JSON.stringify({
+          errors: [
+            {
+              message: "Argument Validation Error",
+              extensions: {
+                code: "INVALID_INPUT",
+                type: "invalid input",
+                userError: true,
+              },
+            },
+          ],
+        }),
+        errors: [
+          {
+            message: "Argument Validation Error",
+            extensions: {
+              code: "INVALID_INPUT",
+              type: "invalid input",
+              userError: true,
+            },
+          },
+        ],
+      },
+      {
+        query: "mutation CreateRelation { issueRelationCreate(input: {}) { success } }",
+      }
+    );
+
+    expect(getLinearRateLimitErrorInfo(error)).toBeNull();
+  });
+
   test("returns null for non-Linear generic errors", () => {
     expect(getLinearApiErrorInfo(new Error("fetch failed"))).toBeNull();
     expect(getLinearRateLimitErrorInfo(new Error("fetch failed"))).toBeNull();
