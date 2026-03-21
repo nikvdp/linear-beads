@@ -781,7 +781,10 @@ export async function processOutboxQueue(
         continue;
       }
       const pause = recordRemoteSyncPause(error);
-      updateOutboxItemError(item.id, errorMsg, { retryAfterMs: pause?.retryAfterMs });
+      updateOutboxItemError(item.id, errorMsg, {
+        retryAfterMs: pause?.retryAfterMs,
+        rateLimited: pause?.kind === "rate_limit",
+      });
       failed++;
     }
   }

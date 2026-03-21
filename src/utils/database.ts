@@ -2227,7 +2227,7 @@ export function releaseOutboxItemClaim(id: number): void {
 export function updateOutboxItemError(
   id: number,
   error: string,
-  options: { retryAfterMs?: number } = {}
+  options: { retryAfterMs?: number; rateLimited?: boolean } = {}
 ): void {
   const db = getDatabase();
   const row = runWithBusyRetry(
@@ -2244,7 +2244,10 @@ export function updateOutboxItemError(
   const nextRetryCount = row.retry_count + 1;
   const retryAfterSecondsMatch = error.match(/retry-?after"?\s*[:=]\s*"?(\d{1,6})/i);
   const retryAfterSeconds = retryAfterSecondsMatch ? parseInt(retryAfterSecondsMatch[1], 10) : null;
-  const isRateLimited = error.toLowerCase().includes("rate limit");
+  const isRateLimited =
+    options.rateLimited === true ||
+    error.toLowerCase().includes("rate limit") ||
+    error.toLowerCase().includes("usage limit exceeded");
   const explicitRetryAfterMs = options.retryAfterMs;
   const parsedRetryAfterMs = retryAfterSeconds ? retryAfterSeconds * 1000 : null;
   const baseBackoffMs =

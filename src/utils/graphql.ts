@@ -45,6 +45,10 @@ export type LinearRateLimitErrorInfo = {
   endpointName?: string;
   retryAfterMs?: number;
   resetAtMs?: number;
+  durationMs?: number;
+  limit?: number;
+  remaining?: number;
+  requested?: number;
   headers: Record<string, string>;
   graphqlErrors: LinearGraphQLErrorInfo[];
   status: number;
@@ -73,7 +77,7 @@ type LinearFetchOptions = {
 
 type GraphQLResponseLike = {
   status?: number;
-  headers?: Headers;
+  headers?: Headers | Record<string, string>;
   body?: string;
   errors?: Array<{
     message?: string;
@@ -209,13 +213,22 @@ function headerValue(headers: Record<string, string>, name: string): string | un
   return value?.trim() || undefined;
 }
 
-function headersToRecord(headers: Headers | undefined): Record<string, string> {
+function headersToRecord(headers: Headers | Record<string, string> | undefined): Record<string, string> {
   if (!headers) {
     return {};
   }
 
-  const entries = Array.from(headers.entries()).map(([key, value]) => [key.toLowerCase(), value]);
-  return Object.fromEntries(entries);
+  if (typeof Headers !== "undefined" && headers instanceof Headers) {
+    const entries = Array.from(headers.entries()).map(([key, value]) => [key.toLowerCase(), value]);
+    return Object.fromEntries(entries);
+  }
+
+  if (typeof headers === "object") {
+    const entries = Object.entries(headers).map(([key, value]) => [key.toLowerCase(), String(value)]);
+    return Object.fromEntries(entries);
+  }
+
+  return {};
 }
 
 function parseResetHeaderMs(value: string | undefined): number | undefined {
@@ -237,6 +250,56 @@ function toGraphQLErrorInfo(
         ? error.extensions
         : undefined,
   }));
+}
+
+function parseGraphQLErrorBody(body: string): LinearGraphQLErrorInfo[] {
+  if (!body.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(body) as {
+      errors?: Array<{
+        message?: string;
+        extensions?: Record<string, unknown>;
+      }>;
+    };
+    return toGraphQLErrorInfo(parsed.errors);
+  } catch {
+    return [];
+  }
+}
+
+function pickNumericExtensionValue(
+  graphqlErrors: LinearGraphQLErrorInfo[],
+  fieldName: string
+): number | undefined {
+  for (const error of graphqlErrors) {
+    const value = error.extensions?.[fieldName];
+    const parsed =
+      typeof value === "number"
+        ? value
+        : typeof value === "string"
+          ? Number.parseInt(value, 10)
+          : Number.NaN;
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function pickStringExtensionValue(
+  graphqlErrors: LinearGraphQLErrorInfo[],
+  fieldName: string
+): string | undefined {
+  for (const error of graphqlErrors) {
+    const value = error.extensions?.[fieldName];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
 }
 
 function isRateLimitGraphQLError(graphqlErrors: LinearGraphQLErrorInfo[]): boolean {
@@ -294,9 +357,15 @@ function buildRateLimitInfo(
 
   return {
     bucketKind,
-    endpointName: headerValue(headers, "x-ratelimit-endpoint-name"),
+    endpointName:
+      headerValue(headers, "x-ratelimit-endpoint-name") ||
+      pickStringExtensionValue(graphqlErrors, "endpointName"),
     retryAfterMs,
     resetAtMs,
+    durationMs: pickNumericExtensionValue(graphqlErrors, "duration"),
+    limit: pickNumericExtensionValue(graphqlErrors, "limit"),
+    remaining: pickNumericExtensionValue(graphqlErrors, "remaining"),
+    requested: pickNumericExtensionValue(graphqlErrors, "requested"),
     headers,
     graphqlErrors,
     status,
@@ -312,16 +381,14 @@ function getGraphQLResponseLike(error: unknown): GraphQLResponseLike | null {
   return error.response as GraphQLResponseLike;
 }
 
-export function getLinearApiErrorInfo(error: unknown): LinearApiErrorInfo | null {
-  const response = getGraphQLResponseLike(error);
-  if (!response) {
-    return null;
-  }
-
+export function getLinearApiErrorInfoFromResponse(response: GraphQLResponseLike): LinearApiErrorInfo {
   const status = typeof response.status === "number" ? response.status : 0;
   const headers = headersToRecord(response.headers);
   const body = typeof response.body === "string" ? response.body : "";
-  const graphqlErrors = toGraphQLErrorInfo(response.errors);
+  const graphqlErrors =
+    response.errors && response.errors.length > 0
+      ? toGraphQLErrorInfo(response.errors)
+      : parseGraphQLErrorBody(body);
 
   return {
     status,
@@ -330,6 +397,26 @@ export function getLinearApiErrorInfo(error: unknown): LinearApiErrorInfo | null
     graphqlErrors,
     rateLimit: buildRateLimitInfo(status, headers, graphqlErrors, body),
   };
+}
+
+export function getLinearApiErrorInfo(error: unknown): LinearApiErrorInfo | null {
+  if (
+    error &&
+    typeof error === "object" &&
+    "status" in error &&
+    "headers" in error &&
+    "body" in error &&
+    "graphqlErrors" in error
+  ) {
+    return error as LinearApiErrorInfo;
+  }
+
+  const response = getGraphQLResponseLike(error);
+  if (!response) {
+    return null;
+  }
+
+  return getLinearApiErrorInfoFromResponse(response);
 }
 
 export function getLinearRateLimitErrorInfo(error: unknown): LinearRateLimitErrorInfo | null {

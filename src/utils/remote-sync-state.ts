@@ -8,7 +8,14 @@ import {
   runWithBusyRetry,
 } from "./database.js";
 import { getConfig, getGlobalConfigPath } from "./config.js";
-import { getLinearRequestPolicy, linearFetchWithRetry } from "./graphql.js";
+import {
+  getLinearApiErrorInfo,
+  getLinearApiErrorInfoFromResponse,
+  getLinearRequestPolicy,
+  linearFetchWithRetry,
+  type LinearRateLimitBucketKind,
+  type LinearRateLimitErrorInfo,
+} from "./graphql.js";
 
 const DEFAULT_RATE_LIMIT_PAUSE_MS = 60 * 60 * 1000;
 const DEFAULT_NETWORK_PAUSE_MS = 30 * 1000;
@@ -32,6 +39,16 @@ type StoredRemoteSyncPauseRecord = {
   until: string;
   backgroundUntil?: string;
   message?: string;
+  details?: {
+    bucketKind?: LinearRateLimitBucketKind;
+    endpointName?: string;
+    retryAfterMs?: number;
+    resetAtMs?: number;
+    durationMs?: number;
+    limit?: number;
+    remaining?: number;
+    requested?: number;
+  };
 };
 
 export type ActiveRemoteSyncPause = StoredRemoteSyncPauseRecord & {
@@ -47,6 +64,8 @@ type ExtractedErrorInfo = {
   rateLimited: boolean;
   complexityLimited: boolean;
   networkError: boolean;
+  rateLimit?: LinearRateLimitErrorInfo | null;
+  rateLimitDetails?: StoredRemoteSyncPauseRecord["details"];
 };
 
 let globalStateDb: Database | null = null;
@@ -182,6 +201,10 @@ function parseStoredPauseRecord(raw: string): StoredRemoteSyncPauseRecord | null
       backgroundUntil:
         typeof parsed.backgroundUntil === "string" ? parsed.backgroundUntil : undefined,
       message: typeof parsed.message === "string" ? parsed.message : undefined,
+      details:
+        parsed.details && typeof parsed.details === "object"
+          ? (parsed.details as StoredRemoteSyncPauseRecord["details"])
+          : undefined,
     };
   } catch {
     return null;
@@ -653,7 +676,15 @@ function extractHeadersFromError(error: unknown): Record<string, string> {
 }
 
 function extractErrorInfo(error: unknown): ExtractedErrorInfo {
-  const message = normalizeErrorMessage(error);
+  const apiError = getLinearApiErrorInfo(error);
+  const message =
+    apiError?.graphqlErrors
+      .map((entry) => entry.message)
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .join(" | ") ||
+    apiError?.body ||
+    normalizeErrorMessage(error);
+  const rateLimit = apiError?.rateLimit || null;
   const messageHeaders = lowerCaseKeys({
     "retry-after": extractHeaderValueFromMessage(message, "retry-after") || "",
     "x-ratelimit-requests-reset":
@@ -665,21 +696,37 @@ function extractErrorInfo(error: unknown): ExtractedErrorInfo {
     "x-ratelimit-endpoint-name":
       extractHeaderValueFromMessage(message, "x-ratelimit-endpoint-name") || "",
   });
-  const headers = mergeHeaderBags(extractHeadersFromError(error), messageHeaders);
+  const headers = mergeHeaderBags(apiError?.headers || {}, extractHeadersFromError(error), messageHeaders);
   const endpointName =
+    rateLimit?.endpointName ||
     normalizeEndpointName(headers["x-ratelimit-endpoint-name"]) ||
     extractEndpointNameFromMessage(message);
   const complexityLimited =
+    rateLimit?.bucketKind === "complexity" ||
     Boolean(headers["x-ratelimit-complexity-reset"]) ||
     message.toLowerCase().includes("complexity");
+  const rateLimitDetails = rateLimit
+    ? {
+        bucketKind: rateLimit.bucketKind,
+        endpointName: rateLimit.endpointName,
+        retryAfterMs: rateLimit.retryAfterMs,
+        resetAtMs: rateLimit.resetAtMs,
+        durationMs: rateLimit.durationMs,
+        limit: rateLimit.limit,
+        remaining: rateLimit.remaining,
+        requested: rateLimit.requested,
+      }
+    : undefined;
 
   return {
     message,
     headers,
     endpointName,
-    rateLimited: isRateLimitErrorMessage(message),
+    rateLimited: Boolean(rateLimit) || isRateLimitErrorMessage(message),
     complexityLimited,
     networkError: isNetworkErrorMessage(message),
+    rateLimit,
+    rateLimitDetails,
   };
 }
 
@@ -695,6 +742,14 @@ function parseResetHeaderMs(value: string | undefined, nowMs: number): number | 
 }
 
 function extractRetryAfterMs(info: ExtractedErrorInfo, nowMs: number): number | null {
+  if (info.rateLimit?.resetAtMs && info.rateLimit.resetAtMs > nowMs) {
+    return info.rateLimit.resetAtMs - nowMs;
+  }
+
+  if (info.rateLimit?.retryAfterMs && info.rateLimit.retryAfterMs > 0) {
+    return info.rateLimit.retryAfterMs;
+  }
+
   const headerNames = info.complexityLimited
     ? ["x-ratelimit-complexity-reset", "x-ratelimit-requests-reset"]
     : info.endpointName
@@ -775,7 +830,7 @@ function computeRateLimitAutomaticPauseMs(info: ExtractedErrorInfo, nowMs: numbe
 }
 
 function computeRateLimitProbeMs(info: ExtractedErrorInfo, nowMs: number): number {
-  const meta = extractRateLimitMeta(info.message);
+  const meta = info.rateLimitDetails || extractRateLimitMeta(info.message);
   if (meta.durationMs && meta.limit && meta.limit > 0) {
     const requested = Math.max(1, meta.requested || 1);
     const msPerToken = meta.durationMs / meta.limit;
@@ -795,6 +850,14 @@ function computeRateLimitProbeMs(info: ExtractedErrorInfo, nowMs: number): numbe
 }
 
 function derivePauseScope(info: ExtractedErrorInfo): RemoteSyncPauseScope {
+  if (info.rateLimit?.bucketKind === "complexity") {
+    return { kind: "complexity" };
+  }
+
+  if (info.rateLimit?.bucketKind === "endpoint" && info.rateLimit.endpointName) {
+    return { kind: "endpoint", endpointName: info.rateLimit.endpointName };
+  }
+
   if (info.complexityLimited) {
     return { kind: "complexity" };
   }
@@ -804,22 +867,6 @@ function derivePauseScope(info: ExtractedErrorInfo): RemoteSyncPauseScope {
   }
 
   return { kind: "global" };
-}
-
-function buildProbeFailureMessage(response: Response, body: string): string {
-  return `Pause probe failed: ${JSON.stringify({
-    status: response.status,
-    headers: {
-      "retry-after": response.headers.get("retry-after"),
-      "x-ratelimit-requests-reset": response.headers.get("x-ratelimit-requests-reset"),
-      "x-ratelimit-endpoint-requests-reset": response.headers.get(
-        "x-ratelimit-endpoint-requests-reset"
-      ),
-      "x-ratelimit-endpoint-name": response.headers.get("x-ratelimit-endpoint-name"),
-      "x-ratelimit-complexity-reset": response.headers.get("x-ratelimit-complexity-reset"),
-    },
-    body,
-  })}`;
 }
 
 function buildPauseRecord(error: unknown, nowMs: number): ActiveRemoteSyncPause | null {
@@ -836,6 +883,7 @@ function buildPauseRecord(error: unknown, nowMs: number): ActiveRemoteSyncPause 
       retryAfterMs,
       backgroundRetryAfterMs,
       message: normalizeForDisplay(info.message),
+      details: info.rateLimitDetails,
     };
   }
 
@@ -848,6 +896,7 @@ function buildPauseRecord(error: unknown, nowMs: number): ActiveRemoteSyncPause 
       retryAfterMs: DEFAULT_NETWORK_PAUSE_MS,
       backgroundRetryAfterMs: DEFAULT_NETWORK_PAUSE_MS,
       message: normalizeForDisplay(info.message),
+      details: undefined,
     };
   }
 
@@ -890,20 +939,22 @@ export function recordRemoteSyncPause(
 
   const current = getStoredPauseForScope(next.scope, nowMs);
   const merged: StoredRemoteSyncPauseRecord = current
-    ? {
-        kind: next.kind,
-        scope: next.scope,
-        until: clampActiveUntil(current.until, next.until, nowMs),
-        backgroundUntil: clampActiveUntil(getBackgroundUntil(current), next.backgroundUntil, nowMs),
-        message: next.message,
-      }
-    : {
-        kind: next.kind,
-        scope: next.scope,
-        until: next.until,
-        backgroundUntil: next.backgroundUntil,
-        message: next.message,
-      };
+      ? {
+          kind: next.kind,
+          scope: next.scope,
+          until: clampActiveUntil(current.until, next.until, nowMs),
+          backgroundUntil: clampActiveUntil(getBackgroundUntil(current), next.backgroundUntil, nowMs),
+          message: next.message,
+          details: next.details,
+        }
+      : {
+          kind: next.kind,
+          scope: next.scope,
+          until: next.until,
+          backgroundUntil: next.backgroundUntil,
+          message: next.message,
+          details: next.details,
+        };
 
   setStoredRemoteSyncPauseRecord(merged);
 
@@ -973,7 +1024,13 @@ export async function getCommandRemoteSyncPause(): Promise<ActiveRemoteSyncPause
 
     const body = await response.text();
     if (!response.ok) {
-      const pause = recordRemoteSyncPause(buildProbeFailureMessage(response, body));
+      const pause = recordRemoteSyncPause(
+        getLinearApiErrorInfoFromResponse({
+          status: response.status,
+          headers: response.headers,
+          body,
+        })
+      );
       return pause && pause.scope.kind !== "endpoint"
         ? pause
         : getBlockingActiveRemoteSyncPause() || getBlockingAutomaticRemoteSyncPause() || null;
@@ -987,7 +1044,17 @@ export async function getCommandRemoteSyncPause(): Promise<ActiveRemoteSyncPause
     }
 
     if (parsed?.errors && parsed.errors.length > 0) {
-      const pause = recordRemoteSyncPause(body);
+      const pause = recordRemoteSyncPause(
+        getLinearApiErrorInfoFromResponse({
+          status: response.status,
+          headers: response.headers,
+          body,
+          errors: parsed.errors as Array<{
+            message?: string;
+            extensions?: Record<string, unknown>;
+          }>,
+        })
+      );
       return pause && pause.scope.kind !== "endpoint"
         ? pause
         : getBlockingActiveRemoteSyncPause() || getBlockingAutomaticRemoteSyncPause() || null;
@@ -1063,7 +1130,7 @@ function formatRateLimitDetails(pause: ActiveRemoteSyncPause): string | null {
     return null;
   }
 
-  const meta = extractRateLimitMeta(pause.message);
+  const meta = pause.details || extractRateLimitMeta(pause.message);
   const details: string[] = [];
 
   details.push(

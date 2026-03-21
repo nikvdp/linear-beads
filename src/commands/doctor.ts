@@ -15,6 +15,7 @@ import {
 } from "../utils/config.js";
 import { getPendingOutboxItems } from "../utils/database.js";
 import {
+  getLinearApiErrorInfoFromResponse,
   getLinearRequestPolicy,
   linearFetchWithRetry,
   resetGraphQLClient,
@@ -143,17 +144,6 @@ function summarizeText(value: string | undefined, maxLength: number = 220): stri
   return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
-function isRateLimitMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("rate limit exceeded") ||
-    normalized.includes("usage limit exceeded") ||
-    normalized.includes("ratelimited") ||
-    normalized.includes('"code":"ratelimited"') ||
-    normalized.includes('"type":"ratelimited"')
-  );
-}
-
 function isAuthMessage(message: string): boolean {
   const normalized = message.toLowerCase();
   return (
@@ -238,12 +228,17 @@ async function probeLinear(apiKey: string | undefined): Promise<ProbeResult> {
 
     const body = await response.text();
     const errorSummary = errorSummaryFromBody(body);
+    const structuredResponse = getLinearApiErrorInfoFromResponse({
+      status: response.status,
+      headers: response.headers,
+      body,
+    });
 
     if (!response.ok) {
       const kind =
         response.status === 401 || response.status === 403
           ? "auth_error"
-          : response.status === 429 || isRateLimitMessage(body)
+          : structuredResponse.rateLimit
             ? "rate_limit"
             : "http_error";
       return {
@@ -279,10 +274,16 @@ async function probeLinear(apiKey: string | undefined): Promise<ProbeResult> {
 
     if (graphqlMessages.length > 0) {
       const joined = graphqlMessages.join(" | ");
+      const structuredGraphql = getLinearApiErrorInfoFromResponse({
+        status: response.status,
+        headers: response.headers,
+        body,
+        errors: parsed?.errors,
+      });
       return {
         kind: isAuthMessage(joined)
           ? "auth_error"
-          : isRateLimitMessage(joined)
+          : structuredGraphql.rateLimit
             ? "rate_limit"
             : "graphql_error",
         message: "Linear probe returned GraphQL errors.",
