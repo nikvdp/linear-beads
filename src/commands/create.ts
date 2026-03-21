@@ -73,6 +73,15 @@ type WaitForCreateResolutionResult =
   | { status: "timeout"; issue: Issue | null }
   | { status: "missing" };
 
+type CreateWaitFailurePayload = {
+  error: "wait_unavailable" | "wait_paused" | "wait_timeout" | "wait_missing";
+  message: string;
+  local_id?: string;
+  timeout_ms?: number;
+  pause_notice?: string;
+  issue?: Issue | null;
+};
+
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
@@ -81,6 +90,20 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 
 function getCreateWaitTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   return parsePositiveInt(env.LB_CREATE_WAIT_TIMEOUT_MS, CREATE_WAIT_DEFAULT_TIMEOUT_MS);
+}
+
+function resolveCreateWaitTimeoutMs(optionValue: string | undefined): number {
+  if (!optionValue) {
+    return getCreateWaitTimeoutMs();
+  }
+
+  const parsed = Number.parseInt(optionValue, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    outputError("--wait-timeout-ms must be a positive integer.");
+    process.exit(1);
+  }
+
+  return parsed;
 }
 
 function getCreateWaitPauseNotice(): string | null {
@@ -131,15 +154,50 @@ export async function waitForCreateResolution(
   return { status: "timeout", issue: getCachedIssue(localId) };
 }
 
-function emitCreateWaitFailure(result: WaitForCreateResolutionResult, localId: string): never {
+function emitJsonCreateWaitFailure(payload: CreateWaitFailurePayload): never {
+  outputError(JSON.stringify(payload, null, 2));
+  process.exit(1);
+}
+
+function emitCreateWaitFailure(
+  result: WaitForCreateResolutionResult,
+  localId: string,
+  options: { json?: boolean; timeoutMs: number }
+): never {
   if (result.status === "paused") {
+    if (options.json) {
+      emitJsonCreateWaitFailure({
+        error: "wait_paused",
+        message: `Waiting for a remote issue ID stopped. The issue is still queued locally as ${localId}.`,
+        local_id: localId,
+        pause_notice: result.pauseNotice,
+        issue: result.issue,
+      });
+    }
     outputError(result.pauseNotice);
     outputError(`Waiting for a remote issue ID stopped. The issue is still queued locally as ${localId}.`);
   } else if (result.status === "timeout") {
+    if (options.json) {
+      emitJsonCreateWaitFailure({
+        error: "wait_timeout",
+        message: `Timed out waiting for a remote issue ID. The issue is still queued locally as ${localId}.`,
+        local_id: localId,
+        timeout_ms: options.timeoutMs,
+        issue: result.issue,
+      });
+    }
     outputError(
       `Timed out waiting for a remote issue ID. The issue is still queued locally as ${localId}.`
     );
   } else {
+    if (options.json) {
+      emitJsonCreateWaitFailure({
+        error: "wait_missing",
+        message: `Created issue ${localId}, but it disappeared from the local cache while waiting.`,
+        local_id: localId,
+        timeout_ms: options.timeoutMs,
+      });
+    }
     outputError(`Created issue ${localId}, but it disappeared from the local cache while waiting.`);
   }
   process.exit(1);
@@ -243,10 +301,12 @@ export const createCommand = new Command("create")
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Sync immediately (block on network)")
   .option("--wait", "Wait for a resolved remote issue ID after queueing locally")
+  .option("--wait-timeout-ms <ms>", "Maximum time to wait for remote ID resolution")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
   .action(async (title: string, options) => {
     try {
+      const waitTimeoutMs = resolveCreateWaitTimeoutMs(options.waitTimeoutMs as string | undefined);
       const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
       if (options.style && !requestedStyle) {
         console.error(
@@ -395,6 +455,13 @@ export const createCommand = new Command("create")
       // Local-only mode: create locally without Linear
       if (isLocalOnly()) {
         if (options.wait) {
+          if (options.json) {
+            emitJsonCreateWaitFailure({
+              error: "wait_unavailable",
+              message: "--wait requires remote sync and is unavailable in local-only mode.",
+              timeout_ms: waitTimeoutMs,
+            });
+          }
           outputError("--wait requires remote sync and is unavailable in local-only mode.");
           process.exit(1);
         }
@@ -659,9 +726,12 @@ export const createCommand = new Command("create")
       ensureOutboxProcessed();
 
       if (options.wait) {
-        const result = await waitForCreateResolution(localId);
+        const result = await waitForCreateResolution(localId, { timeoutMs: waitTimeoutMs });
         if (result.status !== "resolved") {
-          emitCreateWaitFailure(result, localId);
+          emitCreateWaitFailure(result, localId, {
+            json: options.json,
+            timeoutMs: waitTimeoutMs,
+          });
         }
 
         if (options.json) {
