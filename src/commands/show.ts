@@ -221,7 +221,10 @@ export const showCommand = new Command("show")
 
         output(
           style === "beads"
-            ? formatIssueHumanBeads(issue, issueDisplayId, { isBlocked: blockedIds.has(issue.id) })
+            ? formatIssueHumanBeads(issue, issueDisplayId, {
+                isBlocked: blockedIds.has(issue.id),
+                includeMetadata: true,
+              })
             : formatIssueHuman(issue, issueDisplayId)
         );
 

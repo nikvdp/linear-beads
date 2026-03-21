@@ -174,6 +174,11 @@ export interface BeadsRelationSectionOptions {
   emptyLabel?: string;
 }
 
+export interface BeadsSingleIssueOptions {
+  isBlocked?: boolean;
+  includeMetadata?: boolean;
+}
+
 /**
  * Format issue for human-readable output
  */
@@ -296,7 +301,7 @@ export function formatIssueRelationSectionBeads(
 export function formatIssueHumanBeads(
   issue: Issue,
   displayId?: string,
-  options?: { isBlocked?: boolean }
+  options?: BeadsSingleIssueOptions
 ): string {
   const plainIssue = issueWithPlainDescription(issue);
   const mediaCount = listMediaItemsForIssue(plainIssue.local_id || plainIssue.id).length;
@@ -305,6 +310,11 @@ export function formatIssueHumanBeads(
   });
   const lines: string[] = [formatIssueSummaryBeads(summary)];
 
+  if (options?.includeMetadata) {
+    const blockedSuffix = options.isBlocked ? " (blocked)" : "";
+    lines.push(`  Status: ${plainIssue.status}${blockedSuffix}`);
+    lines.push(`  Priority: ${PRIORITY_LABELS[plainIssue.priority] || plainIssue.priority}`);
+  }
   if (plainIssue.issue_type) {
     lines.push(`  Type: ${plainIssue.issue_type}`);
   }
