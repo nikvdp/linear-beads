@@ -1186,6 +1186,34 @@ describe("Local-only Mode", () => {
       expect(result[0].priority).toBe(0);
     });
 
+    test("rejects self-referential update relations across LOCAL and LIN aliases", async () => {
+      const created = await lbLocalJson<Array<{ id: string }>>("create", "Self update guard");
+
+      const seedAlias = `
+        import { Database } from "bun:sqlite";
+        const db = new Database(".lb/cache.db");
+        db.run("UPDATE issues SET linear_identifier = ? WHERE local_id = ?", ["LIN-7001", process.argv[1]]);
+        db.close();
+      `;
+      const seeded = await evalLocal(seedAlias, [created[0].id]);
+      expect(seeded.exitCode).toBe(0);
+
+      const related = await lbLocal("update", created[0].id, "--related", "LIN-7001");
+      expect(related.exitCode).toBe(1);
+      expect(related.stderr).toContain("cannot be related to itself");
+
+      const parent = await lbLocal("update", created[0].id, "--parent", "LIN-7001");
+      expect(parent.exitCode).toBe(1);
+      expect(parent.stderr).toContain("cannot be its own parent");
+
+      const shown = await lbLocalJson<Array<{ related?: string[]; parent?: string | null }>>(
+        "show",
+        created[0].id
+      );
+      expect(shown[0].related || []).toEqual([]);
+      expect(shown[0].parent ?? null).toBeNull();
+    });
+
     test("should auto-heal accidental escaped newlines on update and warn loudly", async () => {
       const created = await lbLocalJson<Array<{ id: string }>>("create", "Escaped newline update");
 
@@ -1342,6 +1370,34 @@ describe("Local-only Mode", () => {
       // Verify via show - a should be blocked by b
       const show = await lbLocalJson<Array<{ blocked_by?: string[] }>>("show", a[0].id);
       expect(show[0].blocked_by).toContain(b[0].id);
+    });
+
+    test("rejects self-referential dep add requests across LOCAL and LIN aliases", async () => {
+      const created = await lbLocalJson<Array<{ id: string }>>("create", "Self dep guard");
+
+      const seedAlias = `
+        import { Database } from "bun:sqlite";
+        const db = new Database(".lb/cache.db");
+        db.run("UPDATE issues SET linear_identifier = ? WHERE local_id = ?", ["LIN-7002", process.argv[1]]);
+        db.close();
+      `;
+      const seeded = await evalLocal(seedAlias, [created[0].id]);
+      expect(seeded.exitCode).toBe(0);
+
+      const blockedBy = await lbLocal("dep", "add", created[0].id, "--blocked-by", "LIN-7002");
+      expect(blockedBy.exitCode).toBe(1);
+      expect(blockedBy.stderr).toContain("cannot be blocked by itself");
+
+      const parent = await lbLocal("dep", "add", created[0].id, "--parent", "LIN-7002");
+      expect(parent.exitCode).toBe(1);
+      expect(parent.stderr).toContain("cannot be its own parent");
+
+      const shown = await lbLocalJson<
+        Array<{ blocked_by?: string[]; parent?: string | null; blocks?: string[] }>
+      >("show", created[0].id);
+      expect(shown[0].blocked_by || []).toEqual([]);
+      expect(shown[0].blocks || []).toEqual([]);
+      expect(shown[0].parent ?? null).toBeNull();
     });
 
     test("should remove dependency", async () => {

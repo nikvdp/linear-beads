@@ -6,6 +6,7 @@ import { join } from "path";
 const tempDirs: string[] = [];
 const DATABASE_UTILS_PATH = join(import.meta.dir, "..", "src", "utils", "database.ts");
 const OUTBOX_PROCESSOR_PATH = join(import.meta.dir, "..", "src", "utils", "outbox-processor.ts");
+const CLI_PATH = join(import.meta.dir, "..", "src", "cli.ts");
 
 afterAll(() => {
   for (const dir of tempDirs) {
@@ -459,6 +460,8 @@ async function runEval(
           mapping: getIssueIdMapping(localId),
           displayId: getDisplayId(localId),
           siblingDisplayId: getDisplayId(siblingLocalId),
+          localId,
+          siblingLocalId,
         })
       );
       process.exit(0);
@@ -510,6 +513,27 @@ async function runEval(
   `;
 
   const proc = Bun.spawn(["bun", "--eval", script, mode], {
+    cwd,
+    env: {
+      ...process.env,
+      LB_TEAM_KEY: "",
+      LINEAR_API_KEY: "",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+  return { stdout, stderr, exitCode };
+}
+
+async function runCli(
+  cwd: string,
+  ...args: string[]
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn(["bun", "run", CLI_PATH, ...args], {
     cwd,
     env: {
       ...process.env,
@@ -792,11 +816,8 @@ describe("outbox create replay protection", () => {
     expect(payload.result.failed).toBe(0);
     expect(payload.result.deferred).toBe(0);
     expect(payload.result.remoteProcessed).toBe(0);
-    expect(payload.remaining).toBe(1);
-    expect(payload.pending[0]?.operation).toBe("create_relation");
-    expect(payload.pending[0]?.payload?.type).toBe("blocks");
-    expect(payload.pending[0]?.payload?.issueId).toBe("LIN-9006");
-    expect(payload.pending[0]?.payload?.relatedIssueId).toBe("LIN-9006");
+    expect(payload.remaining).toBe(0);
+    expect(payload.pending).toEqual([]);
     expect(payload.mapping).toBe("LIN-9006");
     expect(payload.displayId).toBe("LIN-9006");
     expect(payload.row?.linear_identifier).toBe("LIN-9006");
@@ -972,5 +993,31 @@ describe("outbox create replay protection", () => {
         (row) => row.type === "blocks" && row.issue_id !== row.depends_on_id
       )
     ).toBe(true);
+  });
+
+  test("show and dep tree stop surfacing fake self-block output after healing", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "self_referential_pending_sync_state");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      displayId: string;
+      localId: string;
+    };
+
+    const shown = await runCli(repoDir, "show", payload.localId);
+    expect(shown.exitCode).toBe(0);
+    expect(shown.stderr).toBe("");
+    expect(shown.stdout).toContain(payload.displayId);
+    expect(shown.stdout).toContain("LIN-5616");
+    expect(shown.stdout).not.toContain(`${payload.displayId} (circular)`);
+
+    const tree = await runCli(repoDir, "dep", "tree", payload.localId);
+    expect(tree.exitCode).toBe(0);
+    expect(tree.stderr).toBe("");
+    expect(tree.stdout).toContain(payload.displayId);
+    expect(tree.stdout).not.toContain("(circular)");
   });
 });
