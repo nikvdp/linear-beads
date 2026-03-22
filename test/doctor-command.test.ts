@@ -96,7 +96,7 @@ async function runDoctorWithMockedFetch(
       throw new Error("Unexpected fetch target: " + url);
     };
 
-    process.argv = ["bun", ${JSON.stringify(CLI_PATH)}, "doctor", "--json"];
+    process.argv = ["bun", "doctor", "--json"];
     await import(${JSON.stringify(CLI_PATH)});
   `;
 
