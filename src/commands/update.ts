@@ -11,6 +11,7 @@ import {
   deleteDependency,
   getDisplayId,
   resolveIssueId,
+  isSameCanonicalIssue,
   isLocalId,
   isPlaceholderIssueInput,
   getDatabase,
@@ -120,6 +121,20 @@ function assertConcreteRelationTarget(value: string, flagName: string): void {
     outputError(`${flagName} requires a real issue ID, not '${value}'.`);
     process.exit(1);
   }
+}
+
+function assertNotSelfReferentialRelation(
+  issueId: string,
+  targetId: string,
+  relationDescription: string
+): void {
+  if (!isSameCanonicalIssue(issueId, targetId)) {
+    return;
+  }
+  outputError(
+    `Skipped invalid relation: ${getDisplayId(issueId)} cannot ${relationDescription} itself.`
+  );
+  process.exit(1);
 }
 
 function applyLocalStatusMetadata(
@@ -282,6 +297,9 @@ export const updateCommand = new Command("update")
       const normalizedParentInput = normalizeOptionalParentInput(
         options.parent as string | undefined
       );
+      const resolvedParent = normalizedParentInput
+        ? resolveIssueId(normalizedParentInput)
+        : undefined;
 
       const resolvedDeps = allDeps.map((dep) => ({
         ...dep,
@@ -304,6 +322,19 @@ export const updateCommand = new Command("update")
         process.exit(1);
       }
 
+      if (resolvedParent) {
+        assertNotSelfReferentialRelation(resolvedId, resolvedParent, "be its own parent");
+      }
+      for (const dep of resolvedDeps) {
+        const relationDescription =
+          dep.type === "blocked-by"
+            ? "be blocked by"
+            : dep.type === "blocks"
+              ? "block"
+              : "be related to";
+        assertNotSelfReferentialRelation(resolvedId, dep.targetId, relationDescription);
+      }
+
       // Local-only mode: update cache directly
       if (isLocalOnly()) {
         const issue = getCachedIssue(resolvedId);
@@ -321,7 +352,7 @@ export const updateCommand = new Command("update")
         if (normalizedParentInput) {
           cacheDependency({
             issue_id: resolvedId,
-            depends_on_id: resolveIssueId(normalizedParentInput),
+            depends_on_id: resolvedParent!,
             type: "parent-child",
             created_at: now,
             created_by: "local",
@@ -419,7 +450,7 @@ export const updateCommand = new Command("update")
           // Handle parent
           if (normalizedParentInput) {
             try {
-              const parentId = resolveIssueId(normalizedParentInput);
+              const parentId = resolvedParent!;
               if (isLocalId(parentId)) {
                 outputError(`Parent not synced yet: ${normalizedParentInput}`);
               } else {
@@ -514,7 +545,7 @@ export const updateCommand = new Command("update")
       if (options.assign) payload.assign = options.assign;
       if (options.unassign) payload.unassign = true;
       if (depsString) payload.deps = depsString;
-      if (normalizedParentInput) payload.parentId = resolveIssueId(normalizedParentInput);
+      if (resolvedParent) payload.parentId = resolvedParent;
       if (options.unparent) payload.parentId = null;
       // Remove assigneeId from payload - worker will resolve it
       delete payload.assigneeId;
@@ -544,7 +575,7 @@ export const updateCommand = new Command("update")
         if (normalizedParentInput) {
           cacheDependency({
             issue_id: resolvedId,
-            depends_on_id: resolveIssueId(normalizedParentInput),
+            depends_on_id: resolvedParent!,
             type: "parent-child",
             created_at: now,
             created_by: "local",

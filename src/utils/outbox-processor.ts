@@ -84,6 +84,9 @@ function queueRelationRetry(
   relatedIssueId: string,
   type: "blocks" | "related"
 ): void {
+  if (isSameCanonicalIssue(issueId, relatedIssueId)) {
+    return;
+  }
   queueOutboxItem("create_relation", {
     issueId,
     relatedIssueId,

@@ -15,6 +15,7 @@ import {
   getDisplayId,
   reassignMediaItemsToIssue,
   resolveIssueId,
+  isSameCanonicalIssue,
   isLocalId,
   isPlaceholderIssueInput,
   runWithBusyRetry,
@@ -255,6 +256,13 @@ function assertConcreteRelationTarget(value: string, flagName: string): void {
   }
 }
 
+function filterSelfReferentialDeps(
+  issueId: string,
+  deps: Array<{ type: string; targetId: string }>
+): Array<{ type: string; targetId: string }> {
+  return deps.filter((dep) => !isSameCanonicalIssue(issueId, dep.targetId));
+}
+
 function reasonLabel(reason: string): string {
   if (reason === "exact_title") return "exact title";
   if (reason === "normalized_title") return "normalized title";
@@ -468,6 +476,7 @@ export const createCommand = new Command("create")
         const localId = generateLocalId();
         const syncKey = generateIssueSyncKey();
         const now = new Date().toISOString();
+        const safeResolvedDeps = filterSelfReferentialDeps(localId, resolvedDeps);
 
         const issue: Issue = {
           id: localId,
@@ -495,7 +504,7 @@ export const createCommand = new Command("create")
         }
 
         // Handle deps
-        for (const dep of resolvedDeps) {
+        for (const dep of safeResolvedDeps) {
           if (dep.type === "blocked-by") {
             cacheDependency({
               issue_id: dep.targetId,
@@ -650,6 +659,7 @@ export const createCommand = new Command("create")
       const localId = generateLocalId();
       const syncKey = generateIssueSyncKey();
       const now = new Date().toISOString();
+      const safeResolvedDeps = filterSelfReferentialDeps(localId, resolvedDeps);
 
       const issue: Issue = {
         id: localId,
@@ -664,7 +674,7 @@ export const createCommand = new Command("create")
       };
 
       // Convert allDeps to string format for queue
-      const depsString = resolvedDeps.map((d) => `${d.type}:${d.targetId}`).join(",");
+      const depsString = safeResolvedDeps.map((d) => `${d.type}:${d.targetId}`).join(",");
 
       const payload: Record<string, unknown> = {
         title,
@@ -695,7 +705,7 @@ export const createCommand = new Command("create")
           });
         }
 
-        for (const dep of resolvedDeps) {
+        for (const dep of safeResolvedDeps) {
           if (dep.type === "blocked-by") {
             cacheDependency({
               issue_id: dep.targetId,

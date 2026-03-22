@@ -17,6 +17,7 @@ import {
   resolveIssueId,
   isLocalId,
   isPlaceholderIssueInput,
+  isSameCanonicalIssue,
   resolveIssueLocalId,
 } from "../utils/database.js";
 import {
@@ -91,6 +92,19 @@ function requireConcreteIssueInput(value: string, flagName: string): string {
     throw new Error(`${flagName} requires a real issue ID, not '${value}'.`);
   }
   return value;
+}
+
+function assertNotSelfReferentialRelation(
+  issueId: string,
+  targetId: string,
+  relationDescription: string
+): void {
+  if (!isSameCanonicalIssue(issueId, targetId)) {
+    return;
+  }
+  throw new Error(
+    `Skipped invalid relation: ${getDisplayId(issueId)} cannot ${relationDescription} itself.`
+  );
 }
 
 function parseLimitOption(value: unknown): number | undefined {
@@ -207,6 +221,7 @@ const addCommand = new Command("add")
         const targetId = resolveIssueLocalId(
           requireConcreteIssueInput(options.blocks, "--blocks")
         );
+        assertNotSelfReferentialRelation(resolvedIssueId, targetId, "block");
         const dep: Dependency = {
           issue_id: resolvedIssueId,
           depends_on_id: targetId,
@@ -244,6 +259,7 @@ const addCommand = new Command("add")
         const targetId = resolveIssueLocalId(
           requireConcreteIssueInput(options.blockedBy, "--blocked-by")
         );
+        assertNotSelfReferentialRelation(resolvedIssueId, targetId, "be blocked by");
         const dep: Dependency = {
           issue_id: targetId,
           depends_on_id: resolvedIssueId,
@@ -280,6 +296,7 @@ const addCommand = new Command("add")
         const targetId = resolveIssueLocalId(
           requireConcreteIssueInput(options.related, "--related")
         );
+        assertNotSelfReferentialRelation(resolvedIssueId, targetId, "be related to");
         if (hasRelatedDependencyBetween(resolvedIssueId, targetId)) {
           output(`Already related: ${getDisplayId(resolvedIssueId)} and ${getDisplayId(targetId)}`);
           return;
@@ -318,6 +335,7 @@ const addCommand = new Command("add")
 
       if (options.parent) {
         const parentId = resolveIssueLocalId(requireConcreteIssueInput(options.parent, "--parent"));
+        assertNotSelfReferentialRelation(resolvedIssueId, parentId, "be its own parent");
         const dep: Dependency = {
           issue_id: resolvedIssueId,
           depends_on_id: parentId,

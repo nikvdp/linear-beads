@@ -214,6 +214,10 @@ function canonicalizeDependencyPair(
   return [dependsOnId, issueId];
 }
 
+export function isSameCanonicalIssue(left: string, right: string): boolean {
+  return resolveIssueLocalId(left) === resolveIssueLocalId(right);
+}
+
 /**
  * Get database singleton, initializing schema if needed
  */
@@ -1618,6 +1622,9 @@ export function cacheDependency(dep: Dependency): void {
   const db = getDatabase();
   const resolvedIssueId = resolveIssueLocalId(dep.issue_id);
   const resolvedDependsOnId = resolveIssueLocalId(dep.depends_on_id);
+  if (resolvedIssueId === resolvedDependsOnId) {
+    return;
+  }
   const [issueId, dependsOnId] = canonicalizeDependencyPair(
     resolvedIssueId,
     resolvedDependsOnId,
@@ -2934,6 +2941,8 @@ export function replaceIssueId(localId: string, linearIdentifier: string, linear
       );
       db.run("DELETE FROM dependencies WHERE depends_on_id = ?", [linearIdentifier]);
     }
+
+    db.run("DELETE FROM dependencies WHERE issue_id = depends_on_id");
 
     db.run(
       `
