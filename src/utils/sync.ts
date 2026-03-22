@@ -14,6 +14,7 @@ import {
   repairCreateOutboxForUnsyncedIssues,
   updateLastSyncContext,
   updateIssueUpdateWatermarkFromIssues,
+  canonicalizeDependencyAliases,
 } from "./database.js";
 import {
   fetchIssues,
@@ -268,6 +269,8 @@ export async function incrementalSync(teamKey?: string): Promise<{
     }
   }
 
+  canonicalizeDependencyAliases();
+
   // Export to JSONL
   await measureSyncPhase("incremental.export", async () => {
     exportToJsonl();
@@ -324,6 +327,8 @@ export async function fullSyncPaginated(teamKey?: string): Promise<{
     }
   }
 
+  canonicalizeDependencyAliases();
+
   // Export to JSONL
   await measureSyncPhase("full.export", async () => {
     exportToJsonl();
@@ -375,6 +380,8 @@ export async function fullSync(teamKey?: string): Promise<{
       }
     }
   }
+
+  canonicalizeDependencyAliases();
 
   // Export to JSONL
   await measureSyncPhase("legacyFull.export", async () => {

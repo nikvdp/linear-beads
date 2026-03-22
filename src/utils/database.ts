@@ -1757,6 +1757,72 @@ export function repairSelfReferentialDependencies(): number {
   return idsToDelete.length;
 }
 
+export function canonicalizeDependencyAliases(): number {
+  const db = getDatabase();
+  const rows = runWithBusyRetry(
+    () =>
+      db.query("SELECT id, issue_id, depends_on_id, type, created_at, created_by FROM dependencies").all() as Array<{
+        id: number;
+        issue_id: string;
+        depends_on_id: string;
+        type: Dependency["type"];
+        created_at: string;
+        created_by: string;
+      }>
+  );
+
+  let changed = 0;
+
+  runWithBusyRetry(() => {
+    const insertRow = db.query(
+      `
+        INSERT OR IGNORE INTO dependencies
+        (issue_id, depends_on_id, type, created_at, created_by)
+        VALUES (?, ?, ?, ?, ?)
+      `
+    );
+    const deleteRow = db.query("DELETE FROM dependencies WHERE id = ?");
+
+    for (const row of rows) {
+      const resolvedIssueId = resolveIssueLocalId(row.issue_id);
+      const resolvedDependsOnId = resolveIssueLocalId(row.depends_on_id);
+      const [canonicalIssueId, canonicalDependsOnId] = canonicalizeDependencyPair(
+        resolvedIssueId,
+        resolvedDependsOnId,
+        row.type
+      );
+
+      if (canonicalIssueId === canonicalDependsOnId) {
+        deleteRow.run(row.id);
+        changed++;
+        continue;
+      }
+
+      if (
+        canonicalIssueId === row.issue_id &&
+        canonicalDependsOnId === row.depends_on_id
+      ) {
+        continue;
+      }
+
+      insertRow.run(
+        canonicalIssueId,
+        canonicalDependsOnId,
+        row.type,
+        row.created_at,
+        row.created_by
+      );
+      deleteRow.run(row.id);
+      changed++;
+    }
+  });
+
+  if (changed > 0) {
+    requestJsonlExport();
+  }
+  return changed;
+}
+
 /**
  * Get dependencies for an issue (outgoing: this issue depends on others)
  */
