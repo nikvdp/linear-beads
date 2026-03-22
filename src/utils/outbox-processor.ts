@@ -83,6 +83,15 @@ function queueRelationRetry(
   });
 }
 
+function payloadReferencesMedia(payload: Record<string, unknown>): boolean {
+  for (const value of Object.values(payload)) {
+    if (typeof value === "string" && value.includes("lb-media:")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isPlaceholderIssueRef(value: string): boolean {
   return isPlaceholderIssueInput(value);
 }
@@ -641,12 +650,17 @@ export function operationRequiresTeamId(operation: OutboxItem["operation"]): boo
   }
 }
 
-function getOutboxItemEndpointNames(item: OutboxItem): string[] {
+export function getOutboxItemEndpointNames(item: OutboxItem): string[] {
+  const payload = item.payload as Record<string, unknown>;
   switch (item.operation) {
     case "create":
-      return ["issueCreate", "issues", "issue"];
+      return payloadReferencesMedia(payload)
+        ? ["issueCreate", "issues", "issue", "uploads"]
+        : ["issueCreate", "issues", "issue"];
     case "update":
-      return ["issueUpdate", "issue", "issueRelationCreate"];
+      return payloadReferencesMedia(payload)
+        ? ["issueUpdate", "issue", "issueRelationCreate", "uploads"]
+        : ["issueUpdate", "issue", "issueRelationCreate"];
     case "close":
       return ["issueUpdate", "issue", "commentCreate"];
     case "delete":

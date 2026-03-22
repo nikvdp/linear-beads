@@ -467,10 +467,6 @@ function pauseAppliesToEndpoints(
   pause: StoredRemoteSyncPauseRecord | ActiveRemoteSyncPause,
   endpointNames: string[]
 ): boolean {
-  if (pause.kind === "network") {
-    return true;
-  }
-
   switch (pause.scope.kind) {
     case "global":
     case "complexity":
@@ -653,6 +649,18 @@ function extractEndpointNameFromMessage(message: string): string | undefined {
   const endpointHeader = extractHeaderValueFromMessage(message, "x-ratelimit-endpoint-name");
   if (endpointHeader) {
     return normalizeEndpointName(endpointHeader);
+  }
+
+  const explicitEndpointMatch = message.match(
+    /["']?endpointname["']?\s*[:=]\s*["']?([A-Za-z0-9_-]+)/i
+  );
+  const explicitEndpoint = normalizeEndpointName(explicitEndpointMatch?.[1]);
+  if (explicitEndpoint) {
+    return explicitEndpoint;
+  }
+
+  if (message.toLowerCase().includes("uploads.linear.app")) {
+    return "uploads";
   }
 
   const pathMatch = message.match(/["']path["']\s*:\s*\[\s*["']([A-Za-z][A-Za-z0-9_]*)["']/i);
@@ -890,7 +898,7 @@ function buildPauseRecord(error: unknown, nowMs: number): ActiveRemoteSyncPause 
   if (info.networkError) {
     return {
       kind: "network",
-      scope: { kind: "global" },
+      scope: derivePauseScope(info),
       until: new Date(nowMs + DEFAULT_NETWORK_PAUSE_MS).toISOString(),
       backgroundUntil: new Date(nowMs + DEFAULT_NETWORK_PAUSE_MS).toISOString(),
       retryAfterMs: DEFAULT_NETWORK_PAUSE_MS,

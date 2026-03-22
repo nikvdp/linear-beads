@@ -801,6 +801,11 @@ async function ensureLinearMediaRemoteUrl(
     method: "PUT",
     headers,
     body: file,
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Linear media upload network error for '${mediaId}' (endpointName=uploads, host=${LINEAR_UPLOAD_HOST}): ${message}`
+    );
   });
   if (!uploadResponse.ok) {
     throw new Error(
