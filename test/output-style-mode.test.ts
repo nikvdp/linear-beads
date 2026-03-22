@@ -100,6 +100,26 @@ describe("human output style modes", () => {
     expect(ready.stdout).toContain("Total: 2 issues (1 open, 1 in progress)");
   });
 
+  test("ready --style beads excludes in-progress descendants of backlog parents", async () => {
+    const repoDir = createLocalRepo();
+    const parent = await createIssue(repoDir, "Backlog umbrella");
+    const activeChild = await createIssue(repoDir, "Active child", ["--parent", parent.id]);
+    const visibleReady = await createIssue(repoDir, "Visible ready issue");
+
+    const backlogParent = await runCli(repoDir, ["update", parent.id, "--status", "backlog"]);
+    expect(backlogParent.exitCode).toBe(0);
+
+    const active = await runCli(repoDir, ["update", activeChild.id, "--status", "in_progress"]);
+    expect(active.exitCode).toBe(0);
+
+    const ready = await runCli(repoDir, ["ready", "--all", "--style", "beads"]);
+    expect(ready.exitCode).toBe(0);
+
+    expect(ready.stdout).not.toContain(`◐ ${activeChild.id} ● P2 Active child`);
+    expect(ready.stdout).toContain(`○ ${visibleReady.id} ● P2 Visible ready issue`);
+    expect(ready.stdout).toContain("Total: 1 issues (1 open)");
+  });
+
   test("lb style persists the repo default and command flags still override it", async () => {
     const repoDir = createLocalRepo();
     const issue = await createIssue(repoDir, "Styled issue");
