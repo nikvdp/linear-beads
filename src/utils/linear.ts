@@ -621,7 +621,11 @@ function inferMediaKind(input: {
   return input.fallback || "file";
 }
 
-function isLinearUploadUrl(rawUrl: string): boolean {
+export function getLinearUploadProbeUrl(): string {
+  return `https://${LINEAR_UPLOAD_HOST}/`;
+}
+
+export function isLinearUploadUrl(rawUrl: string): boolean {
   try {
     const parsed = new URL(stripMarkdownUrlWrapper(rawUrl));
     return parsed.hostname.toLowerCase() === LINEAR_UPLOAD_HOST;

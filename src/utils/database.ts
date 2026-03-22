@@ -402,7 +402,8 @@ function initSchema(db: Database, dbPath: string): void {
       processing INTEGER NOT NULL DEFAULT 0,
       processing_started_at TEXT,
       retry_count INTEGER NOT NULL DEFAULT 0,
-      last_error TEXT
+      last_error TEXT,
+      last_error_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS issue_id_map (
@@ -713,6 +714,17 @@ function initSchema(db: Database, dbPath: string): void {
     );
 
     db.exec("PRAGMA user_version = 10");
+  }
+
+  if (currentVersion < 11) {
+    addColumnIfMissing(
+      db,
+      "outbox",
+      "last_error_at",
+      "ALTER TABLE outbox ADD COLUMN last_error_at TEXT"
+    );
+
+    db.exec("PRAGMA user_version = 11");
   }
 
   ensureDependencyAliasIntegrity(db);
@@ -2141,6 +2153,41 @@ export function getPendingOutboxItems(): OutboxItem[] {
   }));
 }
 
+export type OutboxDiagnosticItem = OutboxItem & {
+  next_attempt_at?: string;
+  processing: boolean;
+  processing_started_at?: string;
+  last_error_at?: string;
+};
+
+export function getOutboxDiagnosticItems(): OutboxDiagnosticItem[] {
+  const db = getDatabase();
+  const rows = db
+    .query(
+      `
+      SELECT *
+      FROM outbox
+      ORDER BY id ASC
+    `
+    )
+    .all() as Array<Record<string, unknown>>;
+
+  return rows.map((row) => ({
+    id: row.id as number,
+    operation: row.operation as OutboxItem["operation"],
+    payload: JSON.parse(row.payload as string),
+    local_id: (row.local_id as string | null) || undefined,
+    remote_issue_identifier: (row.remote_issue_identifier as string | null) || undefined,
+    created_at: row.created_at as string,
+    retry_count: row.retry_count as number,
+    last_error: (row.last_error as string | null) || undefined,
+    last_error_at: (row.last_error_at as string | null) || undefined,
+    next_attempt_at: (row.next_attempt_at as string | null) || undefined,
+    processing: Number(row.processing || 0) === 1,
+    processing_started_at: (row.processing_started_at as string | null) || undefined,
+  }));
+}
+
 export function markOutboxCreateRemoteIssueIdentifier(
   id: number,
   remoteIssueIdentifier: string
@@ -2279,6 +2326,7 @@ export function updateOutboxItemError(
       : 1 + Math.random() * 0.1;
   const backoffMs = Math.max(1000, Math.round(baseBackoffMs * jitterMultiplier));
   const nextAttemptAt = new Date(Date.now() + backoffMs).toISOString();
+  const lastErrorAt = new Date().toISOString();
 
   runWithBusyRetry(() => {
     db.run(
@@ -2286,12 +2334,13 @@ export function updateOutboxItemError(
     UPDATE outbox 
     SET retry_count = ?,
         last_error = ?,
+        last_error_at = ?,
         next_attempt_at = ?,
         processing = 0,
         processing_started_at = NULL
     WHERE id = ?
   `,
-      [nextRetryCount, error, nextAttemptAt, id]
+      [nextRetryCount, error, lastErrorAt, nextAttemptAt, id]
     );
   });
 }

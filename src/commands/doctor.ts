@@ -13,13 +13,14 @@ import {
   reloadConfig,
   writeGlobalConfig,
 } from "../utils/config.js";
-import { getPendingOutboxItems } from "../utils/database.js";
+import { getOutboxDiagnosticItems, getPendingOutboxItems, listMediaItemsForIssue } from "../utils/database.js";
 import {
   getLinearApiErrorInfoFromResponse,
   getLinearRequestPolicy,
   linearFetchWithRetry,
   resetGraphQLClient,
 } from "../utils/graphql.js";
+import { getLinearUploadProbeUrl } from "../utils/linear.js";
 import { output } from "../utils/output.js";
 import {
   getPidFilePath,
@@ -66,6 +67,21 @@ type ProbeResult =
       message: string;
       httpStatus?: number;
       errorSummary?: string;
+    };
+
+type EndpointProbeResult =
+  | {
+      status: "ok";
+      message: string;
+      httpStatus: number;
+      url: string;
+    }
+  | {
+      status: "network_error" | "http_error";
+      message: string;
+      httpStatus?: number;
+      errorSummary?: string;
+      url: string;
     };
 
 function resolveConfigFile(primaryPath: string): ConfigFileInfo {
@@ -325,6 +341,89 @@ async function probeLinear(apiKey: string | undefined): Promise<ProbeResult> {
   }
 }
 
+async function probeLinearUploadHost(): Promise<EndpointProbeResult> {
+  const url = getLinearUploadProbeUrl();
+  try {
+    const policy = getLinearRequestPolicy();
+    const response = await linearFetchWithRetry(
+      url,
+      {
+        method: "GET",
+      },
+      {
+        policy: {
+          ...policy,
+          timeoutMs: Math.min(policy.timeoutMs, 5000),
+          maxRetries: 0,
+        },
+      }
+    );
+
+    return {
+      status: "ok",
+      message: "Linear upload host is reachable.",
+      httpStatus: response.status,
+      url,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      status: isNetworkErrorMessage(message) ? "network_error" : "http_error",
+      message: isNetworkErrorMessage(message)
+        ? "Linear upload host probe failed with a network-level error."
+        : "Linear upload host probe failed before a usable response was returned.",
+      errorSummary: summarizeText(message),
+      url,
+    };
+  }
+}
+
+function getOutboxSubject(item: {
+  local_id?: string;
+  remote_issue_identifier?: string;
+  operation: string;
+  id: number;
+}): string {
+  return item.local_id || item.remote_issue_identifier || `${item.operation}#${item.id}`;
+}
+
+function payloadUsesMedia(payload: Record<string, unknown>): boolean {
+  for (const value of Object.values(payload)) {
+    if (typeof value === "string" && value.includes("lb-media:")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function summarizeOutboxFailureContext(item: {
+  id: number;
+  operation: string;
+  local_id?: string;
+  payload: Record<string, unknown>;
+}): string[] {
+  const notes: string[] = [];
+  if (payloadUsesMedia(item.payload)) {
+    notes.push("description references cached media");
+  }
+
+  if (item.local_id) {
+    const mediaCount = listMediaItemsForIssue(item.local_id).length;
+    if (mediaCount > 0) {
+      notes.push(`${mediaCount} cached media item${mediaCount === 1 ? "" : "s"}`);
+    }
+  }
+
+  if (item.operation === "create" || item.operation === "update") {
+    const description = item.payload.description;
+    if (typeof description === "string" && description.trim().length === 0) {
+      notes.push("empty description payload");
+    }
+  }
+
+  return notes;
+}
+
 function effectiveApiKeySource(
   envKey: string | undefined,
   repoConfig: ConfigFileInfo,
@@ -392,6 +491,7 @@ export const doctorCommand = new Command("doctor")
     }
 
     const probe = await probeLinear(apiKey || envApiKey);
+    const uploadProbe = await probeLinearUploadHost();
     let activePause = getActiveRemoteSyncPause();
     let backgroundPause = getAutomaticRemoteSyncPause();
     let activePauses = getActiveRemoteSyncPauses();
@@ -407,18 +507,44 @@ export const doctorCommand = new Command("doctor")
     }
 
     const pendingOutbox = getPendingOutboxItems();
-    const recentErrors = pendingOutbox
+    const outboxDiagnostics = getOutboxDiagnosticItems();
+    const failedOutbox = outboxDiagnostics
       .filter((item) => item.last_error)
+      .sort((left, right) => {
+        const leftMs = left.last_error_at ? Date.parse(left.last_error_at) : Number.NEGATIVE_INFINITY;
+        const rightMs = right.last_error_at ? Date.parse(right.last_error_at) : Number.NEGATIVE_INFINITY;
+        return rightMs - leftMs || right.id - left.id;
+      });
+    const latestFailedItem = failedOutbox[0];
+    const recentErrors = failedOutbox
       .slice(0, 5)
       .map((item) => ({
+        id: item.id,
         operation: item.operation,
-        subject: item.local_id || item.remote_issue_identifier || item.operation,
+        subject: getOutboxSubject(item),
         error: summarizeText(item.last_error || ""),
+        retry_count: item.retry_count,
+        next_attempt_at: item.next_attempt_at || null,
+        last_error_at: item.last_error_at || null,
+        processing: item.processing,
+        context: summarizeOutboxFailureContext(item),
       }));
+    const connectivityStatus =
+      probe.kind === "ok"
+        ? uploadProbe.status === "ok"
+          ? "ok"
+          : "partial"
+        : "error";
+    const connectivityMessage =
+      connectivityStatus === "ok"
+        ? "Linear GraphQL and upload-host probes succeeded."
+        : connectivityStatus === "partial"
+          ? "Linear GraphQL is reachable, but the upload host is not fully reachable."
+          : "Linear GraphQL connectivity is failing.";
 
     const policy = getLinearRequestPolicy();
     const doctorReport = {
-      ok: probe.kind === "ok",
+      ok: connectivityStatus === "ok",
       environment: {
         cli_version: getRuntimeCliVersion(),
         bun_version: typeof Bun !== "undefined" ? Bun.version : undefined,
@@ -454,21 +580,32 @@ export const doctorCommand = new Command("doctor")
         },
         team_key: config.team_key || null,
       },
-      connectivity:
-        probe.kind === "ok"
-          ? {
-              status: probe.kind,
-              message: probe.message,
-              http_status: probe.httpStatus,
-              viewer: probe.viewer,
-              teams: probe.teams,
-            }
-          : {
-              status: probe.kind,
-              message: probe.message,
-              http_status: probe.httpStatus,
-              error_summary: probe.errorSummary || null,
-            },
+      connectivity: {
+        status: connectivityStatus,
+        message: connectivityMessage,
+        graphql:
+          probe.kind === "ok"
+            ? {
+                status: probe.kind,
+                message: probe.message,
+                http_status: probe.httpStatus,
+                viewer: probe.viewer,
+                teams: probe.teams,
+              }
+            : {
+                status: probe.kind,
+                message: probe.message,
+                http_status: probe.httpStatus,
+                error_summary: probe.errorSummary || null,
+              },
+        uploads: {
+          status: uploadProbe.status,
+          message: uploadProbe.message,
+          http_status: uploadProbe.httpStatus,
+          error_summary: "errorSummary" in uploadProbe ? uploadProbe.errorSummary || null : null,
+          url: uploadProbe.url,
+        },
+      },
       remote_sync: {
         active_pause: activePause
           ? {
@@ -529,6 +666,19 @@ export const doctorCommand = new Command("doctor")
       },
       outbox: {
         pending_count: pendingOutbox.length,
+        latest_failed_item: latestFailedItem
+          ? {
+              id: latestFailedItem.id,
+              operation: latestFailedItem.operation,
+              subject: getOutboxSubject(latestFailedItem),
+              retry_count: latestFailedItem.retry_count,
+              last_error_at: latestFailedItem.last_error_at || null,
+              next_attempt_at: latestFailedItem.next_attempt_at || null,
+              processing: latestFailedItem.processing,
+              error: summarizeText(latestFailedItem.last_error || ""),
+              context: summarizeOutboxFailureContext(latestFailedItem),
+            }
+          : null,
         recent_errors: recentErrors,
       },
       fixes_applied: fixes,
@@ -576,18 +726,27 @@ export const doctorCommand = new Command("doctor")
       lines.push("Connectivity");
       lines.push(`- status: ${doctorReport.connectivity.status}`);
       lines.push(`- message: ${doctorReport.connectivity.message}`);
-      if ("http_status" in doctorReport.connectivity && doctorReport.connectivity.http_status) {
-        lines.push(`- HTTP status: ${doctorReport.connectivity.http_status}`);
+      lines.push(
+        `- GraphQL probe: ${doctorReport.connectivity.graphql.status}${doctorReport.connectivity.graphql.http_status ? ` (HTTP ${doctorReport.connectivity.graphql.http_status})` : ""}`
+      );
+      lines.push(`- GraphQL message: ${doctorReport.connectivity.graphql.message}`);
+      if (doctorReport.connectivity.graphql.status === "ok") {
+        lines.push(
+          `- viewer: ${doctorReport.connectivity.graphql.viewer.name} (${doctorReport.connectivity.graphql.viewer.id})`
+        );
+        lines.push(
+          `- teams: ${doctorReport.connectivity.graphql.teams.map((team) => `${team.name} (${team.key})`).join(", ")}`
+        );
+      } else if (doctorReport.connectivity.graphql.error_summary) {
+        lines.push(`- GraphQL details: ${doctorReport.connectivity.graphql.error_summary}`);
       }
-      if (doctorReport.connectivity.status === "ok") {
-        lines.push(
-          `- viewer: ${doctorReport.connectivity.viewer.name} (${doctorReport.connectivity.viewer.id})`
-        );
-        lines.push(
-          `- teams: ${doctorReport.connectivity.teams.map((team) => `${team.name} (${team.key})`).join(", ")}`
-        );
-      } else if (doctorReport.connectivity.error_summary) {
-        lines.push(`- details: ${doctorReport.connectivity.error_summary}`);
+      lines.push(
+        `- upload probe: ${doctorReport.connectivity.uploads.status}${doctorReport.connectivity.uploads.http_status ? ` (HTTP ${doctorReport.connectivity.uploads.http_status})` : ""}`
+      );
+      lines.push(`- upload URL: ${doctorReport.connectivity.uploads.url}`);
+      lines.push(`- upload message: ${doctorReport.connectivity.uploads.message}`);
+      if ("error_summary" in doctorReport.connectivity.uploads && doctorReport.connectivity.uploads.error_summary) {
+        lines.push(`- upload details: ${doctorReport.connectivity.uploads.error_summary}`);
       }
       lines.push("");
       lines.push("Remote sync");
@@ -629,9 +788,41 @@ export const doctorCommand = new Command("doctor")
       lines.push("");
       lines.push("Outbox");
       lines.push(`- pending items: ${doctorReport.outbox.pending_count}`);
+      if (doctorReport.outbox.latest_failed_item) {
+        lines.push(
+          `- latest failed item: #${doctorReport.outbox.latest_failed_item.id} ${doctorReport.outbox.latest_failed_item.subject} (${doctorReport.outbox.latest_failed_item.operation})`
+        );
+        if (doctorReport.outbox.latest_failed_item.last_error_at) {
+          lines.push(`- latest failure time: ${doctorReport.outbox.latest_failed_item.last_error_at}`);
+        }
+        if (doctorReport.outbox.latest_failed_item.next_attempt_at) {
+          lines.push(`- latest retry time: ${doctorReport.outbox.latest_failed_item.next_attempt_at}`);
+        }
+        lines.push(`- latest failure details: ${doctorReport.outbox.latest_failed_item.error}`);
+        if (doctorReport.outbox.latest_failed_item.context.length > 0) {
+          lines.push(
+            `- latest failure context: ${doctorReport.outbox.latest_failed_item.context.join("; ")}`
+          );
+        }
+      }
       if (doctorReport.outbox.recent_errors.length > 0) {
         for (const entry of doctorReport.outbox.recent_errors) {
-          lines.push(`- ${entry.subject}: ${entry.error}`);
+          const suffixBits = [];
+          suffixBits.push(`row #${entry.id}`);
+          suffixBits.push(`retry ${entry.retry_count}`);
+          if (entry.last_error_at) {
+            suffixBits.push(`failed ${entry.last_error_at}`);
+          }
+          if (entry.next_attempt_at) {
+            suffixBits.push(`next retry ${entry.next_attempt_at}`);
+          }
+          if (entry.processing) {
+            suffixBits.push("processing");
+          }
+          lines.push(`- ${entry.subject}: ${entry.error} (${suffixBits.join(", ")})`);
+          if (entry.context.length > 0) {
+            lines.push(`- ${entry.subject} context: ${entry.context.join("; ")}`);
+          }
         }
       } else {
         lines.push("- recent errors: none");
@@ -673,7 +864,7 @@ export const doctorCommand = new Command("doctor")
       output(lines.join("\n"));
     }
 
-    if (probe.kind !== "ok") {
+    if (connectivityStatus !== "ok") {
       process.exitCode = 1;
     }
   });
