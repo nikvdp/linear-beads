@@ -24,6 +24,7 @@ import {
   isLocalId,
   isPlausibleIssueInput,
   isPlaceholderIssueInput,
+  repairSelfReferentialDependencies,
   resolveIssueId as resolveRemoteIssueId,
   resolveIssueLocalId,
   updateMailMessageSyncStatus,
@@ -58,6 +59,13 @@ type ResolutionResult = {
   unresolvedLocalIds: string[];
   resolvedPayload?: Record<string, unknown>;
 };
+
+function isSameCanonicalIssue(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  return canonicalLocalId(left) === canonicalLocalId(right);
+}
 
 function canonicalLocalId(id: string): string {
   return resolveIssueLocalId(id);
@@ -197,8 +205,10 @@ function resolveDepsString(
   deps: string,
   unresolvedLocalIds: Set<string>,
   referencedIds: Set<string>,
-  context: ResolutionContext
+  context: ResolutionContext,
+  primaryId?: string
 ): string {
+  const primaryCanonical = primaryId ? canonicalLocalId(primaryId) : null;
   const resolved = deps
     .split(",")
     .map((dep) => dep.trim())
@@ -210,6 +220,9 @@ function resolveDepsString(
         return [];
       }
       if (!isPlausibleIssueInput(targetId)) {
+        return [];
+      }
+      if (primaryCanonical && canonicalLocalId(targetId) === primaryCanonical) {
         return [];
       }
       referencedIds.add(targetId);
@@ -292,8 +305,24 @@ function resolveOutboxItem(item: OutboxItem, context: ResolutionContext): Resolu
         payload.description = toCanonicalLocalDescription(payload.description);
       }
       resolveField("parentId", { dropFieldIfOrphan: true });
+      if (
+        typeof payload.parentId === "string" &&
+        primaryId &&
+        isSameCanonicalIssue(primaryId, payload.parentId)
+      ) {
+        delete payload.parentId;
+      }
       if (typeof payload.deps === "string") {
-        payload.deps = resolveDepsString(payload.deps, unresolvedLocalIds, referencedIds, context);
+        payload.deps = resolveDepsString(
+          payload.deps,
+          unresolvedLocalIds,
+          referencedIds,
+          context,
+          primaryId
+        );
+        if (!payload.deps) {
+          delete payload.deps;
+        }
       }
       break;
     }
@@ -303,8 +332,24 @@ function resolveOutboxItem(item: OutboxItem, context: ResolutionContext): Resolu
       }
       resolveField("issueId", { dropOperationIfOrphan: true });
       resolveField("parentId", { dropFieldIfOrphan: true });
+      if (
+        typeof payload.parentId === "string" &&
+        typeof payload.issueId === "string" &&
+        isSameCanonicalIssue(payload.issueId, payload.parentId)
+      ) {
+        delete payload.parentId;
+      }
       if (typeof payload.deps === "string") {
-        payload.deps = resolveDepsString(payload.deps, unresolvedLocalIds, referencedIds, context);
+        payload.deps = resolveDepsString(
+          payload.deps,
+          unresolvedLocalIds,
+          referencedIds,
+          context,
+          typeof payload.issueId === "string" ? payload.issueId : primaryId
+        );
+        if (!payload.deps) {
+          delete payload.deps;
+        }
       }
       break;
     }
@@ -316,11 +361,25 @@ function resolveOutboxItem(item: OutboxItem, context: ResolutionContext): Resolu
     case "create_relation": {
       resolveField("issueId", { dropOperationIfOrphan: true });
       resolveField("relatedIssueId", { dropOperationIfOrphan: true });
+      if (
+        typeof payload.issueId === "string" &&
+        typeof payload.relatedIssueId === "string" &&
+        isSameCanonicalIssue(payload.issueId, payload.relatedIssueId)
+      ) {
+        dropOperation = true;
+      }
       break;
     }
     case "delete_relation": {
       resolveField("issueA", { dropOperationIfOrphan: true });
       resolveField("issueB", { dropOperationIfOrphan: true });
+      if (
+        typeof payload.issueA === "string" &&
+        typeof payload.issueB === "string" &&
+        isSameCanonicalIssue(payload.issueA, payload.issueB)
+      ) {
+        dropOperation = true;
+      }
       break;
     }
     case "mail_send":
@@ -687,6 +746,7 @@ export async function processOutboxQueue(
   teamId: string,
   options: { propagateParent?: boolean } = {}
 ): Promise<{ success: number; failed: number; deferred: number; remoteProcessed: number }> {
+  repairSelfReferentialDependencies();
   const items = getPendingOutboxItems();
   const pendingCreateLocalIds = new Set(
     items

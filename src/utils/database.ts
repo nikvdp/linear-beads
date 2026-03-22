@@ -1723,6 +1723,33 @@ export function deleteRelatedDependency(issueId: string, relatedIssueId: string)
   requestJsonlExport();
 }
 
+export function repairSelfReferentialDependencies(): number {
+  const db = getDatabase();
+  const rows = runWithBusyRetry(
+    () =>
+      db
+        .query("SELECT id, issue_id, depends_on_id FROM dependencies")
+        .all() as Array<{ id: number; issue_id: string; depends_on_id: string }>
+  );
+
+  const idsToDelete = rows
+    .filter(
+      (row) => resolveIssueLocalId(row.issue_id) === resolveIssueLocalId(row.depends_on_id)
+    )
+    .map((row) => row.id);
+
+  if (idsToDelete.length === 0) {
+    return 0;
+  }
+
+  runWithBusyRetry(() => {
+    const placeholders = idsToDelete.map(() => "?").join(", ");
+    db.query(`DELETE FROM dependencies WHERE id IN (${placeholders})`).run(...idsToDelete);
+  });
+  requestJsonlExport();
+  return idsToDelete.length;
+}
+
 /**
  * Get dependencies for an issue (outgoing: this issue depends on others)
  */
