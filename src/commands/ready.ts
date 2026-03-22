@@ -136,7 +136,13 @@ export const readyCommand = new Command("ready")
 
         const beadsReadyIssues =
           style === "beads"
-            ? [...scopedIssues.filter((issue) => issue.status === "in_progress"), ...readyIssues]
+            ? [
+                ...scopedIssues.filter(
+                  (issue) =>
+                    issue.status === "in_progress" && !backlogDescendantIds.has(issue.id)
+                ),
+                ...readyIssues,
+              ]
             : [];
         const dedupedBeadsIssues =
           style === "beads"
