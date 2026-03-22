@@ -1520,6 +1520,68 @@ describe("Local-only Mode", () => {
       expect(shown[0].blocks).toEqual([b[0].id]);
     });
 
+    test("canonicalizes dependency rows when issue_id_map points LOCAL aliases at remote-keyed rows", async () => {
+      const canonicalize = `
+        import { Database } from "bun:sqlite";
+        import { canonicalizeDependencyAliases } from '${import.meta.dir}/../src/utils/database.ts';
+
+        const [localA, localB, linA, linB] = process.argv.slice(1);
+        const db = new Database(".lb/cache.db");
+        const now = new Date().toISOString();
+
+        db.run("UPDATE issues SET local_id = ?, linear_identifier = ?, linear_id = ? WHERE local_id = ?", [
+          linA,
+          linA,
+          "uuid-a",
+          localA,
+        ]);
+        db.run("UPDATE issues SET local_id = ?, linear_identifier = ?, linear_id = ? WHERE local_id = ?", [
+          linB,
+          linB,
+          "uuid-b",
+          localB,
+        ]);
+        db.run(
+          "INSERT OR REPLACE INTO issue_id_map (local_id, linear_id, created_at) VALUES (?, ?, ?)",
+          [localA, linA, now]
+        );
+        db.run(
+          "INSERT OR REPLACE INTO issue_id_map (local_id, linear_id, created_at) VALUES (?, ?, ?)",
+          [localB, linB, now]
+        );
+        db.run("DELETE FROM dependencies");
+        db.run(
+          "INSERT INTO dependencies (issue_id, depends_on_id, type, created_at, created_by) VALUES (?, ?, 'blocks', ?, 'test')",
+          [localA, localB, now]
+        );
+
+        const changed = canonicalizeDependencyAliases();
+        const rows = db.query(
+          "SELECT issue_id, depends_on_id, type FROM dependencies ORDER BY issue_id, depends_on_id"
+        ).all();
+        db.close();
+        console.log(JSON.stringify({ changed, rows }));
+      `;
+
+      const a = await lbLocalJson<Array<{ id: string }>>("create", "Alias remap A");
+      const b = await lbLocalJson<Array<{ id: string }>>("create", "Alias remap B");
+      const result = await evalLocal(canonicalize, [a[0].id, b[0].id, "LIN-7003", "LIN-7004"]);
+      expect(result.exitCode).toBe(0);
+
+      const parsed = JSON.parse(result.stdout) as {
+        changed: number;
+        rows: Array<{ issue_id: string; depends_on_id: string; type: string }>;
+      };
+      expect(parsed.changed).toBe(1);
+      expect(parsed.rows).toEqual([
+        {
+          issue_id: "LIN-7003",
+          depends_on_id: "LIN-7004",
+          type: "blocks",
+        },
+      ]);
+    });
+
     test("should show dep tree", async () => {
       const parent = await lbLocalJson<Array<{ id: string }>>("create", "Tree parent");
 
