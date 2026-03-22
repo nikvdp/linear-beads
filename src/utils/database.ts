@@ -1969,6 +1969,61 @@ export function getBlockedIssueIds(): Set<string> {
 }
 
 /**
+ * Get descendants of backlog issues.
+ * Open children under a backlog parent should not appear in ready views.
+ */
+export function getBacklogDescendantIssueIds(): Set<string> {
+  const db = getDatabase();
+  const backlogParents = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+    SELECT local_id
+    FROM issues
+    WHERE status = 'backlog'
+  `
+        )
+        .all() as Array<{ local_id: string }>
+  ).map((row) => row.local_id);
+
+  if (backlogParents.length === 0) {
+    return new Set();
+  }
+
+  const hiddenFromReady = new Set<string>();
+  let frontier = [...backlogParents];
+
+  while (frontier.length > 0) {
+    const children = runWithBusyRetry(
+      () =>
+        db
+          .query(
+            `
+      SELECT DISTINCT d.issue_id as child_id
+      FROM dependencies d
+      WHERE d.type = 'parent-child' AND d.depends_on_id IN (${frontier.map(() => "?").join(",")})
+    `
+          )
+          .all(...frontier) as Array<{ child_id: string }>
+    );
+
+    const nextFrontier: string[] = [];
+    for (const child of children) {
+      if (hiddenFromReady.has(child.child_id)) {
+        continue;
+      }
+      hiddenFromReady.add(child.child_id);
+      nextFrontier.push(child.child_id);
+    }
+
+    frontier = nextFrontier;
+  }
+
+  return hiddenFromReady;
+}
+
+/**
  * Add item to outbox queue
  */
 export function queueOutboxItem(

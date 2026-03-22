@@ -7,6 +7,7 @@ import { ensureFresh, ensureFreshBestEffort } from "../utils/sync.js";
 import {
   getCachedIssues,
   getDependencies,
+  getBacklogDescendantIssueIds,
   getBlockedIssueIds,
   getCacheInfo,
   getDisplayId,
@@ -90,6 +91,7 @@ export const readyCommand = new Command("ready")
 
       // Filter to open issues that are not blocked
       const blockedIds = getBlockedIssueIds();
+      const backlogDescendantIds = getBacklogDescendantIssueIds();
       let scopedIssues = allIssues;
 
       // Filter by assignee unless --all (skip in local-only mode)
@@ -105,7 +107,9 @@ export const readyCommand = new Command("ready")
         }
       }
 
-      let readyIssues = scopedIssues.filter((i) => isReadyStatus(i.status) && !blockedIds.has(i.id));
+      let readyIssues = scopedIssues.filter(
+        (i) => isReadyStatus(i.status) && !blockedIds.has(i.id) && !backlogDescendantIds.has(i.id)
+      );
 
       // Sort by priority, then updated_at
       readyIssues.sort((a, b) => {

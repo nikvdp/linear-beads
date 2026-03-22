@@ -5,6 +5,7 @@
 import { Command } from "commander";
 import { createRelation, deleteRelation, updateIssueParent } from "../utils/issue-backend.js";
 import {
+  getBacklogDescendantIssueIds,
   getDependencies,
   getCachedIssue,
   getBlockedIssueIds,
@@ -125,6 +126,7 @@ function printTree(
   issueId: string,
   style: "classic" | "beads",
   blockedIds: Set<string>,
+  backlogDescendantIds: Set<string>,
   prefix: string = "",
   isLast: boolean = true,
   visited: Set<string> = new Set()
@@ -147,7 +149,8 @@ function printTree(
     const blockerIssue = getCachedIssue(d.issue_id);
     return blockerIssue && !isTerminalStatus(blockerIssue.status);
   });
-  const isReady = openBlockers.length === 0 && isReadyStatus(status);
+  const isReady =
+    openBlockers.length === 0 && isReadyStatus(status) && !backlogDescendantIds.has(issueId);
   const readyTag = isReady ? " [READY]" : "";
 
   if (style === "beads") {
@@ -184,7 +187,15 @@ function printTree(
 
   deps.forEach((dep, index) => {
     const isLastDep = index === deps.length - 1;
-    printTree(dep.depends_on_id, style, blockedIds, childPrefix, isLastDep, visited);
+    printTree(
+      dep.depends_on_id,
+      style,
+      blockedIds,
+      backlogDescendantIds,
+      childPrefix,
+      isLastDep,
+      visited
+    );
   });
 }
 
@@ -812,10 +823,11 @@ const treeCommand = new Command("tree")
 
       const style = getHumanOutputStyle(requestedStyle);
       const blockedIds = getBlockedIssueIds();
+      const backlogDescendantIds = getBacklogDescendantIssueIds();
       if (style === "classic") {
         output(`\n🌲 Dependency tree for ${getDisplayId(resolvedId)}:\n`);
       }
-      printTree(resolvedId, style, blockedIds);
+      printTree(resolvedId, style, blockedIds, backlogDescendantIds);
       output("");
     } catch (error) {
       outputError(error instanceof Error ? error.message : String(error));
