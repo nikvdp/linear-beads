@@ -107,4 +107,37 @@ describe("backlog status support", () => {
     expect(shown.map((issue) => issue.id)).toContain(backlogIssue[0].id);
     expect(shown.every((issue) => issue.status === "backlog")).toBe(true);
   });
+
+  test("ready excludes open descendants of backlog parents", async () => {
+    const repoDir = createRepo();
+    const parent = await runJson<Array<{ id: string }>>(repoDir, ["create", "Backlog umbrella"]);
+    const child = await runJson<Array<{ id: string }>>(repoDir, [
+      "create",
+      "Queued child",
+      "--parent",
+      parent[0].id,
+    ]);
+    const grandchild = await runJson<Array<{ id: string }>>(repoDir, [
+      "create",
+      "Nested queued child",
+      "--parent",
+      child[0].id,
+    ]);
+
+    const updatedParent = await runCli(repoDir, ["update", parent[0].id, "--status", "backlog"]);
+    expect(updatedParent.exitCode).toBe(0);
+
+    const ready = await runJson<Array<{ id: string; status: string }>>(repoDir, ["ready"]);
+    expect(ready.map((issue) => issue.id)).not.toContain(parent[0].id);
+    expect(ready.map((issue) => issue.id)).not.toContain(child[0].id);
+    expect(ready.map((issue) => issue.id)).not.toContain(grandchild[0].id);
+
+    const listed = await runJson<Array<{ id: string; status: string }>>(repoDir, [
+      "list",
+      "--status",
+      "open",
+    ]);
+    expect(listed.map((issue) => issue.id)).toContain(child[0].id);
+    expect(listed.map((issue) => issue.id)).toContain(grandchild[0].id);
+  });
 });
