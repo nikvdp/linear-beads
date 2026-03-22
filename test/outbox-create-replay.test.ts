@@ -46,10 +46,12 @@ async function runEval(
     | "shared_parent_resolution"
     | "local_blocker_relation_replays_after_create_resolution"
     | "invalid_issue_refs_are_dropped_from_create_payloads"
+    | "self_referential_pending_sync_state"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import { Database } from "bun:sqlite";
     import {
+      cacheDependency,
       cacheIssue,
       generateLocalId,
       getDisplayId,
@@ -386,6 +388,79 @@ async function runEval(
       db.close();
 
       console.log(JSON.stringify({ result, pending, depRows, row, mapping: getIssueIdMapping(localId) }));
+      process.exit(0);
+    } else if (mode === "self_referential_pending_sync_state") {
+      const siblingLocalId = generateLocalId();
+
+      cacheIssue({
+        id: siblingLocalId,
+        title: "Resolved sibling",
+        status: "open",
+        priority: 2,
+        sync_status: "synced",
+        linear_identifier: "LIN-5616",
+        created_at: now,
+        updated_at: now,
+      });
+
+      cacheDependency({
+        issue_id: localId,
+        depends_on_id: localId,
+        type: "blocks",
+        created_at: now,
+        created_by: "local",
+      });
+      cacheDependency({
+        issue_id: siblingLocalId,
+        depends_on_id: localId,
+        type: "blocks",
+        created_at: now,
+        created_by: "local",
+      });
+
+      const selfCreateId = queueOutboxItem(
+        "create",
+        {
+          title: "Replay guard issue",
+          priority: 2,
+          deps: "blocked-by:" + localId,
+        },
+        localId
+      );
+      markOutboxCreateRemoteIssueIdentifier(selfCreateId, "LIN-5617");
+      queueOutboxItem(
+        "delete_relation",
+        { issueA: localId, issueB: localId, relationType: "blocks" },
+        localId
+      );
+
+      const result = await processOutboxQueue("TEAM");
+      const pending = getPendingOutboxItems().map((item) => ({
+        id: item.id,
+        operation: item.operation,
+        local_id: item.local_id || null,
+        payload: item.payload,
+      }));
+      const db = new Database(".lb/cache.db", { readonly: true });
+      const depRows = db
+        .query("SELECT issue_id, depends_on_id, type FROM dependencies ORDER BY issue_id, depends_on_id")
+        .all() as Array<{ issue_id: string; depends_on_id: string; type: string }>;
+      const row = db.query(
+        "SELECT local_id, linear_identifier, sync_status FROM issues WHERE local_id = ? LIMIT 1"
+      ).get(localId) as { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+      db.close();
+
+      console.log(
+        JSON.stringify({
+          result,
+          pending,
+          depRows,
+          row,
+          mapping: getIssueIdMapping(localId),
+          displayId: getDisplayId(localId),
+          siblingDisplayId: getDisplayId(siblingLocalId),
+        })
+      );
       process.exit(0);
     } else {
       const outboxId = queueOutboxItem(
@@ -858,5 +933,44 @@ describe("outbox create replay protection", () => {
     expect(payload.mapping).toBe("LIN-9017");
     expect(payload.row?.linear_identifier).toBe("LIN-9017");
     expect(payload.row?.sync_status).toBe("synced");
+  });
+
+  test("auto-heals self-referential pending sync state while preserving real sibling blockers", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "self_referential_pending_sync_state");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      result: { success: number; failed: number };
+      pending: Array<{ operation: string; local_id: string | null; payload: Record<string, unknown> }>;
+      depRows: Array<{ issue_id: string; depends_on_id: string; type: string }>;
+      row: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
+      mapping: string | null;
+      displayId: string;
+      siblingDisplayId: string;
+    };
+
+    expect(payload.result.failed).toBe(0);
+    expect(payload.pending).toHaveLength(0);
+    expect(payload.mapping).toBe("LIN-5617");
+    expect(payload.displayId).toBe("LIN-5617");
+    expect(payload.row?.linear_identifier).toBe("LIN-5617");
+    expect(payload.row?.sync_status).toBe("synced");
+    expect(payload.depRows.some((row) => row.issue_id === row.depends_on_id)).toBe(false);
+    expect(payload.depRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "blocks",
+        }),
+      ])
+    );
+    expect(payload.siblingDisplayId).toBe("LIN-5616");
+    expect(
+      payload.depRows.some(
+        (row) => row.type === "blocks" && row.issue_id !== row.depends_on_id
+      )
+    ).toBe(true);
   });
 });
