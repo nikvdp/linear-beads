@@ -4,6 +4,7 @@
 
 import { Command } from "commander";
 import { ensureFresh, ensureFreshBestEffort } from "../utils/sync.js";
+import type { Issue } from "../types.js";
 import {
   getCachedIssue,
   getDependencies,
@@ -80,7 +81,7 @@ export const showCommand = new Command("show")
       }
 
       const resolvedId = resolveIssueId(id);
-      let issue = getCachedIssue(resolvedId);
+      let issue: Issue | null | undefined = getCachedIssue(resolvedId);
       const useCachedImmediately = shouldUseCachedIssueImmediatelyForShow({
         forceSync: Boolean(options.sync),
         resolvedId,
