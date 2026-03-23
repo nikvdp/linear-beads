@@ -6,6 +6,8 @@ import { join } from "path";
 
 const CLI_PATH = join(import.meta.dir, "..", "src", "cli.ts");
 const DATABASE_UTILS_PATH = join(import.meta.dir, "..", "src", "utils", "database.ts");
+const GRAPHQL_UTILS_PATH = join(import.meta.dir, "..", "src", "utils", "graphql.ts");
+const REMOTE_SYNC_STATE_PATH = join(import.meta.dir, "..", "src", "utils", "remote-sync-state.ts");
 const tempDirs: string[] = [];
 
 afterAll(() => {
@@ -297,6 +299,76 @@ describe("linear prune command", () => {
     });
 
     const archivedRow = readArchivedRow(dbPath, "LOCAL-120");
+    expect(archivedRow?.remote_archived_at).toBeNull();
+  });
+
+  test("exits before archiving when a blocking remote pause is already active", async () => {
+    const { repoDir, dbPath } = createRepo();
+    const setupSource = `
+      import { cacheIssue } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+      import { getLinearApiErrorInfoFromResponse } from ${JSON.stringify(GRAPHQL_UTILS_PATH)};
+      import { recordRemoteSyncPause } from ${JSON.stringify(REMOTE_SYNC_STATE_PATH)};
+
+      const now = new Date().toISOString();
+      cacheIssue({
+        id: "LIN-130",
+        local_id: "LOCAL-130",
+        linear_id: "issue-130",
+        linear_identifier: "LIN-130",
+        title: "Paused candidate",
+        status: "closed",
+        priority: 2,
+        sync_status: "synced",
+        created_at: now,
+        updated_at: now,
+        closed_at: now,
+      });
+
+      recordRemoteSyncPause(
+        getLinearApiErrorInfoFromResponse({
+          status: 429,
+          headers: {
+            "retry-after": "60",
+            "x-ratelimit-endpoint-name": "issueArchive",
+            "x-ratelimit-endpoint-requests-reset": String(Date.now() + 60_000),
+          },
+          body: JSON.stringify({
+            errors: [
+              {
+                message: "rate limit exceeded",
+                path: ["issueArchive"],
+                extensions: {
+                  code: "RATELIMITED",
+                },
+              },
+            ],
+          }),
+        })
+      );
+
+      globalThis.fetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body || "{}"));
+        if (String(body.query || "").includes("issueArchive")) {
+          throw new Error("preflight pause should prevent issueArchive");
+        }
+
+        throw new Error("Unexpected GraphQL request: " + JSON.stringify(body));
+      };
+    `;
+
+    const result = await runInlineCli(
+      repoDir,
+      ["linear", "prune", "LIN-130", "--yes"],
+      setupSource,
+      { LINEAR_API_KEY: "linear-test-key" }
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Warning:");
+    expect(result.stderr).toContain("issueArchive requests");
+
+    const archivedRow = readArchivedRow(dbPath, "LOCAL-130");
     expect(archivedRow?.remote_archived_at).toBeNull();
   });
 
