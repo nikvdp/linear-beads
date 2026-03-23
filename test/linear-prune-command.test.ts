@@ -302,7 +302,7 @@ describe("linear prune command", () => {
     expect(archivedRow?.remote_archived_at).toBeNull();
   });
 
-  test("can opt into scanning the current Linear team with --mine or --all", async () => {
+  test("can opt into scanning the current Linear team by issue creator with --mine or --all", async () => {
     const { repoDir } = createRepo();
     const setupSource = `
       import { cacheIssue } from ${JSON.stringify(DATABASE_UTILS_PATH)};
@@ -374,7 +374,8 @@ describe("linear prune command", () => {
                         canceledAt: null,
                         state: { id: "state-done", name: "Done", type: "completed" },
                         labels: { nodes: [] },
-                        assignee: { id: "user-me", email: "me@example.com", name: "Me" },
+                        assignee: { id: "assignee-me", email: "someone@example.com", name: "Someone" },
+                        creator: { id: "user-me", email: "me@example.com", name: "Me" },
                         parent: null,
                       },
                       {
@@ -389,7 +390,8 @@ describe("linear prune command", () => {
                         canceledAt: null,
                         state: { id: "state-done", name: "Done", type: "completed" },
                         labels: { nodes: [] },
-                        assignee: { id: "user-me", email: "me@example.com", name: "Me" },
+                        assignee: { id: "assignee-other", email: "else@example.com", name: "Else" },
+                        creator: { id: "user-me", email: "me@example.com", name: "Me" },
                         parent: null,
                       },
                       {
@@ -404,7 +406,8 @@ describe("linear prune command", () => {
                         canceledAt: null,
                         state: { id: "state-done", name: "Done", type: "completed" },
                         labels: { nodes: [] },
-                        assignee: { id: "user-other", email: "other@example.com", name: "Other" },
+                        assignee: { id: "assignee-me", email: "me@example.com", name: "Me" },
+                        creator: { id: "user-other", email: "other@example.com", name: "Other" },
                         parent: null,
                       },
                     ],
