@@ -3,7 +3,12 @@
  */
 
 import { Command } from "commander";
-import { archiveIssue } from "../utils/linear.js";
+import {
+  archiveIssue,
+  fetchAllTeamIssuesForPrune,
+  getTeamId,
+  getViewer,
+} from "../utils/linear.js";
 import {
   cacheIssue,
   getCachedIssue,
@@ -22,7 +27,7 @@ import {
 } from "../utils/remote-sync-state.js";
 
 type PruneCandidate = Issue & {
-  local_id: string;
+  local_id?: string;
   linear_id: string;
 };
 
@@ -31,6 +36,8 @@ type PruneSelectionOptions = {
   ageLabel?: string;
   nowMs?: number;
 };
+
+type TeamWideOwnershipScope = "viewer" | "all_users";
 
 function parsePositiveLimit(value: unknown): number | undefined {
   if (value === undefined) {
@@ -108,10 +115,10 @@ function toPruneCandidate(
   issue: Issue,
   options: PruneSelectionOptions = {}
 ): PruneCandidate | null {
-  if (!issue.local_id || !issue.linear_id) {
+  if (!issue.linear_id) {
     return null;
   }
-  if (issue.sync_status !== "synced") {
+  if ((issue.sync_status || "synced") !== "synced") {
     return null;
   }
   if (!isTerminalStatus(issue.status)) {
@@ -143,12 +150,34 @@ function getAutomaticPruneCandidates(
   return limit ? candidates.slice(0, limit) : candidates;
 }
 
+async function getTeamWidePruneCandidates(
+  limit?: number,
+  options: PruneSelectionOptions = {},
+  ownershipScope: TeamWideOwnershipScope = "viewer"
+): Promise<PruneCandidate[]> {
+  const teamId = await getTeamId();
+  let issues = await fetchAllTeamIssuesForPrune(teamId);
+
+  if (ownershipScope === "viewer") {
+    const viewer = await getViewer();
+    const viewerEmail = viewer.email.toLowerCase();
+    issues = issues.filter((issue) => issue.assignee?.toLowerCase() === viewerEmail);
+  }
+
+  const candidates = issues
+    .map((issue) => toPruneCandidate(issue, options))
+    .filter((issue): issue is PruneCandidate => issue !== null)
+    .sort(comparePruneCandidates);
+
+  return limit ? candidates.slice(0, limit) : candidates;
+}
+
 function getRequestedPruneCandidates(
   ids: string[],
   options: PruneSelectionOptions = {}
 ): PruneCandidate[] {
   const candidates: PruneCandidate[] = [];
-  const seenLocalIds = new Set<string>();
+  const seenIssueIds = new Set<string>();
 
   for (const rawId of ids) {
     const resolvedId = resolveIssueId(rawId);
@@ -175,10 +204,10 @@ function getRequestedPruneCandidates(
       );
     }
 
-    if (seenLocalIds.has(candidate.local_id)) {
+    if (seenIssueIds.has(candidate.id)) {
       continue;
     }
-    seenLocalIds.add(candidate.local_id);
+    seenIssueIds.add(candidate.id);
     candidates.push(candidate);
   }
 
@@ -188,13 +217,65 @@ function getRequestedPruneCandidates(
 function formatCandidateJson(candidate: PruneCandidate): Record<string, unknown> {
   return {
     id: getDisplayId(candidate.id),
-    local_id: candidate.local_id,
+    local_id: candidate.local_id || null,
     linear_id: candidate.linear_id,
     linear_identifier: candidate.linear_identifier || null,
     title: candidate.title,
     status: candidate.status,
     closed_at: candidate.closed_at || null,
   };
+}
+
+function markArchivedCandidateLocally(candidate: PruneCandidate, archivedAt: string): void {
+  const cached = getCachedIssue(candidate.id);
+  if (!cached?.local_id) {
+    return;
+  }
+
+  cacheIssue({
+    ...cached,
+    remote_archived_at: archivedAt,
+  });
+}
+
+function getPruneScanScope(options: {
+  all?: boolean;
+  allUsers?: boolean;
+}): { scanScope: "repo_cache" | "team"; ownershipScope: TeamWideOwnershipScope | null } {
+  return {
+    scanScope: options.all ? "team" : "repo_cache",
+    ownershipScope: options.all ? (options.allUsers ? "all_users" : "viewer") : null,
+  };
+}
+
+function getNoCandidatesMessage(options: {
+  all?: boolean;
+  allUsers?: boolean;
+}): string {
+  if (!options.all) {
+    return "No closed synced Linear issues are eligible for prune.";
+  }
+
+  if (options.allUsers) {
+    return "No closed synced Linear issues in the current Linear team are eligible for prune.";
+  }
+
+  return "No closed synced Linear issues assigned to you are eligible for prune.";
+}
+
+function getTeamScopeDescription(options: {
+  all?: boolean;
+  allUsers?: boolean;
+}): string {
+  if (!options.all) {
+    return "";
+  }
+
+  if (options.allUsers) {
+    return " from the current Linear team across all users";
+  }
+
+  return " from the current Linear team assigned to you";
 }
 
 export const linearCommand = new Command("linear")
@@ -205,6 +286,11 @@ export const linearCommand = new Command("linear")
       .argument("[ids...]", "Specific issue IDs to archive on Linear")
       .option("-l, --limit <count>", "Limit automatic prune candidates when no IDs are provided")
       .option("--age <duration>", "Only prune issues at least this old (for example: 7d, 2w, 1mo)")
+      .option(
+        "--all",
+        "Scan the current Linear team instead of only the current repo cache (viewer-owned issues only)"
+      )
+      .option("--all-users", "With --all, include issues assigned to other users too")
       .option("--dry-run", "Force preview-only output without archiving anything")
       .option("-y, --yes", "Archive the selected issues instead of showing a preview")
       .option("-j, --json", "Output as JSON")
@@ -219,18 +305,28 @@ export const linearCommand = new Command("linear")
           if (ids.length > 0 && limit !== undefined) {
             throw new Error("--limit can only be used when no explicit issue IDs are provided");
           }
+          if (ids.length > 0 && options.all) {
+            throw new Error("--all can only be used when no explicit issue IDs are provided");
+          }
+          if (options.allUsers && !options.all) {
+            throw new Error("--all-users can only be used with --all");
+          }
           if (options.yes && options.dryRun) {
             throw new Error("--yes and --dry-run cannot be used together");
           }
 
           const selectionOptions: PruneSelectionOptions = ageFilter || {};
+          const ownershipScope: TeamWideOwnershipScope = options.allUsers ? "all_users" : "viewer";
 
           const candidates =
             ids.length > 0
               ? getRequestedPruneCandidates(ids, selectionOptions)
-              : getAutomaticPruneCandidates(limit, selectionOptions);
+              : options.all
+                ? await getTeamWidePruneCandidates(limit, selectionOptions, ownershipScope)
+                : getAutomaticPruneCandidates(limit, selectionOptions);
 
           const previewOnly = options.dryRun || !options.yes;
+          const { scanScope, ownershipScope: outputOwnershipScope } = getPruneScanScope(options);
 
           if (candidates.length === 0) {
             if (options.json) {
@@ -238,6 +334,8 @@ export const linearCommand = new Command("linear")
                 JSON.stringify(
                   {
                     preview: true,
+                    scan_scope: scanScope,
+                    ownership_scope: outputOwnershipScope,
                     dry_run: Boolean(options.dryRun),
                     age: ageFilter?.ageLabel || null,
                     candidates: [],
@@ -248,7 +346,7 @@ export const linearCommand = new Command("linear")
                 )
               );
             } else {
-              output("No closed synced Linear issues are eligible for prune.");
+              output(getNoCandidatesMessage(options));
             }
             return;
           }
@@ -259,6 +357,8 @@ export const linearCommand = new Command("linear")
                 JSON.stringify(
                   {
                     preview: true,
+                    scan_scope: scanScope,
+                    ownership_scope: outputOwnershipScope,
                     dry_run: Boolean(options.dryRun),
                     apply_required: true,
                     age: ageFilter?.ageLabel || null,
@@ -273,7 +373,7 @@ export const linearCommand = new Command("linear")
               output(
                 `${options.dryRun ? "Dry run:" : "Will archive"} ${candidates.length} closed Linear issue${
                   candidates.length === 1 ? "" : "s"
-                } and keep all local data${ageFilter ? ` (age >= ${ageFilter.ageLabel})` : ""}:`
+                }${getTeamScopeDescription(options)} and keep all local data${ageFilter ? ` (age >= ${ageFilter.ageLabel})` : ""}:`
               );
               for (const candidate of candidates) {
                 output(
@@ -300,10 +400,7 @@ export const linearCommand = new Command("linear")
 
           for (const candidate of candidates) {
             await archiveIssue(candidate.linear_id);
-            cacheIssue({
-              ...candidate,
-              remote_archived_at: archivedAt,
-            });
+            markArchivedCandidateLocally(candidate, archivedAt);
             archived.push(candidate);
           }
 
@@ -314,6 +411,8 @@ export const linearCommand = new Command("linear")
               JSON.stringify(
                 {
                   preview: false,
+                  scan_scope: scanScope,
+                  ownership_scope: outputOwnershipScope,
                   archived: archived.map(formatCandidateJson),
                   count: archived.length,
                   cleared_remote_pause: true,

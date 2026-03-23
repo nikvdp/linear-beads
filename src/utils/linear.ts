@@ -2076,6 +2076,53 @@ export async function fetchAllIssuesPaginated(
 }
 
 /**
+ * Fetch all active issues for a team without applying repo scope filters.
+ * Used by opt-in maintenance paths that need a broader team-wide view without
+ * mutating the normal repo-scoped cache.
+ */
+export async function fetchAllTeamIssuesForPrune(teamId: string): Promise<Issue[]> {
+  const client = getGraphQLClient();
+  const allIssues: Issue[] = [];
+  let cursor: string | undefined;
+  let hasMore = true;
+  const paginationGuard = createLinearPaginationGuard("fetchAllTeamIssuesForPrune");
+
+  while (hasMore) {
+    const requestCursor = cursor || null;
+    const query = `
+      query GetAllTeamIssuesForPrune($teamId: String!, $cursor: String) {
+        team(id: $teamId) {
+          issues(first: 50, after: $cursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              ${ISSUE_FRAGMENT}
+            }
+          }
+        }
+      }
+    `;
+
+    const result = await client.request<{
+      team: {
+        issues: {
+          pageInfo: { hasNextPage: boolean; endCursor?: string };
+          nodes: LinearIssue[];
+        };
+      };
+    }>(query, { teamId, cursor: cursor || null });
+
+    allIssues.push(...result.team.issues.nodes.map(linearToBdIssue));
+    hasMore = result.team.issues.pageInfo.hasNextPage;
+    cursor = paginationGuard.nextCursor(result.team.issues.pageInfo, requestCursor) || undefined;
+  }
+
+  return allIssues;
+}
+
+/**
  * Fetch issues updated since a given timestamp (incremental sync).
  * Does NOT clear cache - only upserts updated issues.
  * Supports pagination via cursor.
