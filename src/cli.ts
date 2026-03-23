@@ -31,6 +31,7 @@ import { dedupeCommand } from "./commands/dedupe.js";
 import { skillCommand } from "./commands/skill.js";
 import { styleCommand } from "./commands/style.js";
 import { doctorCommand } from "./commands/doctor.js";
+import { linearCommand } from "./commands/linear.js";
 import { verifyConnection } from "./utils/issue-backend.js";
 import { closeDatabase } from "./utils/database.js";
 import { getRuntimeCliVersion } from "./utils/runtime-version.js";
@@ -128,6 +129,7 @@ if (process.argv.includes("--worker")) {
   program.addCommand(exportCommand);
   program.addCommand(selfUpdateCommand);
   program.addCommand(migrateCommand);
+  program.addCommand(linearCommand);
   program.addCommand(rebindCommand);
   program.addCommand(styleCommand);
   program.addCommand(agentCommand);

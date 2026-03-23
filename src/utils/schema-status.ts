@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "fs";
 import { getDbPath } from "./config.js";
 
-export const LATEST_DB_SCHEMA_VERSION = 8;
+export const LATEST_DB_SCHEMA_VERSION = 12;
 export const LOCAL_ID_SCHEMA_VERSION = 6;
 
 export type LocalSchemaStatus = {

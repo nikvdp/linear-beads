@@ -37,6 +37,8 @@ export interface Issue {
   // Linear UUID and human identifier, when synced
   linear_id?: string;
   linear_identifier?: string;
+  // When lb archived the remote Linear issue but intentionally kept local history.
+  remote_archived_at?: string;
   title: string;
   description?: string;
   status: IssueStatus;

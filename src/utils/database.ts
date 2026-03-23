@@ -275,6 +275,7 @@ function initSchema(db: Database, dbPath: string): void {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         closed_at TEXT,
+        remote_archived_at TEXT,
         assignee TEXT,
         linear_state_id TEXT,
         cached_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -310,6 +311,7 @@ function initSchema(db: Database, dbPath: string): void {
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           closed_at TEXT,
+          remote_archived_at TEXT,
           assignee TEXT,
           linear_state_id TEXT,
           cached_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -326,6 +328,7 @@ function initSchema(db: Database, dbPath: string): void {
           created_at,
           updated_at,
           closed_at,
+          remote_archived_at,
           assignee,
           linear_state_id,
           cached_at,
@@ -343,6 +346,7 @@ function initSchema(db: Database, dbPath: string): void {
           created_at,
           updated_at,
           closed_at,
+          NULL AS remote_archived_at,
           assignee,
           linear_state_id,
           cached_at,
@@ -595,6 +599,7 @@ function initSchema(db: Database, dbPath: string): void {
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           closed_at TEXT,
+          remote_archived_at TEXT,
           assignee TEXT,
           linear_state_id TEXT,
           cached_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -614,6 +619,7 @@ function initSchema(db: Database, dbPath: string): void {
           created_at,
           updated_at,
           closed_at,
+          remote_archived_at,
           assignee,
           linear_state_id,
           cached_at
@@ -635,6 +641,7 @@ function initSchema(db: Database, dbPath: string): void {
           created_at,
           updated_at,
           closed_at,
+          NULL AS remote_archived_at,
           assignee,
           linear_state_id,
           cached_at
@@ -729,6 +736,17 @@ function initSchema(db: Database, dbPath: string): void {
     );
 
     db.exec("PRAGMA user_version = 11");
+  }
+
+  if (currentVersion < 12) {
+    addColumnIfMissing(
+      db,
+      "issues",
+      "remote_archived_at",
+      "ALTER TABLE issues ADD COLUMN remote_archived_at TEXT"
+    );
+
+    db.exec("PRAGMA user_version = 12");
   }
 
   ensureDependencyAliasIntegrity(db);
@@ -1264,11 +1282,12 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
         created_at,
         updated_at,
         closed_at,
+        remote_archived_at,
         assignee,
         linear_state_id,
         cached_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(local_id) DO UPDATE SET
         linear_id = COALESCE(excluded.linear_id, issues.linear_id),
         linear_identifier = COALESCE(excluded.linear_identifier, issues.linear_identifier),
@@ -1282,6 +1301,7 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
         created_at = excluded.created_at,
         updated_at = excluded.updated_at,
         closed_at = excluded.closed_at,
+        remote_archived_at = excluded.remote_archived_at,
         assignee = excluded.assignee,
         linear_state_id = excluded.linear_state_id,
         cached_at = datetime('now')
@@ -1300,6 +1320,7 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
       issue.created_at,
       issue.updated_at,
       issue.closed_at || null,
+      issue.remote_archived_at || null,
       issue.assignee || null,
       issue.linear_state_id || null,
     ]
@@ -1315,6 +1336,7 @@ function rowToIssue(row: Record<string, unknown>): Issue {
     local_id: localId,
     linear_id: (row.linear_id as string | null) || undefined,
     linear_identifier: linearIdentifier || undefined,
+    remote_archived_at: (row.remote_archived_at as string | null) || undefined,
     title: row.title as string,
     description: row.description as string | undefined,
     status: row.status as Issue["status"],
@@ -2641,11 +2663,12 @@ export function getAllCachedIssueIds(): string[] {
 export function pruneStaleIssues(validIds: Set<string>): number {
   const db = getDatabase();
   const rows = db
-    .query("SELECT local_id, linear_identifier, sync_status FROM issues")
+    .query("SELECT local_id, linear_identifier, sync_status, remote_archived_at FROM issues")
     .all() as Array<{
     local_id: string;
     linear_identifier: string | null;
     sync_status: "synced" | "pending" | "failed" | null;
+    remote_archived_at: string | null;
   }>;
   let pruned = 0;
 
@@ -2656,6 +2679,9 @@ export function pruneStaleIssues(validIds: Set<string>): number {
         continue;
       }
       if (!row.linear_identifier) {
+        continue;
+      }
+      if (row.remote_archived_at) {
         continue;
       }
       if (!validIds.has(row.linear_identifier)) {

@@ -1402,6 +1402,7 @@ function linearToBdIssue(
     id: linear.identifier,
     linear_id: linear.id,
     linear_identifier: linear.identifier,
+    remote_archived_at: undefined,
     title: linear.title,
     description: renderedDescription,
     status: linearStateToStatus(linear.state.type),
@@ -3103,6 +3104,30 @@ export async function deleteIssue(issueId: string): Promise<void> {
 
   if (!result.issueDelete.success) {
     throw new Error("Failed to delete issue");
+  }
+}
+
+/**
+ * Archive an issue on Linear without deleting local history.
+ */
+export async function archiveIssue(issueId: string): Promise<void> {
+  const client = getGraphQLClient();
+  const issueUuid = (await resolveIssueId(issueId)) || issueId;
+
+  const mutation = `
+    mutation ArchiveIssue($id: String!) {
+      issueArchive(id: $id, trash: false) {
+        success
+      }
+    }
+  `;
+
+  const result = await client.request<{
+    issueArchive: { success: boolean };
+  }>(mutation, { id: issueUuid });
+
+  if (!result.issueArchive.success) {
+    throw new Error("Failed to archive issue");
   }
 }
 
