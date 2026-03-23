@@ -25,6 +25,12 @@ type PruneCandidate = Issue & {
   linear_id: string;
 };
 
+type PruneSelectionOptions = {
+  ageMs?: number;
+  ageLabel?: string;
+  nowMs?: number;
+};
+
 function parsePositiveLimit(value: unknown): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -38,13 +44,69 @@ function parsePositiveLimit(value: unknown): number | undefined {
   return parsed;
 }
 
+function parsePruneAge(value: unknown): { ageMs: number; ageLabel: string } | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const raw = String(value).trim().toLowerCase();
+  const match = raw.match(/^(\d+)\s*(min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks|mo|mon|month|months)$/);
+  if (!match) {
+    throw new Error(
+      `Invalid age '${value}'. Use a duration like 12h, 7d, 2w, or 1mo.`
+    );
+  }
+
+  const amount = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error(
+      `Invalid age '${value}'. Use a positive duration like 12h, 7d, 2w, or 1mo.`
+    );
+  }
+
+  const unit = match[2];
+  const unitMs =
+    unit === "min" || unit === "mins" || unit === "minute" || unit === "minutes"
+      ? 60 * 1000
+      : unit === "h" || unit === "hr" || unit === "hrs" || unit === "hour" || unit === "hours"
+        ? 60 * 60 * 1000
+        : unit === "d" || unit === "day" || unit === "days"
+          ? 24 * 60 * 60 * 1000
+          : unit === "w" || unit === "wk" || unit === "wks" || unit === "week" || unit === "weeks"
+            ? 7 * 24 * 60 * 60 * 1000
+            : 30 * 24 * 60 * 60 * 1000;
+
+  return {
+    ageMs: amount * unitMs,
+    ageLabel: raw,
+  };
+}
+
 function comparePruneCandidates(a: PruneCandidate, b: PruneCandidate): number {
   const aClosedAt = a.closed_at || a.updated_at;
   const bClosedAt = b.closed_at || b.updated_at;
   return new Date(aClosedAt).getTime() - new Date(bClosedAt).getTime();
 }
 
-function toPruneCandidate(issue: Issue): PruneCandidate | null {
+function isOldEnoughForPrune(issue: Issue, options: PruneSelectionOptions = {}): boolean {
+  if (options.ageMs === undefined) {
+    return true;
+  }
+
+  const referenceAt = issue.closed_at || issue.updated_at;
+  const referenceMs = Date.parse(referenceAt);
+  if (!Number.isFinite(referenceMs)) {
+    return false;
+  }
+
+  const nowMs = options.nowMs ?? Date.now();
+  return nowMs - referenceMs >= options.ageMs;
+}
+
+function toPruneCandidate(
+  issue: Issue,
+  options: PruneSelectionOptions = {}
+): PruneCandidate | null {
   if (!issue.local_id || !issue.linear_id) {
     return null;
   }
@@ -57,6 +119,9 @@ function toPruneCandidate(issue: Issue): PruneCandidate | null {
   if (issue.remote_archived_at) {
     return null;
   }
+  if (!isOldEnoughForPrune(issue, options)) {
+    return null;
+  }
 
   return {
     ...issue,
@@ -65,16 +130,22 @@ function toPruneCandidate(issue: Issue): PruneCandidate | null {
   };
 }
 
-function getAutomaticPruneCandidates(limit?: number): PruneCandidate[] {
+function getAutomaticPruneCandidates(
+  limit?: number,
+  options: PruneSelectionOptions = {}
+): PruneCandidate[] {
   const candidates = getCachedIssues()
-    .map(toPruneCandidate)
+    .map((issue) => toPruneCandidate(issue, options))
     .filter((issue): issue is PruneCandidate => issue !== null)
     .sort(comparePruneCandidates);
 
   return limit ? candidates.slice(0, limit) : candidates;
 }
 
-function getRequestedPruneCandidates(ids: string[]): PruneCandidate[] {
+function getRequestedPruneCandidates(
+  ids: string[],
+  options: PruneSelectionOptions = {}
+): PruneCandidate[] {
   const candidates: PruneCandidate[] = [];
   const seenLocalIds = new Set<string>();
 
@@ -85,13 +156,18 @@ function getRequestedPruneCandidates(ids: string[]): PruneCandidate[] {
       throw new Error(`Issue not found: ${rawId}`);
     }
 
-    const candidate = toPruneCandidate(issue);
+    const candidate = toPruneCandidate(issue, options);
     if (!candidate) {
       if (issue.remote_archived_at) {
         throw new Error(`${getDisplayId(issue.id)} is already archived on Linear`);
       }
       if (!issue.linear_id || issue.sync_status !== "synced") {
         throw new Error(`${getDisplayId(issue.id)} is not synced to Linear yet`);
+      }
+      if (!isOldEnoughForPrune(issue, options)) {
+        throw new Error(
+          `${getDisplayId(issue.id)} is newer than --age ${options.ageLabel || "the requested threshold"}`
+        );
       }
       throw new Error(
         `${getDisplayId(issue.id)} is not closed or cancelled, so it is not eligible for prune`
@@ -127,6 +203,8 @@ export const linearCommand = new Command("linear")
       .description("Archive closed or cancelled Linear issues while keeping local history")
       .argument("[ids...]", "Specific issue IDs to archive on Linear")
       .option("-l, --limit <count>", "Limit automatic prune candidates when no IDs are provided")
+      .option("--age <duration>", "Only prune issues at least this old (for example: 7d, 2w, 1mo)")
+      .option("--dry-run", "Force preview-only output without archiving anything")
       .option("-y, --yes", "Archive the selected issues instead of showing a preview")
       .option("-j, --json", "Output as JSON")
       .action(async (ids: string[], options) => {
@@ -136,29 +214,53 @@ export const linearCommand = new Command("linear")
           }
 
           const limit = parsePositiveLimit(options.limit);
+          const ageFilter = parsePruneAge(options.age);
           if (ids.length > 0 && limit !== undefined) {
             throw new Error("--limit can only be used when no explicit issue IDs are provided");
           }
+          if (options.yes && options.dryRun) {
+            throw new Error("--yes and --dry-run cannot be used together");
+          }
+
+          const selectionOptions: PruneSelectionOptions = ageFilter || {};
 
           const candidates =
-            ids.length > 0 ? getRequestedPruneCandidates(ids) : getAutomaticPruneCandidates(limit);
+            ids.length > 0
+              ? getRequestedPruneCandidates(ids, selectionOptions)
+              : getAutomaticPruneCandidates(limit, selectionOptions);
+
+          const previewOnly = options.dryRun || !options.yes;
 
           if (candidates.length === 0) {
             if (options.json) {
-              output(JSON.stringify({ preview: true, candidates: [], count: 0 }, null, 2));
+              output(
+                JSON.stringify(
+                  {
+                    preview: true,
+                    dry_run: Boolean(options.dryRun),
+                    age: ageFilter?.ageLabel || null,
+                    candidates: [],
+                    count: 0,
+                  },
+                  null,
+                  2
+                )
+              );
             } else {
               output("No closed synced Linear issues are eligible for prune.");
             }
             return;
           }
 
-          if (!options.yes) {
+          if (previewOnly) {
             if (options.json) {
               output(
                 JSON.stringify(
                   {
                     preview: true,
+                    dry_run: Boolean(options.dryRun),
                     apply_required: true,
+                    age: ageFilter?.ageLabel || null,
                     count: candidates.length,
                     candidates: candidates.map(formatCandidateJson),
                   },
@@ -168,16 +270,20 @@ export const linearCommand = new Command("linear")
               );
             } else {
               output(
-                `Will archive ${candidates.length} closed Linear issue${
+                `${options.dryRun ? "Dry run:" : "Will archive"} ${candidates.length} closed Linear issue${
                   candidates.length === 1 ? "" : "s"
-                } and keep all local data:`
+                } and keep all local data${ageFilter ? ` (age >= ${ageFilter.ageLabel})` : ""}:`
               );
               for (const candidate of candidates) {
                 output(
                   `- ${getDisplayId(candidate.id)} [${candidate.status}] ${candidate.title}`
                 );
               }
-              output("Run with --yes to archive these issues on Linear.");
+              output(
+                options.dryRun
+                  ? "Dry run only. Re-run with --yes to archive these issues on Linear."
+                  : "Run with --yes to archive these issues on Linear."
+              );
             }
             return;
           }
