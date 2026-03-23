@@ -436,7 +436,7 @@ function summarizeOutboxFailureContext(item: {
 }
 
 function getFreeTierIssueLimitMessage(): string {
-  return "Linear is rejecting issue creation with `usage limit exceeded`, which likely means the workspace hit the Linear free-tier active-issue limit. Archive older issues in Linear or raise the workspace limit before expecting new issue creates to sync.";
+  return "Linear is rejecting issue creation with `usage limit exceeded`, which likely means the workspace hit the Linear free-tier active-issue limit. Run `lb linear prune` to archive older closed synced issues on Linear while keeping local history, or raise the workspace limit before expecting new issue creates to sync.";
 }
 
 function detectLikelySyncBlocker(

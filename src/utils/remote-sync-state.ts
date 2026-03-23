@@ -1164,7 +1164,7 @@ function formatRateLimitDetails(pause: ActiveRemoteSyncPause): string | null {
 
   if (pause.details?.diagnosis === "free_tier_issue_limit") {
     details.push(
-      "Likely cause: Linear's free-tier active-issue limit. lb cannot create new Linear issues until older issues are archived or the workspace limit changes."
+      "Likely cause: Linear's free-tier active-issue limit. Run `lb linear prune` to archive older closed synced issues on Linear while keeping local history, or raise the workspace limit."
     );
   }
 
@@ -1220,7 +1220,7 @@ export function formatRemoteSyncPauseNotice(
   const scope = describePauseScope(pause);
   const summary =
     pause.kind === "rate_limit" && pause.details?.diagnosis === "free_tier_issue_limit"
-      ? `${prefix} lb is unable to sync new issues to Linear and this likely means the workspace hit Linear's free-tier active-issue limit. ${scope} are paused until ${formatPauseUntilLocal(
+      ? `${prefix} lb is unable to sync new issues to Linear and this likely means the workspace hit Linear's free-tier active-issue limit. Run \`lb linear prune\` to archive older closed synced issues on Linear while keeping local history. ${scope} are paused until ${formatPauseUntilLocal(
           pause.until
         )} (${formatPauseDuration(pause.retryAfterMs)}) after ${cause}.`
       : `${prefix} ${scope} ${pause.kind === "network" ? "is" : "are"} paused until ${formatPauseUntilLocal(
