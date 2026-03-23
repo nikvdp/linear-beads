@@ -200,7 +200,9 @@ function warnOnAutoHealedEscapedNewlineDescription(autoHealed: boolean): void {
   outputError("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
   outputError("WARNING: lb auto-corrected literal '\\n' sequences into real line breaks.");
   outputError("This usually means multiline text was escaped instead of entered directly.");
-  outputError("Use a heredoc, --description-file, or --description-stdin for multiline content.");
+  outputError(
+    "Prefer a temp file plus -d @file, or use --description-file / --description-stdin for multiline content."
+  );
   outputError(
     "If you truly need literal '\\n' stored, re-run with --no-auto-format-escaped-newlines."
   );
@@ -276,7 +278,7 @@ export const updateCommand = new Command("update")
   .description("Update an issue")
   .argument("<id>", "Issue ID")
   .option("--title <title>", "New title")
-  .option("-d, --description <desc>", "New description")
+  .option("-d, --description <desc>", "New description; prefix with @ to read from file")
   .option("--description-file <path>", "Read new description from file")
   .option("--description-stdin", "Read new description from stdin")
   .option(

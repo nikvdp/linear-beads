@@ -36,9 +36,15 @@ Use \`lb\` as the source of truth for task tracking in this repo.
 ## Multiline descriptions
 
 Avoid literal escaped \`\\n\` in issue descriptions.
-Use heredoc text, \`--description-file\`, or \`--description-stdin\`.
+For long text, prefer temp files plus \`@file\`, for example \`lb create "Title" -d @body.md\` or \`lb update <id> -d @body.md\`.
+\`--description-file\` and \`--description-stdin\` also work when they fit better.
 \`lb\` auto-heals likely accidental \`\\n\` sequences by default and warns loudly.
 Use \`--no-auto-format-escaped-newlines\` only when you intentionally need literal \`\\n\` stored.
+
+Use the same pattern for other long body-like flags:
+- \`lb close <id> --reason @reason.md\`
+- \`lb mail send ... --body @body.md\`
+- \`lb mail reply ... --body @reply.md\`
 
 ## Editing long ticket bodies
 
@@ -90,6 +96,7 @@ Each issue should include:
 - Do not batch status changes at end of day.
 - Keep dependencies explicit in lb, not only in prose.
 - Keep changes scoped to the claimed issue.
+- When a flag can take long text, prefer writing a temp file and passing \`@file\` instead of inline shell strings.
 - When editing long descriptions during execution, prefer \`lb show <id> --body\` plus paired \`lb update <id> --replace ... --with ...\` over copying full bodies through the model.
 `;
 

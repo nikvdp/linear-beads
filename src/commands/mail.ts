@@ -18,6 +18,7 @@ import {
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import { output, outputError } from "../utils/output.js";
 import { getMailBackendKind } from "../utils/config.js";
+import { resolveAtFileText } from "../utils/description-input.js";
 import type { MailRecipientKind } from "../types.js";
 
 function splitHandles(raw: string | undefined): string[] {
@@ -98,13 +99,14 @@ mailCommand
   .description("Send a local mail message")
   .requiredOption("--to <handles>", "Comma-separated recipient handles")
   .requiredOption("--subject <subject>", "Message subject")
-  .requiredOption("--body <markdown>", "Markdown body")
+  .requiredOption("--body <markdown>", "Markdown body; prefix with @ to read from file")
   .option("--from <handle>", "Sender handle")
   .option("--thread <threadId>", "Existing thread ID")
   .option("--work-item <ref>", "Optional linked work item ref, e.g. linear:LIN-123")
   .option("-j, --json", "Output as JSON")
   .action(async (options) => {
     const sender = resolveSender(options.from);
+    const body = await resolveAtFileText(options.body);
     const toHandles = splitHandles(options.to);
     if (toHandles.length === 0) {
       outputError("At least one recipient handle is required.");
@@ -123,7 +125,7 @@ mailCommand
       threadId: options.thread,
       senderAgentId: sender.id,
       subject: options.subject,
-      bodyMd: options.body,
+      bodyMd: body,
       recipients,
       workItemRef: options.workItem,
       syncStatus: "pending",
@@ -246,11 +248,12 @@ mailCommand
   .command("reply")
   .description("Reply to an existing message")
   .requiredOption("--message <id>", "Message ID to reply to")
-  .requiredOption("--body <markdown>", "Reply body")
+  .requiredOption("--body <markdown>", "Reply body; prefix with @ to read from file")
   .option("--agent <handle>", "Sender handle (defaults to current)")
   .option("-j, --json", "Output as JSON")
-  .action((options) => {
+  .action(async (options) => {
     const sender = resolveSender(options.agent);
+    const body = await resolveAtFileText(options.body);
     const parent = getMailMessageById(options.message);
     if (!parent) {
       outputError(`Message not found: ${options.message}`);
@@ -274,7 +277,7 @@ mailCommand
       threadId: parent.thread_id,
       senderAgentId: sender.id,
       subject,
-      bodyMd: options.body,
+      bodyMd: body,
       replyToMessageId: parent.id,
       syncStatus: "pending",
       recipients: [...recipientIds].map((id) => ({ recipientAgentId: id, kind: "to" as const })),

@@ -49,6 +49,15 @@ export async function resolveAtFileText(value: string): Promise<string> {
   return await readFile(path, "utf8");
 }
 
+export async function resolveOptionalAtFileText(
+  value: string | undefined
+): Promise<string | undefined> {
+  if (value === undefined) {
+    return undefined;
+  }
+  return await resolveAtFileText(value);
+}
+
 export async function resolveDescriptionInput(
   options: DescriptionInputOptions
 ): Promise<string | undefined> {
@@ -67,7 +76,7 @@ export async function resolveDescriptionInput(
     return await readDescriptionFromStdin();
   }
 
-  return options.inlineDescription;
+  return await resolveOptionalAtFileText(options.inlineDescription);
 }
 
 export function looksLikeEscapedNewlineMistake(description: string | undefined): boolean {

@@ -28,6 +28,7 @@ import {
   isLocalOnly,
   parseHumanOutputStyle,
 } from "../utils/config.js";
+import { resolveOptionalAtFileText } from "../utils/description-input.js";
 import {
   formatRemoteSyncPauseNotice,
   getCommandRemoteSyncPause,
@@ -37,7 +38,10 @@ import {
 export const closeCommand = new Command("close")
   .description("Close an issue")
   .argument("<id>", "Issue ID")
-  .option("-r, --reason <reason>", "Close reason (added as comment)")
+  .option(
+    "-r, --reason <reason>",
+    "Close reason (added as comment); prefix with @ to read from file"
+  )
   .option("-f, --force", "Close even if open children remain")
   .option("-j, --json", "Output as JSON")
   .option("--sync", "Sync immediately (block on network)")
@@ -53,6 +57,7 @@ export const closeCommand = new Command("close")
         process.exit(1);
       }
       const style = getHumanOutputStyle(requestedStyle);
+      const reason = await resolveOptionalAtFileText(options.reason as string | undefined);
 
       const resolvedId = resolveIssueId(id);
       const childIds = getChildIds(resolvedId);
@@ -171,7 +176,7 @@ export const closeCommand = new Command("close")
         try {
           // Sync mode: close directly in Linear
           const teamId = await getTeamId(options.team);
-          const issue = await closeIssue(resolvedId, teamId, options.reason);
+          const issue = await closeIssue(resolvedId, teamId, reason);
 
           if (options.json) {
             output(formatIssueJson(issue));
@@ -197,7 +202,7 @@ export const closeCommand = new Command("close")
         "close",
         {
           issueId: resolvedId,
-          reason: options.reason,
+          reason,
         },
         resolvedId
       );

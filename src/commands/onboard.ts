@@ -63,24 +63,30 @@ lb dep tree LIN-A          # Visualize dependency tree
 ### Multiline Descriptions (Important)
 
 Avoid literal escaped newlines like \`"line1\\\\nline2"\` in descriptions.
-Use real multiline input instead:
+For long text, prefer writing a temp file and passing it with \`@file\`:
 
 \`\`\`bash
-desc=$(cat <<'EOF'
+body_file=$(mktemp)
+cat <<'EOF' >"$body_file"
 Why
 
 Details...
 EOF
-)
-lb create "Title" -d "$desc"
+lb create "Title" -d "@$body_file"
 \`\`\`
 
 Also supported:
 - \`--description-file <path>\`
 - \`--description-stdin\`
+- inline \`-d @path\` and \`lb update ID -d @path\`
 - default auto-heal for accidental \`\\\\n\` sequences, with \`--no-auto-format-escaped-newlines\` as an escape hatch
 
 \`lb\` auto-corrects likely accidental escaped newlines and prints a loud warning so agents stop doing it.
+
+For other long body-like flags, use the same pattern:
+- \`lb close ID --reason @reason.md\`
+- \`lb mail send ... --body @body.md\`
+- \`lb mail reply ... --body @reply.md\`
 
 ### Token-Saving Body Edits
 
@@ -279,7 +285,7 @@ lb dep tree LIN-XXX
 
 ### Multiline Descriptions
 
-Do not pass literal \`\\n\` in descriptions. Use real multiline input via heredoc, \`--description-file\`, or \`--description-stdin\`.
+Do not pass literal \`\\n\` in descriptions. For long text, prefer temp files plus \`@file\`, for example \`lb create "Title" -d @body.md\` or \`lb update ID -d @body.md\`.
 
 ### Editing Long Bodies
 
@@ -288,6 +294,11 @@ When changing part of a long ticket body:
 - use \`lb update LIN-XXX --replace "old" --with "new"\` for small edits
 - use \`lb update LIN-XXX --replace @old.md --with @new.md\` for large chunks
 - \`lb\` still queues the full rewritten body, but this avoids wasting model tokens on full-body rewrites
+
+For other long text flags, use the same \`@file\` pattern:
+- \`lb close LIN-XXX --reason @reason.md\`
+- \`lb mail send ... --body @body.md\`
+- \`lb mail reply ... --body @reply.md\`
 
 ### Remote IDs
 
