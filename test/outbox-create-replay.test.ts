@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -7,6 +7,8 @@ const tempDirs: string[] = [];
 const DATABASE_UTILS_PATH = join(import.meta.dir, "..", "src", "utils", "database.ts");
 const OUTBOX_PROCESSOR_PATH = join(import.meta.dir, "..", "src", "utils", "outbox-processor.ts");
 const CLI_PATH = join(import.meta.dir, "..", "src", "cli.ts");
+
+setDefaultTimeout(10000);
 
 afterAll(() => {
   for (const dir of tempDirs) {

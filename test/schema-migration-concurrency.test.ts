@@ -116,7 +116,7 @@ describe("schema migration concurrency", () => {
     const outboxColumns = db.query("PRAGMA table_info(outbox)").all() as Array<{ name: string }>;
     db.close();
 
-    expect(version.user_version).toBe(11);
+    expect(version.user_version).toBe(13);
     expect(outboxColumns.some((column) => column.name === "remote_issue_identifier")).toBe(true);
     expect(outboxColumns.some((column) => column.name === "last_error_at")).toBe(true);
 
@@ -140,7 +140,7 @@ describe("schema migration concurrency", () => {
     const outboxColumns = db.query("PRAGMA table_info(outbox)").all() as Array<{ name: string }>;
     db.close();
 
-    expect(version.user_version).toBe(11);
+    expect(version.user_version).toBe(13);
     const columnNames = outboxColumns.map((column) => column.name);
     expect(columnNames).toContain("local_id");
     expect(columnNames).toContain("processing");
