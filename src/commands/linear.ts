@@ -239,24 +239,24 @@ function markArchivedCandidateLocally(candidate: PruneCandidate, archivedAt: str
 }
 
 function getPruneScanScope(options: {
+  mine?: boolean;
   all?: boolean;
-  allUsers?: boolean;
 }): { scanScope: "repo_cache" | "team"; ownershipScope: TeamWideOwnershipScope | null } {
   return {
-    scanScope: options.all ? "team" : "repo_cache",
-    ownershipScope: options.all ? (options.allUsers ? "all_users" : "viewer") : null,
+    scanScope: options.mine || options.all ? "team" : "repo_cache",
+    ownershipScope: options.all ? "all_users" : options.mine ? "viewer" : null,
   };
 }
 
 function getNoCandidatesMessage(options: {
+  mine?: boolean;
   all?: boolean;
-  allUsers?: boolean;
 }): string {
-  if (!options.all) {
+  if (!options.mine && !options.all) {
     return "No closed synced Linear issues are eligible for prune.";
   }
 
-  if (options.allUsers) {
+  if (options.all) {
     return "No closed synced Linear issues in the current Linear team are eligible for prune.";
   }
 
@@ -264,14 +264,14 @@ function getNoCandidatesMessage(options: {
 }
 
 function getTeamScopeDescription(options: {
+  mine?: boolean;
   all?: boolean;
-  allUsers?: boolean;
 }): string {
-  if (!options.all) {
+  if (!options.mine && !options.all) {
     return "";
   }
 
-  if (options.allUsers) {
+  if (options.all) {
     return " from the current Linear team across all users";
   }
 
@@ -286,11 +286,8 @@ export const linearCommand = new Command("linear")
       .argument("[ids...]", "Specific issue IDs to archive on Linear")
       .option("-l, --limit <count>", "Limit automatic prune candidates when no IDs are provided")
       .option("--age <duration>", "Only prune issues at least this old (for example: 7d, 2w, 1mo)")
-      .option(
-        "--all",
-        "Scan the current Linear team instead of only the current repo cache (viewer-owned issues only)"
-      )
-      .option("--all-users", "With --all, include issues assigned to other users too")
+      .option("--mine", "Scan the current Linear team for issues assigned to you")
+      .option("--all", "Scan the current Linear team for issues assigned to any user")
       .option("--dry-run", "Force preview-only output without archiving anything")
       .option("-y, --yes", "Archive the selected issues instead of showing a preview")
       .option("-j, --json", "Output as JSON")
@@ -305,23 +302,23 @@ export const linearCommand = new Command("linear")
           if (ids.length > 0 && limit !== undefined) {
             throw new Error("--limit can only be used when no explicit issue IDs are provided");
           }
-          if (ids.length > 0 && options.all) {
-            throw new Error("--all can only be used when no explicit issue IDs are provided");
+          if (options.mine && options.all) {
+            throw new Error("--mine and --all cannot be used together");
           }
-          if (options.allUsers && !options.all) {
-            throw new Error("--all-users can only be used with --all");
+          if (ids.length > 0 && (options.mine || options.all)) {
+            throw new Error("--mine and --all can only be used when no explicit issue IDs are provided");
           }
           if (options.yes && options.dryRun) {
             throw new Error("--yes and --dry-run cannot be used together");
           }
 
           const selectionOptions: PruneSelectionOptions = ageFilter || {};
-          const ownershipScope: TeamWideOwnershipScope = options.allUsers ? "all_users" : "viewer";
+          const ownershipScope: TeamWideOwnershipScope = options.all ? "all_users" : "viewer";
 
           const candidates =
             ids.length > 0
               ? getRequestedPruneCandidates(ids, selectionOptions)
-              : options.all
+              : options.mine || options.all
                 ? await getTeamWidePruneCandidates(limit, selectionOptions, ownershipScope)
                 : getAutomaticPruneCandidates(limit, selectionOptions);
 
