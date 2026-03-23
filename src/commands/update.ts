@@ -107,6 +107,13 @@ type ReplaceOperation = {
   replacement: string;
 };
 
+type ReplaceToken = {
+  kind: "replace" | "with";
+  value: string;
+};
+
+const replaceTokenSequence: ReplaceToken[] = [];
+
 function summarizeReplaceText(value: string): string {
   const compact = value.replace(/\n/g, "\\n");
   if (compact.length <= 80) {
@@ -115,25 +122,39 @@ function summarizeReplaceText(value: string): string {
   return `${compact.slice(0, 77)}...`;
 }
 
-async function parseReplaceOperations(parts: string[] | undefined): Promise<ReplaceOperation[]> {
-  if (!parts || parts.length === 0) {
+async function parseReplaceOperations(tokens: ReplaceToken[]): Promise<ReplaceOperation[]> {
+  if (tokens.length === 0) {
     return [];
   }
 
-  if (parts.length % 2 !== 0) {
-    throw new Error(
-      `--replace expects needle/replacement pairs, but received ${parts.length} values`
-    );
+  const operations: ReplaceOperation[] = [];
+  let pendingNeedle: string | null = null;
+  let replaceCount = 0;
+
+  for (const token of tokens) {
+    if (token.kind === "replace") {
+      if (pendingNeedle !== null) {
+        throw new Error("--replace must be followed by --with before another --replace");
+      }
+      pendingNeedle = await resolveAtFileText(token.value);
+      replaceCount += 1;
+      if (pendingNeedle.length === 0) {
+        throw new Error(`--replace needle ${replaceCount} must not be empty`);
+      }
+      continue;
+    }
+
+    if (pendingNeedle === null) {
+      throw new Error("--with requires a preceding --replace");
+    }
+
+    const replacement = await resolveAtFileText(token.value);
+    operations.push({ needle: pendingNeedle, replacement });
+    pendingNeedle = null;
   }
 
-  const operations: ReplaceOperation[] = [];
-  for (let index = 0; index < parts.length; index += 2) {
-    const needle = await resolveAtFileText(parts[index]);
-    const replacement = await resolveAtFileText(parts[index + 1]);
-    if (needle.length === 0) {
-      throw new Error(`--replace needle ${index / 2 + 1} must not be empty`);
-    }
-    operations.push({ needle, replacement });
+  if (pendingNeedle !== null) {
+    throw new Error("--replace must be followed by --with");
   }
 
   return operations;
@@ -259,8 +280,12 @@ export const updateCommand = new Command("update")
   .option("--description-file <path>", "Read new description from file")
   .option("--description-stdin", "Read new description from stdin")
   .option(
-    "--replace <parts...>",
-    "Replace exact body text using ordered needle/replacement pairs; prefix a value with @ to read it from a file"
+    "--replace <needle>",
+    "Exact body text to replace; prefix with @ to read the needle from a file"
+  )
+  .option(
+    "--with <replacement>",
+    "Replacement text for the preceding --replace; prefix with @ to read it from a file"
   )
   .option("--media <path>", "Attach media from a local file (repeatable)", collect)
   .option("--media-id <id>", "Media id to pair with --media by position (repeatable)", collect)
@@ -281,6 +306,12 @@ export const updateCommand = new Command("update")
   .option("--sync", "Sync immediately (block on network)")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
+  .on("option:replace", (value: string) => {
+    replaceTokenSequence.push({ kind: "replace", value });
+  })
+  .on("option:with", (value: string) => {
+    replaceTokenSequence.push({ kind: "with", value });
+  })
   .action(async (id: string, options) => {
     try {
       const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
@@ -293,9 +324,7 @@ export const updateCommand = new Command("update")
       const style = getHumanOutputStyle(requestedStyle);
 
       const resolvedId = resolveIssueId(id);
-      const replaceOperations = await parseReplaceOperations(
-        options.replace as string[] | undefined
-      );
+      const replaceOperations = await parseReplaceOperations(replaceTokenSequence);
       // Validate inputs
       let description = await resolveDescriptionInput({
         inlineDescription: options.description as string | undefined,
@@ -304,7 +333,7 @@ export const updateCommand = new Command("update")
       });
       if (replaceOperations.length > 0 && description !== undefined) {
         throw new Error(
-          "Description input conflict: choose either --replace or one of --description, --description-file, or --description-stdin"
+          "Description input conflict: choose either --replace/--with or one of --description, --description-file, or --description-stdin"
         );
       }
       if (replaceOperations.length > 0) {
@@ -724,5 +753,7 @@ export const updateCommand = new Command("update")
     } catch (error) {
       console.error("Error:", error instanceof Error ? error.message : error);
       process.exit(1);
+    } finally {
+      replaceTokenSequence.length = 0;
     }
   });
