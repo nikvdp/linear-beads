@@ -88,18 +88,19 @@ When a ticket body is long, do not read it as JSON and do not resend the whole t
 
 \`\`\`bash
 lb show LIN-XXX --body
-lb update LIN-XXX --replace "old text" "new text"
+lb update LIN-XXX --replace "old text" --with "new text"
 \`\`\`
 
 For larger chunks, put the exact old and new text in files and use \`@file\` indirection:
 
 \`\`\`bash
-lb update LIN-XXX --replace @old.md @new.md
+lb update LIN-XXX --replace @old.md --with @new.md
 \`\`\`
 
 Rules:
 - \`lb show --body\` prints only the normalized body text, with no JSON escaping or metadata noise
-- \`lb update --replace\` matches against that same shown body surface
+- \`lb update --replace ... --with ...\` matches against that same shown body surface
+- every \`--replace\` must pair with the next \`--with\`; unmatched flags fail loudly
 - replacements must match exactly once; zero or multiple matches fail loudly
 - \`lb\` still rewrites and queues the full updated description on the outbox, but this flow saves agent tokens, which are the scarce resource
 
@@ -284,8 +285,8 @@ Do not pass literal \`\\n\` in descriptions. Use real multiline input via heredo
 
 When changing part of a long ticket body:
 - use \`lb show LIN-XXX --body\` to fetch the normalized body text
-- use \`lb update LIN-XXX --replace "old" "new"\` for small edits
-- use \`lb update LIN-XXX --replace @old.md @new.md\` for large chunks
+- use \`lb update LIN-XXX --replace "old" --with "new"\` for small edits
+- use \`lb update LIN-XXX --replace @old.md --with @new.md\` for large chunks
 - \`lb\` still queues the full rewritten body, but this avoids wasting model tokens on full-body rewrites
 
 ### Remote IDs
