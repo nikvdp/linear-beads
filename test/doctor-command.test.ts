@@ -5,6 +5,8 @@ import { join } from "path";
 
 const CLI_PATH = join(import.meta.dir, "..", "src", "cli.ts");
 const DATABASE_UTILS_PATH = join(import.meta.dir, "..", "src", "utils", "database.ts");
+const GRAPHQL_UTILS_PATH = join(import.meta.dir, "..", "src", "utils", "graphql.ts");
+const REMOTE_SYNC_STATE_PATH = join(import.meta.dir, "..", "src", "utils", "remote-sync-state.ts");
 const tempDirs: string[] = [];
 
 afterAll(() => {
@@ -117,6 +119,114 @@ async function runDoctorWithMockedFetch(
   return { stdout, stderr, exitCode };
 }
 
+async function runDoctorWithFreeTierIssueLimit(
+  cwd: string
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const script = `
+    import { cacheIssue, queueOutboxItem, updateOutboxItemError } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+    import { getLinearApiErrorInfoFromResponse } from ${JSON.stringify(GRAPHQL_UTILS_PATH)};
+    import { recordRemoteSyncPause } from ${JSON.stringify(REMOTE_SYNC_STATE_PATH)};
+
+    const now = new Date().toISOString();
+    cacheIssue({
+      id: "LOCAL-401",
+      title: "Free-tier capped issue",
+      status: "open",
+      priority: 2,
+      sync_status: "pending",
+      created_at: now,
+      updated_at: now,
+    });
+    const rawError = JSON.stringify({
+      response: {
+        data: null,
+        errors: [
+          {
+            message: "usage limit exceeded",
+            path: ["issueCreate"],
+            extensions: {
+              type: "usage limit exceeded",
+              code: "USAGE_LIMIT_EXCEEDED",
+            },
+          },
+        ],
+      },
+    });
+    const outboxId = queueOutboxItem(
+      "create",
+      {
+        title: "Free-tier capped issue",
+        priority: 2,
+      },
+      "LOCAL-401"
+    );
+    updateOutboxItemError(outboxId, rawError);
+    recordRemoteSyncPause(
+      getLinearApiErrorInfoFromResponse({
+        status: 200,
+        headers: {
+          "x-ratelimit-complexity-reset": "1742545000000",
+        },
+        body: JSON.stringify({
+          errors: [
+            {
+              message: "usage limit exceeded",
+              path: ["issueCreate"],
+              extensions: {
+                type: "usage limit exceeded",
+                code: "USAGE_LIMIT_EXCEEDED",
+              },
+            },
+          ],
+        }),
+      })
+    );
+
+    globalThis.fetch = async (input) => {
+      const url = String(input);
+      if (url === "https://api.linear.app/graphql") {
+        return new Response(
+          JSON.stringify({
+            data: {
+              viewer: { id: "viewer-1", name: "Doctor User" },
+              teams: {
+                nodes: [{ id: "team-1", key: "DOC", name: "Doctor Team" }],
+              },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }
+        );
+      }
+      if (url === "https://uploads.linear.app/") {
+        return new Response("not found", { status: 404 });
+      }
+      throw new Error("Unexpected fetch target: " + url);
+    };
+
+    process.argv = ["bun", "doctor", "--json"];
+    await import(${JSON.stringify(CLI_PATH)});
+  `;
+
+  const proc = Bun.spawn(["bun", "--eval", script], {
+    cwd,
+    env: {
+      ...process.env,
+      LINEAR_API_KEY: "linear-test-key-free-tier",
+      LB_TEAM_KEY: "",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+  return { stdout, stderr, exitCode };
+}
+
 describe("doctor command", () => {
   test("reports partial upload connectivity and the latest failed media-linked outbox row", async () => {
     const repoDir = createRepo();
@@ -160,5 +270,41 @@ describe("doctor command", () => {
     expect(report.outbox.latest_failed_item?.last_error_at).not.toBeNull();
     expect(report.outbox.latest_failed_item?.context).toContain("description references cached media");
     expect(report.outbox.recent_errors[0]?.subject).toBe("LOCAL-284");
+  });
+
+  test("reports the likely Linear free-tier issue cap when issueCreate usage limits block sync", async () => {
+    const repoDir = createRepo();
+    const result = await runDoctorWithFreeTierIssueLimit(repoDir);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const report = JSON.parse(result.stdout) as {
+      ok: boolean;
+      connectivity: {
+        status: string;
+      };
+      remote_sync: {
+        likely_sync_blocker: {
+          kind: string;
+          source: string;
+          message: string;
+        } | null;
+      };
+      outbox: {
+        latest_failed_item: {
+          subject: string;
+          error: string;
+        } | null;
+      };
+    };
+
+    expect(report.ok).toBe(true);
+    expect(report.connectivity.status).toBe("ok");
+    expect(report.remote_sync.likely_sync_blocker?.kind).toBe("linear_free_tier_issue_limit");
+    expect(report.remote_sync.likely_sync_blocker?.source).toBe("active_pause");
+    expect(report.remote_sync.likely_sync_blocker?.message).toContain("free-tier active-issue limit");
+    expect(report.outbox.latest_failed_item?.subject).toBe("LOCAL-401");
+    expect(report.outbox.latest_failed_item?.error).toContain("usage limit exceeded");
   });
 });

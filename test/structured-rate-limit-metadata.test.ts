@@ -76,12 +76,46 @@ describe("structured rate-limit metadata", () => {
     expect(pause?.details?.remaining).toBe(1);
     expect(pause?.details?.requested).toBe(2);
     expect(pause?.details?.durationMs).toBe(60000);
+    expect(pause?.details?.diagnosis).toBe("free_tier_issue_limit");
 
     const notice = formatRemoteSyncPauseNotice(pause!);
+    expect(notice).toContain("unable to sync new issues to Linear");
+    expect(notice).toContain("free-tier active-issue limit");
     expect(notice).toContain("issueCreate requests");
     expect(notice).toContain("endpoint issueCreate");
     expect(notice).toContain("1/5 remaining");
     expect(notice).toContain("window 1m");
+  });
+
+  test("detects the free-tier issue cap even when Linear reports it through the complexity bucket", () => {
+    const pause = recordRemoteSyncPause(
+      getLinearApiErrorInfoFromResponse({
+        status: 200,
+        headers: {
+          "x-ratelimit-complexity-reset": "1742545000000",
+        },
+        body: JSON.stringify({
+          errors: [
+            {
+              message: "usage limit exceeded",
+              path: ["issueCreate"],
+              extensions: {
+                code: "USAGE_LIMIT_EXCEEDED",
+                type: "usage limit exceeded",
+              },
+            },
+          ],
+        }),
+      })
+    );
+
+    expect(pause).not.toBeNull();
+    expect(pause?.scope.kind).toBe("complexity");
+    expect(pause?.details?.diagnosis).toBe("free_tier_issue_limit");
+
+    const notice = formatRemoteSyncPauseNotice(pause!);
+    expect(notice).toContain("unable to sync new issues to Linear");
+    expect(notice).toContain("free-tier active-issue limit");
   });
 
   test("row retry timing honors typed rate-limit hints without relying on message text", async () => {

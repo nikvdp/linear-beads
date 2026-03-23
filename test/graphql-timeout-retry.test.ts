@@ -326,6 +326,7 @@ describe("structured Linear API error helpers", () => {
     expect(rateLimit?.endpointName).toBe("issueCreate");
     expect(rateLimit?.retryAfterMs).toBe(2000);
     expect(rateLimit?.resetAtMs).toBe(1742544000000);
+    expect(rateLimit?.diagnosis).toBe("free_tier_issue_limit");
   });
 
   test("extracts complexity bucket metadata from response headers", () => {
