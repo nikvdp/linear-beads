@@ -45,8 +45,10 @@ async function runInlineCli(
   envOverrides: Record<string, string> = {}
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
+    import { clearRemoteSyncPause } from ${JSON.stringify(REMOTE_SYNC_STATE_PATH)};
+    clearRemoteSyncPause();
     ${setupSource}
-    process.argv = ["bun", "lb", ${args.map((arg) => JSON.stringify(arg)).join(", ")}];
+    process.argv = ["bun", ${args.map((arg) => JSON.stringify(arg)).join(", ")}];
     await import(${JSON.stringify(CLI_PATH)});
   `;
 
@@ -543,14 +545,11 @@ describe("linear prune command", () => {
           status: 429,
           headers: {
             "retry-after": "60",
-            "x-ratelimit-endpoint-name": "issueArchive",
-            "x-ratelimit-endpoint-requests-reset": String(Date.now() + 60_000),
           },
           body: JSON.stringify({
             errors: [
               {
                 message: "rate limit exceeded",
-                path: ["issueArchive"],
                 extensions: {
                   code: "RATELIMITED",
                 },
@@ -580,7 +579,7 @@ describe("linear prune command", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("Warning:");
-    expect(result.stderr).toContain("issueArchive requests");
+    expect(result.stderr).toContain("all Linear requests are paused");
 
     const archivedRow = readArchivedRow(dbPath, "LOCAL-130");
     expect(archivedRow?.remote_archived_at).toBeNull();
