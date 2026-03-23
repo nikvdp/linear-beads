@@ -17,6 +17,7 @@ import { isTerminalStatus, type Issue } from "../types.js";
 import {
   clearRemoteSyncPause,
   formatRemoteSyncPauseNotice,
+  getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
 
@@ -286,6 +287,12 @@ export const linearCommand = new Command("linear")
               );
             }
             return;
+          }
+
+          const activePause = await getCommandRemoteSyncPause();
+          if (activePause) {
+            outputError(formatRemoteSyncPauseNotice(activePause));
+            process.exit(1);
           }
 
           const archivedAt = new Date().toISOString();
