@@ -200,6 +200,123 @@ describe("local media CLI authoring", () => {
     expect(shown[0].description).toBe(updated[0].description);
   });
 
+  test("show --body prints only the normalized description text", async () => {
+    const repoDir = createLocalRepo();
+
+    const created = await lbJson<Array<{ id: string }>>(
+      repoDir,
+      "create",
+      "Body show",
+      "-d",
+      "Alpha\n\nBeta"
+    );
+    const shown = await lb(repoDir, "show", created[0].id, "--body");
+
+    expect(shown.exitCode).toBe(0);
+    expect(shown.stderr).toBe("");
+    expect(shown.stdout).toBe("Alpha\n\nBeta\n");
+  });
+
+  test("update --replace matches the same plain body text that show --body emits", async () => {
+    const repoDir = createLocalRepo();
+
+    const dependency = await lbJson<Array<{ id: string }>>(repoDir, "create", "Dependency");
+    const created = await lbJson<Array<{ id: string }>>(
+      repoDir,
+      "create",
+      "Replace body",
+      "-d",
+      `Depends on ${dependency[0].id}`
+    );
+
+    const inspectedBefore = await inspectMedia(repoDir, created[0].id);
+    expect(inspectedBefore.issueDescription).toContain("lb-ref.invalid");
+
+    const shownBefore = await lb(repoDir, "show", created[0].id, "--body");
+    expect(shownBefore.stdout).toBe(`Depends on ${dependency[0].id}\n`);
+
+    const updated = await lbJson<Array<{ description: string }>>(
+      repoDir,
+      "update",
+      created[0].id,
+      "--replace",
+      `Depends on ${dependency[0].id}`,
+      "Resolved dependency"
+    );
+
+    expect(updated[0].description).toBe("Resolved dependency");
+
+    const shownAfter = await lb(repoDir, "show", created[0].id, "--body");
+    expect(shownAfter.stdout).toBe("Resolved dependency\n");
+  });
+
+  test("update --replace supports @file values for multiline chunks", async () => {
+    const repoDir = createLocalRepo();
+    const needlePath = join(repoDir, "needle.md");
+    const replacementPath = join(repoDir, "replacement.md");
+
+    writeFileSync(needlePath, "Old block\n\n- one\n- two\n");
+    writeFileSync(replacementPath, "New block\n\n- alpha\n- beta\n");
+
+    const created = await lbJson<Array<{ id: string; description: string }>>(
+      repoDir,
+      "create",
+      "Replace from file",
+      "-d",
+      "Intro\n\nOld block\n\n- one\n- two\n\nOutro"
+    );
+
+    const updated = await lbJson<Array<{ description: string }>>(
+      repoDir,
+      "update",
+      created[0].id,
+      "--replace",
+      `@${needlePath}`,
+      `@${replacementPath}`
+    );
+
+    expect(updated[0].description).toBe("Intro\n\nNew block\n\n- alpha\n- beta\n\nOutro");
+  });
+
+  test("update --replace fails when the needle matches zero times", async () => {
+    const repoDir = createLocalRepo();
+
+    const created = await lbJson<Array<{ id: string }>>(
+      repoDir,
+      "create",
+      "No match",
+      "-d",
+      "Body"
+    );
+    const result = await lb(
+      repoDir,
+      "update",
+      created[0].id,
+      "--replace",
+      "Missing",
+      "Replacement"
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--replace needle matched 0 times: "Missing"');
+  });
+
+  test("update --replace fails when the needle matches more than once", async () => {
+    const repoDir = createLocalRepo();
+
+    const created = await lbJson<Array<{ id: string }>>(
+      repoDir,
+      "create",
+      "Too many matches",
+      "-d",
+      "repeat and repeat"
+    );
+    const result = await lb(repoDir, "update", created[0].id, "--replace", "repeat", "done");
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--replace needle matched 2 times");
+  });
+
   test("fails when inline media ids have no matching uploaded file or cached media", async () => {
     const repoDir = createLocalRepo();
     const { imagePath } = seedSampleFiles(repoDir);
