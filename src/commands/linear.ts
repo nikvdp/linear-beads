@@ -3,12 +3,7 @@
  */
 
 import { Command } from "commander";
-import {
-  archiveIssue,
-  fetchAllTeamIssuesForPrune,
-  getTeamId,
-  getViewer,
-} from "../utils/linear.js";
+import { archiveIssue, fetchAllTeamIssuesForPrune, getTeamId, getViewer } from "../utils/linear.js";
 import {
   cacheIssue,
   getCachedIssue,
@@ -58,18 +53,16 @@ function parsePruneAge(value: unknown): { ageMs: number; ageLabel: string } | un
   }
 
   const raw = String(value).trim().toLowerCase();
-  const match = raw.match(/^(\d+)\s*(min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks|mo|mon|month|months)$/);
+  const match = raw.match(
+    /^(\d+)\s*(min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks|mo|mon|month|months)$/
+  );
   if (!match) {
-    throw new Error(
-      `Invalid age '${value}'. Use a duration like 12h, 7d, 2w, or 1mo.`
-    );
+    throw new Error(`Invalid age '${value}'. Use a duration like 12h, 7d, 2w, or 1mo.`);
   }
 
   const amount = Number.parseInt(match[1], 10);
   if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error(
-      `Invalid age '${value}'. Use a positive duration like 12h, 7d, 2w, or 1mo.`
-    );
+    throw new Error(`Invalid age '${value}'. Use a positive duration like 12h, 7d, 2w, or 1mo.`);
   }
 
   const unit = match[2];
@@ -238,20 +231,17 @@ function markArchivedCandidateLocally(candidate: PruneCandidate, archivedAt: str
   });
 }
 
-function getPruneScanScope(options: {
-  mine?: boolean;
-  all?: boolean;
-}): { scanScope: "repo_cache" | "team"; ownershipScope: TeamWideOwnershipScope | null } {
+function getPruneScanScope(options: { mine?: boolean; all?: boolean }): {
+  scanScope: "repo_cache" | "team";
+  ownershipScope: TeamWideOwnershipScope | null;
+} {
   return {
     scanScope: options.mine || options.all ? "team" : "repo_cache",
     ownershipScope: options.all ? "all_users" : options.mine ? "viewer" : null,
   };
 }
 
-function getNoCandidatesMessage(options: {
-  mine?: boolean;
-  all?: boolean;
-}): string {
+function getNoCandidatesMessage(options: { mine?: boolean; all?: boolean }): string {
   if (!options.mine && !options.all) {
     return "No closed synced Linear issues are eligible for prune.";
   }
@@ -263,10 +253,7 @@ function getNoCandidatesMessage(options: {
   return "No closed synced Linear issues created by you are eligible for prune.";
 }
 
-function getTeamScopeDescription(options: {
-  mine?: boolean;
-  all?: boolean;
-}): string {
+function getTeamScopeDescription(options: { mine?: boolean; all?: boolean }): string {
   if (!options.mine && !options.all) {
     return "";
   }
@@ -306,7 +293,9 @@ export const linearCommand = new Command("linear")
             throw new Error("--mine and --all cannot be used together");
           }
           if (ids.length > 0 && (options.mine || options.all)) {
-            throw new Error("--mine and --all can only be used when no explicit issue IDs are provided");
+            throw new Error(
+              "--mine and --all can only be used when no explicit issue IDs are provided"
+            );
           }
           if (options.yes && options.dryRun) {
             throw new Error("--yes and --dry-run cannot be used together");
@@ -373,9 +362,7 @@ export const linearCommand = new Command("linear")
                 }${getTeamScopeDescription(options)} and keep all local data${ageFilter ? ` (age >= ${ageFilter.ageLabel})` : ""}:`
               );
               for (const candidate of candidates) {
-                output(
-                  `- ${getDisplayId(candidate.id)} [${candidate.status}] ${candidate.title}`
-                );
+                output(`- ${getDisplayId(candidate.id)} [${candidate.status}] ${candidate.title}`);
               }
               output(
                 options.dryRun

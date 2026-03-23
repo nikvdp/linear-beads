@@ -750,12 +750,7 @@ function initSchema(db: Database, dbPath: string): void {
   }
 
   if (currentVersion < 13) {
-    addColumnIfMissing(
-      db,
-      "issues",
-      "creator",
-      "ALTER TABLE issues ADD COLUMN creator TEXT"
-    );
+    addColumnIfMissing(db, "issues", "creator", "ALTER TABLE issues ADD COLUMN creator TEXT");
 
     db.exec("PRAGMA user_version = 13");
   }

@@ -93,7 +93,10 @@ async function runPruneStale(cwd: string): Promise<{ pruned: number }> {
   return JSON.parse(stdout) as { pruned: number };
 }
 
-function readArchivedRow(dbPath: string, localId: string): {
+function readArchivedRow(
+  dbPath: string,
+  localId: string
+): {
   local_id: string;
   title: string;
   remote_archived_at: string | null;
@@ -456,10 +459,7 @@ describe("linear prune command", () => {
     expect(minePayload.scan_scope).toBe("team");
     expect(minePayload.ownership_scope).toBe("viewer");
     expect(minePayload.count).toBe(2);
-    expect(minePayload.candidates.map((candidate) => candidate.id)).toEqual([
-      "LIN-140",
-      "LIN-141",
-    ]);
+    expect(minePayload.candidates.map((candidate) => candidate.id)).toEqual(["LIN-140", "LIN-141"]);
     expect(minePayload.candidates.find((candidate) => candidate.id === "LIN-141")?.local_id).toBe(
       null
     );
