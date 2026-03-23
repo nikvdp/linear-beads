@@ -302,6 +302,205 @@ describe("linear prune command", () => {
     expect(archivedRow?.remote_archived_at).toBeNull();
   });
 
+  test("can opt into scanning the current Linear team for viewer-owned prune candidates", async () => {
+    const { repoDir } = createRepo();
+    const setupSource = `
+      import { cacheIssue } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+
+      const now = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString();
+      cacheIssue({
+        id: "LIN-140",
+        local_id: "LOCAL-140",
+        linear_id: "issue-140",
+        linear_identifier: "LIN-140",
+        title: "Repo-scoped closed issue",
+        status: "closed",
+        priority: 2,
+        sync_status: "synced",
+        created_at: now,
+        updated_at: now,
+        closed_at: now,
+      });
+
+      globalThis.fetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body || "{}"));
+        const query = String(body.query || "");
+
+        if (query.includes("query GetTeam")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                teams: {
+                  nodes: [{ id: "team-prn", key: "PRN", name: "Prune Team" }],
+                },
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+
+        if (query.includes("query Viewer")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                viewer: {
+                  id: "viewer-1",
+                  email: "me@example.com",
+                  name: "Me",
+                },
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+
+        if (query.includes("query GetAllTeamIssuesForPrune")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                team: {
+                  issues: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [
+                      {
+                        id: "issue-140",
+                        identifier: "LIN-140",
+                        title: "Repo-scoped closed issue",
+                        description: null,
+                        priority: 2,
+                        createdAt: now,
+                        updatedAt: now,
+                        completedAt: now,
+                        canceledAt: null,
+                        state: { id: "state-done", name: "Done", type: "completed" },
+                        labels: { nodes: [] },
+                        assignee: { id: "user-me", email: "me@example.com", name: "Me" },
+                        parent: null,
+                      },
+                      {
+                        id: "issue-141",
+                        identifier: "LIN-141",
+                        title: "Out-of-scope closed issue",
+                        description: null,
+                        priority: 2,
+                        createdAt: now,
+                        updatedAt: now,
+                        completedAt: now,
+                        canceledAt: null,
+                        state: { id: "state-done", name: "Done", type: "completed" },
+                        labels: { nodes: [] },
+                        assignee: { id: "user-me", email: "me@example.com", name: "Me" },
+                        parent: null,
+                      },
+                      {
+                        id: "issue-142",
+                        identifier: "LIN-142",
+                        title: "Another user's closed issue",
+                        description: null,
+                        priority: 2,
+                        createdAt: now,
+                        updatedAt: now,
+                        completedAt: now,
+                        canceledAt: null,
+                        state: { id: "state-done", name: "Done", type: "completed" },
+                        labels: { nodes: [] },
+                        assignee: { id: "user-other", email: "other@example.com", name: "Other" },
+                        parent: null,
+                      },
+                    ],
+                  },
+                },
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+
+        throw new Error("Unexpected GraphQL request: " + JSON.stringify(body));
+      };
+    `;
+
+    const defaultResult = await runInlineCli(repoDir, ["linear", "prune", "--json"], setupSource);
+    expect(defaultResult.exitCode).toBe(0);
+    expect(defaultResult.stderr).toBe("");
+
+    const defaultPayload = JSON.parse(defaultResult.stdout) as {
+      scan_scope: string | undefined;
+      ownership_scope: string | null | undefined;
+      count: number;
+      candidates: Array<{ id: string }>;
+    };
+    expect(defaultPayload.scan_scope).toBe("repo_cache");
+    expect(defaultPayload.ownership_scope).toBeNull();
+    expect(defaultPayload.count).toBe(1);
+    expect(defaultPayload.candidates.map((candidate) => candidate.id)).toEqual(["LIN-140"]);
+
+    const allResult = await runInlineCli(
+      repoDir,
+      ["linear", "prune", "--all", "--json"],
+      setupSource,
+      { LB_TEAM_KEY: "PRN", LINEAR_API_KEY: "linear-test-key" }
+    );
+    expect(allResult.exitCode).toBe(0);
+    expect(allResult.stderr).toBe("");
+
+    const allPayload = JSON.parse(allResult.stdout) as {
+      scan_scope: string;
+      ownership_scope: string | null;
+      count: number;
+      candidates: Array<{ id: string; local_id: string | null }>;
+    };
+    expect(allPayload.scan_scope).toBe("team");
+    expect(allPayload.ownership_scope).toBe("viewer");
+    expect(allPayload.count).toBe(2);
+    expect(allPayload.candidates.map((candidate) => candidate.id)).toEqual(["LIN-140", "LIN-141"]);
+    expect(allPayload.candidates.find((candidate) => candidate.id === "LIN-141")?.local_id).toBe(
+      null
+    );
+
+    const allUsersResult = await runInlineCli(
+      repoDir,
+      ["linear", "prune", "--all", "--all-users", "--json"],
+      setupSource,
+      { LB_TEAM_KEY: "PRN", LINEAR_API_KEY: "linear-test-key" }
+    );
+    expect(allUsersResult.exitCode).toBe(0);
+    expect(allUsersResult.stderr).toBe("");
+
+    const allUsersPayload = JSON.parse(allUsersResult.stdout) as {
+      scan_scope: string;
+      ownership_scope: string | null;
+      count: number;
+      candidates: Array<{ id: string; local_id: string | null }>;
+    };
+    expect(allUsersPayload.scan_scope).toBe("team");
+    expect(allUsersPayload.ownership_scope).toBe("all_users");
+    expect(allUsersPayload.count).toBe(3);
+    expect(allUsersPayload.candidates.map((candidate) => candidate.id)).toEqual([
+      "LIN-140",
+      "LIN-141",
+      "LIN-142",
+    ]);
+  });
+
+  test("rejects --all when explicit issue IDs are provided", async () => {
+    const { repoDir } = createRepo();
+    const result = await runInlineCli(repoDir, ["linear", "prune", "LIN-140", "--all"], "");
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("--all can only be used when no explicit issue IDs are provided");
+  });
+
+  test("rejects --all-users without --all", async () => {
+    const { repoDir } = createRepo();
+    const result = await runInlineCli(repoDir, ["linear", "prune", "--all-users"], "");
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("--all-users can only be used with --all");
+  });
+
   test("exits before archiving when a blocking remote pause is already active", async () => {
     const { repoDir, dbPath } = createRepo();
     const setupSource = `
