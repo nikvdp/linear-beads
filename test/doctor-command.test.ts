@@ -308,6 +308,7 @@ describe("doctor command", () => {
     expect(report.remote_sync.likely_sync_blocker?.message).toContain(
       "free-tier active-issue limit"
     );
+    expect(report.remote_sync.likely_sync_blocker?.message).toContain("lb linear prune");
     expect(report.outbox.latest_failed_item?.subject).toBe("LOCAL-401");
     expect(report.outbox.latest_failed_item?.error).toContain("usage limit exceeded");
   });

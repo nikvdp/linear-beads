@@ -212,6 +212,7 @@ describe("create --wait helper", () => {
     expect(parsed.issue?.id).toBe("LOCAL-001");
     expect(parsed.pauseNotice).toContain("issueCreate");
     expect(parsed.pauseNotice).toContain("Linear rate limit");
+    expect(parsed.pauseNotice).toContain("lb linear prune");
   });
 
   test("reports a structured JSON error when --wait is used in local-only mode", async () => {

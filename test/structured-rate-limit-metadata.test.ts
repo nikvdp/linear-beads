@@ -81,6 +81,7 @@ describe("structured rate-limit metadata", () => {
     const notice = formatRemoteSyncPauseNotice(pause!);
     expect(notice).toContain("unable to sync new issues to Linear");
     expect(notice).toContain("free-tier active-issue limit");
+    expect(notice).toContain("lb linear prune");
     expect(notice).toContain("issueCreate requests");
     expect(notice).toContain("endpoint issueCreate");
     expect(notice).toContain("1/5 remaining");
@@ -116,6 +117,7 @@ describe("structured rate-limit metadata", () => {
     const notice = formatRemoteSyncPauseNotice(pause!);
     expect(notice).toContain("unable to sync new issues to Linear");
     expect(notice).toContain("free-tier active-issue limit");
+    expect(notice).toContain("lb linear prune");
   });
 
   test("row retry timing honors typed rate-limit hints without relying on message text", async () => {
