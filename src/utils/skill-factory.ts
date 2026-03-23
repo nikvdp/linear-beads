@@ -40,6 +40,13 @@ Use heredoc text, \`--description-file\`, or \`--description-stdin\`.
 \`lb\` auto-heals likely accidental \`\\n\` sequences by default and warns loudly.
 Use \`--no-auto-format-escaped-newlines\` only when you intentionally need literal \`\\n\` stored.
 
+## Editing long ticket bodies
+
+- Use \`lb show <id> --body\` to fetch only the normalized body text.
+- Use \`lb update <id> --replace "old" "new"\` for small exact edits.
+- Use \`lb update <id> --replace @old.md @new.md\` for large chunks.
+- \`lb\` still rewrites and queues the full updated body, but this saves agent tokens and keeps edits aligned with the shown text surface.
+
 ## Useful commands
 
 \`lb list\`, \`lb ready\`, \`lb blocked\`, \`lb show <id>\`, \`lb create\`, \`lb update\`, \`lb close\`, \`lb dep add\`.
@@ -82,6 +89,7 @@ Each issue should include:
 - Do not batch status changes at end of day.
 - Keep dependencies explicit in lb, not only in prose.
 - Keep changes scoped to the claimed issue.
+- When editing long descriptions during execution, prefer \`lb show <id> --body\` plus \`lb update <id> --replace\` over copying full bodies through the model.
 `;
 
 const LB_BASIC_USAGE_OPENAI_YAML = `display_name: LB Basic Usage
