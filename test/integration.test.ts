@@ -994,6 +994,20 @@ describe("Local-only Mode", () => {
       expect(shown[0].description).toBe("Why\n\nWhat");
     });
 
+    test("should read create descriptions from @file", async () => {
+      const bodyPath = join(testDir, "create-body.md");
+      writeFileSync(bodyPath, "Why\n\n- one\n- two\n");
+
+      const result = await lbLocalJson<Array<{ description: string }>>(
+        "create",
+        "Create from file",
+        "-d",
+        `@${bodyPath}`
+      );
+
+      expect(result[0].description).toBe("Why\n\n- one\n- two\n");
+    });
+
     test("should preserve literal escaped newlines when auto-heal is explicitly disabled", async () => {
       const result = await lbLocal(
         "create",
@@ -1253,6 +1267,21 @@ describe("Local-only Mode", () => {
 
       const shown = await lbLocalJson<Array<{ description: string }>>("show", created[0].id);
       expect(shown[0].description).toBe("Why\\n\\nWhat");
+    });
+
+    test("should read update descriptions from @file", async () => {
+      const created = await lbLocalJson<Array<{ id: string }>>("create", "Update from file");
+      const bodyPath = join(testDir, "update-body.md");
+      writeFileSync(bodyPath, "Plan\n\n- alpha\n- beta\n");
+
+      const result = await lbLocalJson<Array<{ description: string }>>(
+        "update",
+        created[0].id,
+        "-d",
+        `@${bodyPath}`
+      );
+
+      expect(result[0].description).toBe("Plan\n\n- alpha\n- beta\n");
     });
   });
 
@@ -1877,6 +1906,53 @@ describe("Local-only Mode", () => {
       expect(threadView.messages.some((message) => message.id === replyResult.message.id)).toBe(
         true
       );
+    });
+
+    test("should read mail bodies from @file for send and reply", async () => {
+      const suffix = `${Date.now()}-file`;
+      const alpha = `Alpha${suffix}`;
+      const beta = `Beta${suffix}`;
+      const sendBodyPath = join(testDir, "mail-send-body.md");
+      const replyBodyPath = join(testDir, "mail-reply-body.md");
+
+      writeFileSync(sendBodyPath, "Hello from file\n\n- line one\n");
+      writeFileSync(replyBodyPath, "Reply from file\n\n- line two\n");
+
+      await lbLocalJson<{ handle: string }>("agent", "register", "--handle", alpha);
+      await lbLocalJson<{ handle: string }>("agent", "register", "--handle", beta);
+
+      const sent = await lbLocalJson<{
+        message: { id: string; thread_id: string; body_md: string };
+      }>(
+        "mail",
+        "send",
+        "--from",
+        alpha,
+        "--to",
+        beta,
+        "--subject",
+        "Mail body from file",
+        "--body",
+        `@${sendBodyPath}`
+      );
+
+      expect(sent.message.body_md).toBe("Hello from file\n\n- line one\n");
+
+      const reply = await lbLocalJson<{
+        message: { id: string; thread_id: string; body_md: string };
+      }>(
+        "mail",
+        "reply",
+        "--agent",
+        beta,
+        "--message",
+        sent.message.id,
+        "--body",
+        `@${replyBodyPath}`
+      );
+
+      expect(reply.message.thread_id).toBe(sent.message.thread_id);
+      expect(reply.message.body_md).toBe("Reply from file\n\n- line two\n");
     });
   });
 });

@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import {
   protectDescriptionFromEscapedNewlines,
+  resolveAtFileText,
+  resolveDescriptionInput,
+  resolveOptionalAtFileText,
   rewriteEscapedNewlines,
 } from "../src/utils/description-input.js";
 import {
@@ -50,6 +56,31 @@ describe("protectDescriptionFromEscapedNewlines", () => {
     expect(result.looksLikeMistake).toBe(true);
     expect(result.autoHealed).toBe(false);
     expect(result.description).toBe("Why\\n\\nWhat");
+  });
+});
+
+describe("at-file text resolution", () => {
+  test("reads inline @file values for description input", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lb-desc-input-"));
+    const bodyPath = join(dir, "body.md");
+    writeFileSync(bodyPath, "Why\n\nWhat\n");
+
+    try {
+      const result = await resolveDescriptionInput({
+        inlineDescription: `@${bodyPath}`,
+      });
+      expect(result).toBe("Why\n\nWhat\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps literal @ when escaped as @@", async () => {
+    expect(await resolveAtFileText("@@literal")).toBe("@literal");
+  });
+
+  test("returns undefined for absent optional @file values", async () => {
+    expect(await resolveOptionalAtFileText(undefined)).toBeUndefined();
   });
 });
 
