@@ -17,6 +17,7 @@ import { getOutboxDiagnosticItems, getPendingOutboxItems, listMediaItemsForIssue
 import {
   getLinearApiErrorInfoFromResponse,
   getLinearRequestPolicy,
+  isLikelyLinearFreeTierIssueLimitMessage,
   linearFetchWithRetry,
   resetGraphQLClient,
 } from "../utils/graphql.js";
@@ -83,6 +84,14 @@ type EndpointProbeResult =
       errorSummary?: string;
       url: string;
     };
+
+type LikelySyncBlocker =
+  | {
+      kind: "linear_free_tier_issue_limit";
+      source: "active_pause" | "background_pause" | "latest_failed_item" | "recent_error";
+      message: string;
+    }
+  | null;
 
 function resolveConfigFile(primaryPath: string): ConfigFileInfo {
   const candidates = primaryPath.endsWith(".jsonc")
@@ -424,6 +433,49 @@ function summarizeOutboxFailureContext(item: {
   return notes;
 }
 
+function getFreeTierIssueLimitMessage(): string {
+  return "Linear is rejecting issue creation with `usage limit exceeded`, which likely means the workspace hit the Linear free-tier active-issue limit. Archive older issues in Linear or raise the workspace limit before expecting new issue creates to sync.";
+}
+
+function detectLikelySyncBlocker(
+  activePauses: ReturnType<typeof getActiveRemoteSyncPauses>,
+  backgroundPauses: ReturnType<typeof getAutomaticRemoteSyncPauses>,
+  latestFailedItem: ReturnType<typeof getOutboxDiagnosticItems>[number] | undefined,
+  failedOutbox: ReturnType<typeof getOutboxDiagnosticItems>
+): LikelySyncBlocker {
+  const pauseWithFreeTierDiagnosis =
+    activePauses.find((pause) => pause.details?.diagnosis === "free_tier_issue_limit") ||
+    backgroundPauses.find((pause) => pause.details?.diagnosis === "free_tier_issue_limit");
+  if (pauseWithFreeTierDiagnosis) {
+    return {
+      kind: "linear_free_tier_issue_limit",
+      source: activePauses.includes(pauseWithFreeTierDiagnosis) ? "active_pause" : "background_pause",
+      message: getFreeTierIssueLimitMessage(),
+    };
+  }
+
+  if (latestFailedItem?.last_error && isLikelyLinearFreeTierIssueLimitMessage(latestFailedItem.last_error)) {
+    return {
+      kind: "linear_free_tier_issue_limit",
+      source: "latest_failed_item",
+      message: getFreeTierIssueLimitMessage(),
+    };
+  }
+
+  const recentMatch = failedOutbox.find(
+    (item) => item.last_error && isLikelyLinearFreeTierIssueLimitMessage(item.last_error)
+  );
+  if (recentMatch) {
+    return {
+      kind: "linear_free_tier_issue_limit",
+      source: "recent_error",
+      message: getFreeTierIssueLimitMessage(),
+    };
+  }
+
+  return null;
+}
+
 function effectiveApiKeySource(
   envKey: string | undefined,
   repoConfig: ConfigFileInfo,
@@ -516,6 +568,12 @@ export const doctorCommand = new Command("doctor")
         return rightMs - leftMs || right.id - left.id;
       });
     const latestFailedItem = failedOutbox[0];
+    const likelySyncBlocker = detectLikelySyncBlocker(
+      activePauses,
+      backgroundPauses,
+      latestFailedItem,
+      failedOutbox
+    );
     const recentErrors = failedOutbox
       .slice(0, 5)
       .map((item) => ({
@@ -633,6 +691,7 @@ export const doctorCommand = new Command("doctor")
           until: pause.backgroundUntil,
           message: pause.message || null,
         })),
+        likely_sync_blocker: likelySyncBlocker,
       },
       workers: {
         repo_pid_file: {
@@ -784,6 +843,12 @@ export const doctorCommand = new Command("doctor")
               : pause.scope.kind;
           lines.push(`- background scope: ${scopeLabel} (${pause.kind}) until ${pause.until}`);
         }
+      }
+      if (doctorReport.remote_sync.likely_sync_blocker) {
+        lines.push(`- likely sync blocker: ${doctorReport.remote_sync.likely_sync_blocker.message}`);
+        lines.push(
+          `- likely sync blocker source: ${doctorReport.remote_sync.likely_sync_blocker.source}`
+        );
       }
       lines.push("");
       lines.push("Outbox");

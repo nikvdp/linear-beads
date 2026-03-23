@@ -14,6 +14,7 @@ import {
   getLinearRequestPolicy,
   linearFetchWithRetry,
   type LinearRateLimitBucketKind,
+  type LinearRateLimitDiagnosis,
   type LinearRateLimitErrorInfo,
 } from "./graphql.js";
 
@@ -48,6 +49,7 @@ type StoredRemoteSyncPauseRecord = {
     limit?: number;
     remaining?: number;
     requested?: number;
+    diagnosis?: LinearRateLimitDiagnosis;
   };
 };
 
@@ -723,6 +725,7 @@ function extractErrorInfo(error: unknown): ExtractedErrorInfo {
         limit: rateLimit.limit,
         remaining: rateLimit.remaining,
         requested: rateLimit.requested,
+        diagnosis: rateLimit.diagnosis,
       }
     : undefined;
 
@@ -1155,6 +1158,12 @@ function formatRateLimitDetails(pause: ActiveRemoteSyncPause): string | null {
     );
   }
 
+  if (pause.details?.diagnosis === "free_tier_issue_limit") {
+    details.push(
+      "Likely cause: Linear's free-tier active-issue limit. lb cannot create new Linear issues until older issues are archived or the workspace limit changes."
+    );
+  }
+
   const bucketParts: string[] = [];
   if (meta.endpointName || pause.scope.kind === "endpoint") {
     const endpointName =
@@ -1205,9 +1214,14 @@ export function formatRemoteSyncPauseNotice(
   const prefix = options.prefix || "Warning:";
   const cause = pause.kind === "rate_limit" ? "Linear rate limit" : "network failure";
   const scope = describePauseScope(pause);
-  const summary = `${prefix} ${scope} ${pause.kind === "network" ? "is" : "are"} paused until ${formatPauseUntilLocal(
-    pause.until
-  )} (${formatPauseDuration(pause.retryAfterMs)}) after ${cause}.`;
+  const summary =
+    pause.kind === "rate_limit" && pause.details?.diagnosis === "free_tier_issue_limit"
+      ? `${prefix} lb is unable to sync new issues to Linear and this likely means the workspace hit Linear's free-tier active-issue limit. ${scope} are paused until ${formatPauseUntilLocal(
+          pause.until
+        )} (${formatPauseDuration(pause.retryAfterMs)}) after ${cause}.`
+      : `${prefix} ${scope} ${pause.kind === "network" ? "is" : "are"} paused until ${formatPauseUntilLocal(
+          pause.until
+        )} (${formatPauseDuration(pause.retryAfterMs)}) after ${cause}.`;
   const details = formatRateLimitDetails(pause);
   const suffix =
     pause.scope.kind === "endpoint"

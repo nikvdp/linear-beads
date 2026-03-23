@@ -34,10 +34,12 @@ export type LinearPageInfo = {
 };
 
 export type LinearRateLimitBucketKind = "global" | "endpoint" | "complexity";
+export type LinearRateLimitDiagnosis = "free_tier_issue_limit";
 
 export type LinearGraphQLErrorInfo = {
   message?: string;
   extensions?: Record<string, unknown>;
+  path?: Array<string | number>;
 };
 
 export type LinearRateLimitErrorInfo = {
@@ -49,6 +51,7 @@ export type LinearRateLimitErrorInfo = {
   limit?: number;
   remaining?: number;
   requested?: number;
+  diagnosis?: LinearRateLimitDiagnosis;
   headers: Record<string, string>;
   graphqlErrors: LinearGraphQLErrorInfo[];
   status: number;
@@ -82,6 +85,7 @@ type GraphQLResponseLike = {
   errors?: Array<{
     message?: string;
     extensions?: Record<string, unknown>;
+    path?: Array<string | number>;
   }>;
 };
 
@@ -249,7 +253,63 @@ function toGraphQLErrorInfo(
       error?.extensions && typeof error.extensions === "object"
         ? error.extensions
         : undefined,
+    path: Array.isArray(error?.path)
+      ? error.path.filter(
+          (segment): segment is string | number =>
+            typeof segment === "string" || typeof segment === "number"
+        )
+      : undefined,
   }));
+}
+
+function pickPathRoot(graphqlErrors: LinearGraphQLErrorInfo[]): string | undefined {
+  for (const error of graphqlErrors) {
+    const firstSegment = error.path?.find((segment) => typeof segment === "string");
+    if (typeof firstSegment === "string" && firstSegment.trim()) {
+      return firstSegment.trim();
+    }
+  }
+  return undefined;
+}
+
+function pickPathRootFromBody(body: string): string | undefined {
+  const match = body.match(/["']path["']\s*:\s*\[\s*["']([A-Za-z][A-Za-z0-9_]*)["']/i);
+  return match?.[1]?.trim() || undefined;
+}
+
+function hasUsageLimitSignal(graphqlErrors: LinearGraphQLErrorInfo[], body: string): boolean {
+  const messages = graphqlErrors
+    .map((error) => {
+      const extensionJson =
+        error.extensions && Object.keys(error.extensions).length > 0
+          ? JSON.stringify(error.extensions)
+          : "";
+      return [error.message || "", extensionJson].filter(Boolean).join(" ");
+    })
+    .filter((value) => value.trim().length > 0);
+  const haystacks = [...messages, body].filter((value) => value.trim().length > 0);
+
+  return haystacks.some((value) => {
+    const normalized = value.toLowerCase();
+    return (
+      normalized.includes("usage limit exceeded") ||
+      normalized.includes("usage_limit_exceeded") ||
+      normalized.includes("usagelimitexceeded")
+    );
+  });
+}
+
+export function isLikelyLinearFreeTierIssueLimitMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  const mentionsUsageLimit =
+    normalized.includes("usage limit exceeded") ||
+    normalized.includes("usage_limit_exceeded") ||
+    normalized.includes("usagelimitexceeded");
+  const mentionsIssueCreate =
+    normalized.includes("issuecreate") ||
+    /["']endpointname["']?\s*[:=]\s*["']issuecreate["']/i.test(message) ||
+    /["']path["']\s*:\s*\[\s*["']issuecreate["']/i.test(message);
+  return mentionsUsageLimit && mentionsIssueCreate;
 }
 
 function parseGraphQLErrorBody(body: string): LinearGraphQLErrorInfo[] {
@@ -323,6 +383,10 @@ function hasRateLimitMessageSignal(
   graphqlErrors: LinearGraphQLErrorInfo[],
   body: string
 ): boolean {
+  if (hasUsageLimitSignal(graphqlErrors, body)) {
+    return true;
+  }
+
   const messages = graphqlErrors
     .map((error) => {
       const extensionJson =
@@ -338,7 +402,6 @@ function hasRateLimitMessageSignal(
     const normalized = value.toLowerCase();
     return (
       normalized.includes("rate limit exceeded") ||
-      normalized.includes("usage limit exceeded") ||
       normalized.includes("\"code\":\"ratelimited\"") ||
       normalized.includes("\"type\":\"ratelimited\"")
     );
@@ -412,18 +475,26 @@ function buildRateLimitInfo(
           : headerValue(headers, "x-ratelimit-requests-reset")
     ) ??
     parseResetHeaderMs(headerValue(headers, "x-ratelimit-requests-reset"));
+  const endpointName =
+    headerValue(headers, "x-ratelimit-endpoint-name") ||
+    pickStringExtensionValue(graphqlErrors, "endpointName") ||
+    pickPathRoot(graphqlErrors) ||
+    pickPathRootFromBody(body);
+  const diagnosis =
+    endpointName === "issueCreate" && hasUsageLimitSignal(graphqlErrors, body)
+      ? "free_tier_issue_limit"
+      : undefined;
 
   return {
     bucketKind,
-    endpointName:
-      headerValue(headers, "x-ratelimit-endpoint-name") ||
-      pickStringExtensionValue(graphqlErrors, "endpointName"),
+    endpointName,
     retryAfterMs,
     resetAtMs,
     durationMs: pickNumericExtensionValue(graphqlErrors, "duration"),
     limit: pickNumericExtensionValue(graphqlErrors, "limit"),
     remaining: pickNumericExtensionValue(graphqlErrors, "remaining"),
     requested: pickNumericExtensionValue(graphqlErrors, "requested"),
+    diagnosis,
     headers,
     graphqlErrors,
     status,
