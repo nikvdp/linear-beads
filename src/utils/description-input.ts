@@ -32,6 +32,23 @@ async function readDescriptionFromStdin(): Promise<string> {
   return out;
 }
 
+export async function resolveAtFileText(value: string): Promise<string> {
+  if (value.startsWith("@@")) {
+    return value.slice(1);
+  }
+
+  if (!value.startsWith("@")) {
+    return value;
+  }
+
+  const path = value.slice(1);
+  if (!path) {
+    throw new Error("Invalid @file value: expected a file path after '@'");
+  }
+
+  return await readFile(path, "utf8");
+}
+
 export async function resolveDescriptionInput(
   options: DescriptionInputOptions
 ): Promise<string | undefined> {

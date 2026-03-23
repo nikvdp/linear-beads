@@ -67,11 +67,17 @@ export const showCommand = new Command("show")
   .description("Show issue details")
   .argument("<id>", "Issue ID (e.g., TEAM-123 or 123)")
   .option("-j, --json", "Output as JSON")
+  .option("--body", "Output only the normalized issue description body")
   .option("--sync", "Force sync before showing")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
   .action(async (id: string, options) => {
     try {
+      if (options.json && options.body) {
+        outputError("Cannot specify both --json and --body");
+        process.exit(1);
+      }
+
       const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
       if (options.style && !requestedStyle) {
         console.error(
@@ -161,6 +167,16 @@ export const showCommand = new Command("show")
         process.exit(1);
       }
 
+      const normalizedDescription = normalizeIssueDescriptionForOutput(
+        issue.description,
+        issue.local_id || issue.id
+      );
+
+      if (options.body) {
+        output(normalizedDescription ?? "");
+        return;
+      }
+
       // Get dependencies (both directions)
       const outgoing = getDependencies(issue.id);
       const incoming = getInverseDependencies(issue.id);
@@ -192,10 +208,7 @@ export const showCommand = new Command("show")
       if (options.json) {
         const jsonOutput = {
           ...issue,
-          description: normalizeIssueDescriptionForOutput(
-            issue.description,
-            issue.local_id || issue.id
-          ),
+          description: normalizedDescription,
           parent: parent || null,
           children: children.length > 0 ? children : undefined,
           blocks: blocks.length > 0 ? blocks : undefined,

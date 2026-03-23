@@ -30,6 +30,7 @@ import {
   formatIssueJson,
   formatIssueHuman,
   formatIssueHumanBeads,
+  normalizeIssueDescriptionForOutput,
   output,
   outputError,
 } from "../utils/output.js";
@@ -49,6 +50,7 @@ import {
 } from "../utils/config.js";
 import {
   protectDescriptionFromEscapedNewlines,
+  resolveAtFileText,
   resolveDescriptionInput,
 } from "../utils/description-input.js";
 import { cachePreparedDescriptionMedia, planDescriptionMediaInput } from "../utils/media-input.js";
@@ -98,6 +100,77 @@ function parseDeps(deps: string): Array<{ type: string; targetId: string }> {
  */
 function collect(value: string, previous: string[] = []): string[] {
   return previous.concat([value]);
+}
+
+type ReplaceOperation = {
+  needle: string;
+  replacement: string;
+};
+
+function summarizeReplaceText(value: string): string {
+  const compact = value.replace(/\n/g, "\\n");
+  if (compact.length <= 80) {
+    return compact;
+  }
+  return `${compact.slice(0, 77)}...`;
+}
+
+async function parseReplaceOperations(parts: string[] | undefined): Promise<ReplaceOperation[]> {
+  if (!parts || parts.length === 0) {
+    return [];
+  }
+
+  if (parts.length % 2 !== 0) {
+    throw new Error(
+      `--replace expects needle/replacement pairs, but received ${parts.length} values`
+    );
+  }
+
+  const operations: ReplaceOperation[] = [];
+  for (let index = 0; index < parts.length; index += 2) {
+    const needle = await resolveAtFileText(parts[index]);
+    const replacement = await resolveAtFileText(parts[index + 1]);
+    if (needle.length === 0) {
+      throw new Error(`--replace needle ${index / 2 + 1} must not be empty`);
+    }
+    operations.push({ needle, replacement });
+  }
+
+  return operations;
+}
+
+function countLiteralMatches(haystack: string, needle: string): number {
+  let count = 0;
+  let startIndex = 0;
+  while (startIndex <= haystack.length) {
+    const nextIndex = haystack.indexOf(needle, startIndex);
+    if (nextIndex === -1) {
+      return count;
+    }
+    count += 1;
+    startIndex = nextIndex + needle.length;
+  }
+  return count;
+}
+
+function applyReplaceOperations(description: string, operations: ReplaceOperation[]): string {
+  let nextDescription = description;
+
+  for (const operation of operations) {
+    const matchCount = countLiteralMatches(nextDescription, operation.needle);
+    const summarizedNeedle = summarizeReplaceText(operation.needle);
+    if (matchCount === 0) {
+      throw new Error(`--replace needle matched 0 times: "${summarizedNeedle}"`);
+    }
+    if (matchCount > 1) {
+      throw new Error(
+        `--replace needle matched ${matchCount} times; it must match exactly once: "${summarizedNeedle}"`
+      );
+    }
+    nextDescription = nextDescription.replace(operation.needle, operation.replacement);
+  }
+
+  return nextDescription;
 }
 
 function warnOnAutoHealedEscapedNewlineDescription(autoHealed: boolean): void {
@@ -185,6 +258,10 @@ export const updateCommand = new Command("update")
   .option("-d, --description <desc>", "New description")
   .option("--description-file <path>", "Read new description from file")
   .option("--description-stdin", "Read new description from stdin")
+  .option(
+    "--replace <parts...>",
+    "Replace exact body text using ordered needle/replacement pairs; prefix a value with @ to read it from a file"
+  )
   .option("--media <path>", "Attach media from a local file (repeatable)", collect)
   .option("--media-id <id>", "Media id to pair with --media by position (repeatable)", collect)
   .option(
@@ -216,12 +293,26 @@ export const updateCommand = new Command("update")
       const style = getHumanOutputStyle(requestedStyle);
 
       const resolvedId = resolveIssueId(id);
+      const replaceOperations = await parseReplaceOperations(
+        options.replace as string[] | undefined
+      );
       // Validate inputs
       let description = await resolveDescriptionInput({
         inlineDescription: options.description as string | undefined,
         descriptionFile: options.descriptionFile as string | undefined,
         descriptionStdin: !!options.descriptionStdin,
       });
+      if (replaceOperations.length > 0 && description !== undefined) {
+        throw new Error(
+          "Description input conflict: choose either --replace or one of --description, --description-file, or --description-stdin"
+        );
+      }
+      if (replaceOperations.length > 0) {
+        const currentDescription = await loadCurrentDescriptionForUpdate(resolvedId);
+        const editableBody =
+          normalizeIssueDescriptionForOutput(currentDescription, resolvedId) ?? "";
+        description = applyReplaceOperations(editableBody, replaceOperations);
+      }
       const hadExplicitDescriptionInput = description !== undefined;
       const requestedMediaPaths = options.media as string[] | undefined;
       const requestedMediaIds = options.mediaId as string[] | undefined;
