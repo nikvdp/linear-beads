@@ -302,7 +302,7 @@ describe("linear prune command", () => {
     expect(archivedRow?.remote_archived_at).toBeNull();
   });
 
-  test("can opt into scanning the current Linear team for viewer-owned prune candidates", async () => {
+  test("can opt into scanning the current Linear team with --mine or --all", async () => {
     const { repoDir } = createRepo();
     const setupSource = `
       import { cacheIssue } from ${JSON.stringify(DATABASE_UTILS_PATH)};
@@ -435,6 +435,32 @@ describe("linear prune command", () => {
     expect(defaultPayload.count).toBe(1);
     expect(defaultPayload.candidates.map((candidate) => candidate.id)).toEqual(["LIN-140"]);
 
+    const mineResult = await runInlineCli(
+      repoDir,
+      ["linear", "prune", "--mine", "--json"],
+      setupSource,
+      { LB_TEAM_KEY: "PRN", LINEAR_API_KEY: "linear-test-key" }
+    );
+    expect(mineResult.exitCode).toBe(0);
+    expect(mineResult.stderr).toBe("");
+
+    const minePayload = JSON.parse(mineResult.stdout) as {
+      scan_scope: string;
+      ownership_scope: string | null;
+      count: number;
+      candidates: Array<{ id: string; local_id: string | null }>;
+    };
+    expect(minePayload.scan_scope).toBe("team");
+    expect(minePayload.ownership_scope).toBe("viewer");
+    expect(minePayload.count).toBe(2);
+    expect(minePayload.candidates.map((candidate) => candidate.id)).toEqual([
+      "LIN-140",
+      "LIN-141",
+    ]);
+    expect(minePayload.candidates.find((candidate) => candidate.id === "LIN-141")?.local_id).toBe(
+      null
+    );
+
     const allResult = await runInlineCli(
       repoDir,
       ["linear", "prune", "--all", "--json"],
@@ -451,54 +477,40 @@ describe("linear prune command", () => {
       candidates: Array<{ id: string; local_id: string | null }>;
     };
     expect(allPayload.scan_scope).toBe("team");
-    expect(allPayload.ownership_scope).toBe("viewer");
-    expect(allPayload.count).toBe(2);
-    expect(allPayload.candidates.map((candidate) => candidate.id)).toEqual(["LIN-140", "LIN-141"]);
-    expect(allPayload.candidates.find((candidate) => candidate.id === "LIN-141")?.local_id).toBe(
-      null
-    );
-
-    const allUsersResult = await runInlineCli(
-      repoDir,
-      ["linear", "prune", "--all", "--all-users", "--json"],
-      setupSource,
-      { LB_TEAM_KEY: "PRN", LINEAR_API_KEY: "linear-test-key" }
-    );
-    expect(allUsersResult.exitCode).toBe(0);
-    expect(allUsersResult.stderr).toBe("");
-
-    const allUsersPayload = JSON.parse(allUsersResult.stdout) as {
-      scan_scope: string;
-      ownership_scope: string | null;
-      count: number;
-      candidates: Array<{ id: string; local_id: string | null }>;
-    };
-    expect(allUsersPayload.scan_scope).toBe("team");
-    expect(allUsersPayload.ownership_scope).toBe("all_users");
-    expect(allUsersPayload.count).toBe(3);
-    expect(allUsersPayload.candidates.map((candidate) => candidate.id)).toEqual([
+    expect(allPayload.ownership_scope).toBe("all_users");
+    expect(allPayload.count).toBe(3);
+    expect(allPayload.candidates.map((candidate) => candidate.id)).toEqual([
       "LIN-140",
       "LIN-141",
       "LIN-142",
     ]);
   });
 
-  test("rejects --all when explicit issue IDs are provided", async () => {
+  test("rejects --mine and --all when explicit issue IDs are provided", async () => {
     const { repoDir } = createRepo();
-    const result = await runInlineCli(repoDir, ["linear", "prune", "LIN-140", "--all"], "");
+    const mineResult = await runInlineCli(repoDir, ["linear", "prune", "LIN-140", "--mine"], "");
+    const allResult = await runInlineCli(repoDir, ["linear", "prune", "LIN-140", "--all"], "");
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("--all can only be used when no explicit issue IDs are provided");
+    expect(mineResult.exitCode).toBe(1);
+    expect(mineResult.stdout).toBe("");
+    expect(mineResult.stderr).toContain(
+      "--mine and --all can only be used when no explicit issue IDs are provided"
+    );
+
+    expect(allResult.exitCode).toBe(1);
+    expect(allResult.stdout).toBe("");
+    expect(allResult.stderr).toContain(
+      "--mine and --all can only be used when no explicit issue IDs are provided"
+    );
   });
 
-  test("rejects --all-users without --all", async () => {
+  test("rejects --mine together with --all", async () => {
     const { repoDir } = createRepo();
-    const result = await runInlineCli(repoDir, ["linear", "prune", "--all-users"], "");
+    const result = await runInlineCli(repoDir, ["linear", "prune", "--mine", "--all"], "");
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("--all-users can only be used with --all");
+    expect(result.stderr).toContain("--mine and --all cannot be used together");
   });
 
   test("exits before archiving when a blocking remote pause is already active", async () => {
