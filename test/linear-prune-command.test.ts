@@ -167,6 +167,139 @@ describe("linear prune command", () => {
     });
   });
 
+  test("filters automatic prune candidates by age", async () => {
+    const { repoDir } = createRepo();
+    const setupSource = `
+      import { cacheIssue } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+
+      const now = Date.now();
+      const oldEnough = new Date(now - 9 * 24 * 60 * 60 * 1000).toISOString();
+      const tooFresh = new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString();
+
+      cacheIssue({
+        id: "LIN-110",
+        local_id: "LOCAL-110",
+        linear_id: "issue-110",
+        linear_identifier: "LIN-110",
+        title: "Old closed issue",
+        status: "closed",
+        priority: 2,
+        sync_status: "synced",
+        created_at: oldEnough,
+        updated_at: oldEnough,
+        closed_at: oldEnough,
+      });
+      cacheIssue({
+        id: "LIN-111",
+        local_id: "LOCAL-111",
+        linear_id: "issue-111",
+        linear_identifier: "LIN-111",
+        title: "Freshly closed issue",
+        status: "closed",
+        priority: 2,
+        sync_status: "synced",
+        created_at: tooFresh,
+        updated_at: tooFresh,
+        closed_at: tooFresh,
+      });
+    `;
+
+    const result = await runInlineCli(
+      repoDir,
+      ["linear", "prune", "--age", "7d", "--json"],
+      setupSource
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      preview: boolean;
+      age: string | null;
+      count: number;
+      candidates: Array<{ id: string; title: string }>;
+    };
+
+    expect(payload.preview).toBe(true);
+    expect(payload.age).toBe("7d");
+    expect(payload.count).toBe(1);
+    expect(payload.candidates).toHaveLength(1);
+    expect(payload.candidates[0]).toMatchObject({
+      id: "LIN-110",
+      title: "Old closed issue",
+    });
+  });
+
+  test("rejects malformed prune ages", async () => {
+    const { repoDir } = createRepo();
+    const result = await runInlineCli(repoDir, ["linear", "prune", "--age", "banana"], "");
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Invalid age 'banana'");
+  });
+
+  test("supports explicit dry-run output without archiving", async () => {
+    const { repoDir, dbPath } = createRepo();
+    const setupSource = `
+      import { cacheIssue } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+
+      const now = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+      cacheIssue({
+        id: "LIN-120",
+        local_id: "LOCAL-120",
+        linear_id: "issue-120",
+        linear_identifier: "LIN-120",
+        title: "Dry-run candidate",
+        status: "closed",
+        priority: 2,
+        sync_status: "synced",
+        created_at: now,
+        updated_at: now,
+        closed_at: now,
+      });
+
+      globalThis.fetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body || "{}"));
+        if (String(body.query || "").includes("issueArchive")) {
+          throw new Error("dry-run should not call issueArchive");
+        }
+
+        throw new Error("Unexpected GraphQL request: " + JSON.stringify(body));
+      };
+    `;
+
+    const result = await runInlineCli(
+      repoDir,
+      ["linear", "prune", "--age", "7d", "--dry-run", "--json"],
+      setupSource,
+      { LINEAR_API_KEY: "linear-test-key" }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      preview: boolean;
+      dry_run: boolean;
+      age: string | null;
+      count: number;
+      candidates: Array<{ id: string; title: string }>;
+    };
+
+    expect(payload.preview).toBe(true);
+    expect(payload.dry_run).toBe(true);
+    expect(payload.age).toBe("7d");
+    expect(payload.count).toBe(1);
+    expect(payload.candidates[0]).toMatchObject({
+      id: "LIN-120",
+      title: "Dry-run candidate",
+    });
+
+    const archivedRow = readArchivedRow(dbPath, "LOCAL-120");
+    expect(archivedRow?.remote_archived_at).toBeNull();
+  });
+
   test("archives the selected issue remotely and preserves it across stale pruning", async () => {
     const { repoDir, dbPath } = createRepo();
     const setupSource = `
