@@ -268,7 +268,9 @@ describe("doctor command", () => {
     expect(report.outbox.latest_failed_item?.operation).toBe("create");
     expect(report.outbox.latest_failed_item?.error).toContain("Unable to connect");
     expect(report.outbox.latest_failed_item?.last_error_at).not.toBeNull();
-    expect(report.outbox.latest_failed_item?.context).toContain("description references cached media");
+    expect(report.outbox.latest_failed_item?.context).toContain(
+      "description references cached media"
+    );
     expect(report.outbox.recent_errors[0]?.subject).toBe("LOCAL-284");
   });
 
@@ -303,7 +305,9 @@ describe("doctor command", () => {
     expect(report.connectivity.status).toBe("ok");
     expect(report.remote_sync.likely_sync_blocker?.kind).toBe("linear_free_tier_issue_limit");
     expect(report.remote_sync.likely_sync_blocker?.source).toBe("active_pause");
-    expect(report.remote_sync.likely_sync_blocker?.message).toContain("free-tier active-issue limit");
+    expect(report.remote_sync.likely_sync_blocker?.message).toContain(
+      "free-tier active-issue limit"
+    );
     expect(report.outbox.latest_failed_item?.subject).toBe("LOCAL-401");
     expect(report.outbox.latest_failed_item?.error).toContain("usage limit exceeded");
   });

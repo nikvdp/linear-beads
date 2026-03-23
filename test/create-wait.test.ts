@@ -37,7 +37,10 @@ function createRepo(options: { localOnly?: boolean } = {}): string {
   return repoDir;
 }
 
-async function runEval(cwd: string, script: string): Promise<{
+async function runEval(
+  cwd: string,
+  script: string
+): Promise<{
   stdout: string;
   stderr: string;
   exitCode: number;

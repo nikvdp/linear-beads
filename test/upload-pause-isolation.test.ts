@@ -3,13 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-const REMOTE_SYNC_STATE_PATH = join(
-  import.meta.dir,
-  "..",
-  "src",
-  "utils",
-  "remote-sync-state.ts"
-);
+const REMOTE_SYNC_STATE_PATH = join(import.meta.dir, "..", "src", "utils", "remote-sync-state.ts");
 const OUTBOX_PROCESSOR_PATH = join(import.meta.dir, "..", "src", "utils", "outbox-processor.ts");
 const tempDirs: string[] = [];
 

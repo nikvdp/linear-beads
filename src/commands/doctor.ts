@@ -13,7 +13,11 @@ import {
   reloadConfig,
   writeGlobalConfig,
 } from "../utils/config.js";
-import { getOutboxDiagnosticItems, getPendingOutboxItems, listMediaItemsForIssue } from "../utils/database.js";
+import {
+  getOutboxDiagnosticItems,
+  getPendingOutboxItems,
+  listMediaItemsForIssue,
+} from "../utils/database.js";
 import {
   getLinearApiErrorInfoFromResponse,
   getLinearRequestPolicy,
@@ -85,13 +89,11 @@ type EndpointProbeResult =
       url: string;
     };
 
-type LikelySyncBlocker =
-  | {
-      kind: "linear_free_tier_issue_limit";
-      source: "active_pause" | "background_pause" | "latest_failed_item" | "recent_error";
-      message: string;
-    }
-  | null;
+type LikelySyncBlocker = {
+  kind: "linear_free_tier_issue_limit";
+  source: "active_pause" | "background_pause" | "latest_failed_item" | "recent_error";
+  message: string;
+} | null;
 
 function resolveConfigFile(primaryPath: string): ConfigFileInfo {
   const candidates = primaryPath.endsWith(".jsonc")
@@ -449,12 +451,17 @@ function detectLikelySyncBlocker(
   if (pauseWithFreeTierDiagnosis) {
     return {
       kind: "linear_free_tier_issue_limit",
-      source: activePauses.includes(pauseWithFreeTierDiagnosis) ? "active_pause" : "background_pause",
+      source: activePauses.includes(pauseWithFreeTierDiagnosis)
+        ? "active_pause"
+        : "background_pause",
       message: getFreeTierIssueLimitMessage(),
     };
   }
 
-  if (latestFailedItem?.last_error && isLikelyLinearFreeTierIssueLimitMessage(latestFailedItem.last_error)) {
+  if (
+    latestFailedItem?.last_error &&
+    isLikelyLinearFreeTierIssueLimitMessage(latestFailedItem.last_error)
+  ) {
     return {
       kind: "linear_free_tier_issue_limit",
       source: "latest_failed_item",
@@ -563,8 +570,12 @@ export const doctorCommand = new Command("doctor")
     const failedOutbox = outboxDiagnostics
       .filter((item) => item.last_error)
       .sort((left, right) => {
-        const leftMs = left.last_error_at ? Date.parse(left.last_error_at) : Number.NEGATIVE_INFINITY;
-        const rightMs = right.last_error_at ? Date.parse(right.last_error_at) : Number.NEGATIVE_INFINITY;
+        const leftMs = left.last_error_at
+          ? Date.parse(left.last_error_at)
+          : Number.NEGATIVE_INFINITY;
+        const rightMs = right.last_error_at
+          ? Date.parse(right.last_error_at)
+          : Number.NEGATIVE_INFINITY;
         return rightMs - leftMs || right.id - left.id;
       });
     const latestFailedItem = failedOutbox[0];
@@ -574,25 +585,19 @@ export const doctorCommand = new Command("doctor")
       latestFailedItem,
       failedOutbox
     );
-    const recentErrors = failedOutbox
-      .slice(0, 5)
-      .map((item) => ({
-        id: item.id,
-        operation: item.operation,
-        subject: getOutboxSubject(item),
-        error: summarizeText(item.last_error || ""),
-        retry_count: item.retry_count,
-        next_attempt_at: item.next_attempt_at || null,
-        last_error_at: item.last_error_at || null,
-        processing: item.processing,
-        context: summarizeOutboxFailureContext(item),
-      }));
+    const recentErrors = failedOutbox.slice(0, 5).map((item) => ({
+      id: item.id,
+      operation: item.operation,
+      subject: getOutboxSubject(item),
+      error: summarizeText(item.last_error || ""),
+      retry_count: item.retry_count,
+      next_attempt_at: item.next_attempt_at || null,
+      last_error_at: item.last_error_at || null,
+      processing: item.processing,
+      context: summarizeOutboxFailureContext(item),
+    }));
     const connectivityStatus =
-      probe.kind === "ok"
-        ? uploadProbe.status === "ok"
-          ? "ok"
-          : "partial"
-        : "error";
+      probe.kind === "ok" ? (uploadProbe.status === "ok" ? "ok" : "partial") : "error";
     const connectivityMessage =
       connectivityStatus === "ok"
         ? "Linear GraphQL and upload-host probes succeeded."
@@ -804,7 +809,10 @@ export const doctorCommand = new Command("doctor")
       );
       lines.push(`- upload URL: ${doctorReport.connectivity.uploads.url}`);
       lines.push(`- upload message: ${doctorReport.connectivity.uploads.message}`);
-      if ("error_summary" in doctorReport.connectivity.uploads && doctorReport.connectivity.uploads.error_summary) {
+      if (
+        "error_summary" in doctorReport.connectivity.uploads &&
+        doctorReport.connectivity.uploads.error_summary
+      ) {
         lines.push(`- upload details: ${doctorReport.connectivity.uploads.error_summary}`);
       }
       lines.push("");
@@ -845,7 +853,9 @@ export const doctorCommand = new Command("doctor")
         }
       }
       if (doctorReport.remote_sync.likely_sync_blocker) {
-        lines.push(`- likely sync blocker: ${doctorReport.remote_sync.likely_sync_blocker.message}`);
+        lines.push(
+          `- likely sync blocker: ${doctorReport.remote_sync.likely_sync_blocker.message}`
+        );
         lines.push(
           `- likely sync blocker source: ${doctorReport.remote_sync.likely_sync_blocker.source}`
         );
@@ -858,10 +868,14 @@ export const doctorCommand = new Command("doctor")
           `- latest failed item: #${doctorReport.outbox.latest_failed_item.id} ${doctorReport.outbox.latest_failed_item.subject} (${doctorReport.outbox.latest_failed_item.operation})`
         );
         if (doctorReport.outbox.latest_failed_item.last_error_at) {
-          lines.push(`- latest failure time: ${doctorReport.outbox.latest_failed_item.last_error_at}`);
+          lines.push(
+            `- latest failure time: ${doctorReport.outbox.latest_failed_item.last_error_at}`
+          );
         }
         if (doctorReport.outbox.latest_failed_item.next_attempt_at) {
-          lines.push(`- latest retry time: ${doctorReport.outbox.latest_failed_item.next_attempt_at}`);
+          lines.push(
+            `- latest retry time: ${doctorReport.outbox.latest_failed_item.next_attempt_at}`
+          );
         }
         lines.push(`- latest failure details: ${doctorReport.outbox.latest_failed_item.error}`);
         if (doctorReport.outbox.latest_failed_item.context.length > 0) {

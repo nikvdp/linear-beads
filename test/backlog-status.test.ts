@@ -31,7 +31,10 @@ function createRepo(): string {
   return repoDir;
 }
 
-async function runCli(cwd: string, args: string[]): Promise<{
+async function runCli(
+  cwd: string,
+  args: string[]
+): Promise<{
   stdout: string;
   stderr: string;
   exitCode: number;

@@ -1734,15 +1734,15 @@ export function repairSelfReferentialDependencies(): number {
   const db = getDatabase();
   const rows = runWithBusyRetry(
     () =>
-      db
-        .query("SELECT id, issue_id, depends_on_id FROM dependencies")
-        .all() as Array<{ id: number; issue_id: string; depends_on_id: string }>
+      db.query("SELECT id, issue_id, depends_on_id FROM dependencies").all() as Array<{
+        id: number;
+        issue_id: string;
+        depends_on_id: string;
+      }>
   );
 
   const idsToDelete = rows
-    .filter(
-      (row) => resolveIssueLocalId(row.issue_id) === resolveIssueLocalId(row.depends_on_id)
-    )
+    .filter((row) => resolveIssueLocalId(row.issue_id) === resolveIssueLocalId(row.depends_on_id))
     .map((row) => row.id);
 
   if (idsToDelete.length === 0) {
@@ -1761,7 +1761,9 @@ export function canonicalizeDependencyAliases(): number {
   const db = getDatabase();
   const rows = runWithBusyRetry(
     () =>
-      db.query("SELECT id, issue_id, depends_on_id, type, created_at, created_by FROM dependencies").all() as Array<{
+      db
+        .query("SELECT id, issue_id, depends_on_id, type, created_at, created_by FROM dependencies")
+        .all() as Array<{
         id: number;
         issue_id: string;
         depends_on_id: string;
@@ -1798,10 +1800,7 @@ export function canonicalizeDependencyAliases(): number {
         continue;
       }
 
-      if (
-        canonicalIssueId === row.issue_id &&
-        canonicalDependsOnId === row.depends_on_id
-      ) {
+      if (canonicalIssueId === row.issue_id && canonicalDependsOnId === row.depends_on_id) {
         continue;
       }
 
@@ -1879,9 +1878,9 @@ export function getInverseDependencies(issueId: string): Dependency[] {
   const resolvedId = resolveIssueLocalId(issueId);
   const rows = runWithBusyRetry(
     () =>
-      db
-        .query("SELECT * FROM dependencies WHERE depends_on_id = ?")
-        .all(resolvedId) as Array<Record<string, unknown>>
+      db.query("SELECT * FROM dependencies WHERE depends_on_id = ?").all(resolvedId) as Array<
+        Record<string, unknown>
+      >
   );
 
   return rows.map((row) => ({
@@ -1901,9 +1900,9 @@ export function getDependents(issueId: string): Dependency[] {
   const resolvedId = resolveIssueLocalId(issueId);
   const rows = runWithBusyRetry(
     () =>
-      db
-        .query("SELECT * FROM dependencies WHERE depends_on_id = ?")
-        .all(resolvedId) as Array<Record<string, unknown>>
+      db.query("SELECT * FROM dependencies WHERE depends_on_id = ?").all(resolvedId) as Array<
+        Record<string, unknown>
+      >
   );
 
   return rows.map((row) => ({
@@ -3295,9 +3294,11 @@ export function upsertAgentIdentity(input: {
         } | null);
 
   const rowId = existingById?.id || existingByHandle?.id || input.id;
-  const createdAt = input.createdAt || existingById?.created_at || existingByHandle?.created_at || nowIso();
+  const createdAt =
+    input.createdAt || existingById?.created_at || existingByHandle?.created_at || nowIso();
   const updatedAt = input.updatedAt || nowIso();
-  const handle = existingByHandle && existingByHandle.id !== input.id ? existingByHandle.handle : input.handle;
+  const handle =
+    existingByHandle && existingByHandle.id !== input.id ? existingByHandle.handle : input.handle;
 
   runWithBusyRetry(() => {
     db.run(

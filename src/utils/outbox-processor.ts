@@ -2,7 +2,13 @@
  * Outbox processing with deferred replay for local-first mode
  */
 
-import { isTerminalStatus, type Issue, type IssueType, type OutboxItem, type Priority } from "../types.js";
+import {
+  isTerminalStatus,
+  type Issue,
+  type IssueType,
+  type OutboxItem,
+  type Priority,
+} from "../types.js";
 import {
   cacheIssue,
   getPendingOutboxItems,

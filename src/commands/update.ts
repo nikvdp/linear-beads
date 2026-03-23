@@ -35,7 +35,12 @@ import {
 } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
 import type { Issue, Priority, IssueStatus } from "../types.js";
-import { isTerminalStatus, parseIssueStatus, parsePriority, VALID_ISSUE_STATUSES } from "../types.js";
+import {
+  isTerminalStatus,
+  parseIssueStatus,
+  parsePriority,
+  VALID_ISSUE_STATUSES,
+} from "../types.js";
 import {
   getHumanOutputStyle,
   HUMAN_OUTPUT_STYLE_CHOICES,

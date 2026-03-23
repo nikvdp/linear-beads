@@ -129,10 +129,9 @@ export const syncCommand = new Command("sync")
         return;
       }
 
-      const result = await runWithSyncProgress(
-        () => smartSync(options.team, options.full),
-        { json: Boolean(options.json) }
-      );
+      const result = await runWithSyncProgress(() => smartSync(options.team, options.full), {
+        json: Boolean(options.json),
+      });
 
       if (result.type === "skipped") {
         const pause = getBlockingActiveRemoteSyncPause();

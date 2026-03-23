@@ -217,7 +217,9 @@ function headerValue(headers: Record<string, string>, name: string): string | un
   return value?.trim() || undefined;
 }
 
-function headersToRecord(headers: Headers | Record<string, string> | undefined): Record<string, string> {
+function headersToRecord(
+  headers: Headers | Record<string, string> | undefined
+): Record<string, string> {
   if (!headers) {
     return {};
   }
@@ -228,7 +230,10 @@ function headersToRecord(headers: Headers | Record<string, string> | undefined):
   }
 
   if (typeof headers === "object") {
-    const entries = Object.entries(headers).map(([key, value]) => [key.toLowerCase(), String(value)]);
+    const entries = Object.entries(headers).map(([key, value]) => [
+      key.toLowerCase(),
+      String(value),
+    ]);
     return Object.fromEntries(entries);
   }
 
@@ -250,9 +255,7 @@ function toGraphQLErrorInfo(
   return (errors || []).map((error) => ({
     message: typeof error?.message === "string" ? error.message : undefined,
     extensions:
-      error?.extensions && typeof error.extensions === "object"
-        ? error.extensions
-        : undefined,
+      error?.extensions && typeof error.extensions === "object" ? error.extensions : undefined,
     path: Array.isArray(error?.path)
       ? error.path.filter(
           (segment): segment is string | number =>
@@ -373,16 +376,13 @@ function isRateLimitGraphQLError(graphqlErrors: LinearGraphQLErrorInfo[]): boole
 function hasRateLimitResetHeaders(headers: Record<string, string>): boolean {
   return Boolean(
     headerValue(headers, "x-ratelimit-endpoint-requests-reset") ||
-      headerValue(headers, "x-ratelimit-endpoint-name") ||
-      headerValue(headers, "x-ratelimit-complexity-reset") ||
-      headerValue(headers, "x-ratelimit-requests-reset")
+    headerValue(headers, "x-ratelimit-endpoint-name") ||
+    headerValue(headers, "x-ratelimit-complexity-reset") ||
+    headerValue(headers, "x-ratelimit-requests-reset")
   );
 }
 
-function hasRateLimitMessageSignal(
-  graphqlErrors: LinearGraphQLErrorInfo[],
-  body: string
-): boolean {
+function hasRateLimitMessageSignal(graphqlErrors: LinearGraphQLErrorInfo[], body: string): boolean {
   if (hasUsageLimitSignal(graphqlErrors, body)) {
     return true;
   }
@@ -402,8 +402,8 @@ function hasRateLimitMessageSignal(
     const normalized = value.toLowerCase();
     return (
       normalized.includes("rate limit exceeded") ||
-      normalized.includes("\"code\":\"ratelimited\"") ||
-      normalized.includes("\"type\":\"ratelimited\"")
+      normalized.includes('"code":"ratelimited"') ||
+      normalized.includes('"type":"ratelimited"')
     );
   });
 }
@@ -473,8 +473,7 @@ function buildRateLimitInfo(
         : bucketKind === "complexity"
           ? headerValue(headers, "x-ratelimit-complexity-reset")
           : headerValue(headers, "x-ratelimit-requests-reset")
-    ) ??
-    parseResetHeaderMs(headerValue(headers, "x-ratelimit-requests-reset"));
+    ) ?? parseResetHeaderMs(headerValue(headers, "x-ratelimit-requests-reset"));
   const endpointName =
     headerValue(headers, "x-ratelimit-endpoint-name") ||
     pickStringExtensionValue(graphqlErrors, "endpointName") ||
@@ -510,7 +509,9 @@ function getGraphQLResponseLike(error: unknown): GraphQLResponseLike | null {
   return error.response as GraphQLResponseLike;
 }
 
-export function getLinearApiErrorInfoFromResponse(response: GraphQLResponseLike): LinearApiErrorInfo {
+export function getLinearApiErrorInfoFromResponse(
+  response: GraphQLResponseLike
+): LinearApiErrorInfo {
   const status = typeof response.status === "number" ? response.status : 0;
   const headers = headersToRecord(response.headers);
   const body = typeof response.body === "string" ? response.body : "";

@@ -349,7 +349,9 @@ describe("linear mail adapter envelope", () => {
       throw new Error(`Unexpected GraphQL query: ${payload.query}`);
     }) as typeof fetch;
 
-    const first = JSON.parse((await runAgentCli("register", "--handle", "Alpha", "--json")).stdout) as {
+    const first = JSON.parse(
+      (await runAgentCli("register", "--handle", "Alpha", "--json")).stdout
+    ) as {
       handle: string;
     };
     const second = JSON.parse(

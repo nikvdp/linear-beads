@@ -31,7 +31,10 @@ function createRepo(): string {
   return repoDir;
 }
 
-async function runCli(cwd: string, args: string[]): Promise<{
+async function runCli(
+  cwd: string,
+  args: string[]
+): Promise<{
   stdout: string;
   stderr: string;
   exitCode: number;
@@ -120,7 +123,9 @@ describe("cancelled status support", () => {
     const cancelled = await runCli(repoDir, ["cancel", blocker[0].id]);
     expect(cancelled.exitCode).toBe(0);
 
-    const readyAfterCancel = await runJson<Array<{ id: string; status: string }>>(repoDir, ["ready"]);
+    const readyAfterCancel = await runJson<Array<{ id: string; status: string }>>(repoDir, [
+      "ready",
+    ]);
     expect(readyAfterCancel.map((issue) => issue.id)).toContain(blocked[0].id);
     expect(readyAfterCancel.map((issue) => issue.id)).not.toContain(blocker[0].id);
     expect(readyAfterCancel.every((issue) => issue.status !== "cancelled")).toBe(true);

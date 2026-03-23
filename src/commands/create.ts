@@ -176,7 +176,9 @@ function emitCreateWaitFailure(
       });
     }
     outputError(result.pauseNotice);
-    outputError(`Waiting for a remote issue ID stopped. The issue is still queued locally as ${localId}.`);
+    outputError(
+      `Waiting for a remote issue ID stopped. The issue is still queued locally as ${localId}.`
+    );
   } else if (result.status === "timeout") {
     if (options.json) {
       emitJsonCreateWaitFailure({

@@ -229,9 +229,7 @@ const addCommand = new Command("add")
       const now = new Date().toISOString();
 
       if (options.blocks) {
-        const targetId = resolveIssueLocalId(
-          requireConcreteIssueInput(options.blocks, "--blocks")
-        );
+        const targetId = resolveIssueLocalId(requireConcreteIssueInput(options.blocks, "--blocks"));
         assertNotSelfReferentialRelation(resolvedIssueId, targetId, "block");
         const dep: Dependency = {
           issue_id: resolvedIssueId,

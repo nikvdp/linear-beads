@@ -19,7 +19,12 @@ import {
   outputError,
 } from "../utils/output.js";
 import { getViewer } from "../utils/issue-backend.js";
-import { parseIssueStatus, parsePriority, VALID_ISSUE_STATUSES, VALID_ISSUE_TYPES } from "../types.js";
+import {
+  parseIssueStatus,
+  parsePriority,
+  VALID_ISSUE_STATUSES,
+  VALID_ISSUE_TYPES,
+} from "../types.js";
 import {
   getHumanOutputStyle,
   getRepoName,
@@ -53,7 +58,10 @@ export const listCommand = new Command("list")
   .option("-j, --json", "Output as JSON")
   .option("-a, --all", "Show all issues (not just mine)")
   .option("-l, --limit <count>", "Show at most this many issues")
-  .option("-s, --status <status>", "Filter by status: backlog, open, in_progress, closed, cancelled")
+  .option(
+    "-s, --status <status>",
+    "Filter by status: backlog, open, in_progress, closed, cancelled"
+  )
   .option(
     "-p, --priority <priority>",
     "Filter by priority: urgent, high, medium, low, backlog (or 0-4)"

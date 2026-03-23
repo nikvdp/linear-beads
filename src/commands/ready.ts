@@ -138,8 +138,7 @@ export const readyCommand = new Command("ready")
           style === "beads"
             ? [
                 ...scopedIssues.filter(
-                  (issue) =>
-                    issue.status === "in_progress" && !backlogDescendantIds.has(issue.id)
+                  (issue) => issue.status === "in_progress" && !backlogDescendantIds.has(issue.id)
                 ),
                 ...readyIssues,
               ]

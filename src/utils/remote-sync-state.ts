@@ -706,7 +706,11 @@ function extractErrorInfo(error: unknown): ExtractedErrorInfo {
     "x-ratelimit-endpoint-name":
       extractHeaderValueFromMessage(message, "x-ratelimit-endpoint-name") || "",
   });
-  const headers = mergeHeaderBags(apiError?.headers || {}, extractHeadersFromError(error), messageHeaders);
+  const headers = mergeHeaderBags(
+    apiError?.headers || {},
+    extractHeadersFromError(error),
+    messageHeaders
+  );
   const endpointName =
     rateLimit?.endpointName ||
     normalizeEndpointName(headers["x-ratelimit-endpoint-name"]) ||
@@ -950,22 +954,22 @@ export function recordRemoteSyncPause(
 
   const current = getStoredPauseForScope(next.scope, nowMs);
   const merged: StoredRemoteSyncPauseRecord = current
-      ? {
-          kind: next.kind,
-          scope: next.scope,
-          until: clampActiveUntil(current.until, next.until, nowMs),
-          backgroundUntil: clampActiveUntil(getBackgroundUntil(current), next.backgroundUntil, nowMs),
-          message: next.message,
-          details: next.details,
-        }
-      : {
-          kind: next.kind,
-          scope: next.scope,
-          until: next.until,
-          backgroundUntil: next.backgroundUntil,
-          message: next.message,
-          details: next.details,
-        };
+    ? {
+        kind: next.kind,
+        scope: next.scope,
+        until: clampActiveUntil(current.until, next.until, nowMs),
+        backgroundUntil: clampActiveUntil(getBackgroundUntil(current), next.backgroundUntil, nowMs),
+        message: next.message,
+        details: next.details,
+      }
+    : {
+        kind: next.kind,
+        scope: next.scope,
+        until: next.until,
+        backgroundUntil: next.backgroundUntil,
+        message: next.message,
+        details: next.details,
+      };
 
   setStoredRemoteSyncPauseRecord(merged);
 
