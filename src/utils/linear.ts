@@ -1411,6 +1411,7 @@ function linearToBdIssue(
     updated_at: linear.updatedAt,
     closed_at: linear.completedAt || linear.canceledAt || undefined,
     assignee: linear.assignee?.email || undefined,
+    creator: linear.creator?.email || undefined,
     linear_state_id: linear.state.id,
   };
 

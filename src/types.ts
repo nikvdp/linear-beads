@@ -51,6 +51,8 @@ export interface Issue {
   closed_at?: string;
   // Assignee email (omit if unassigned for bd-style terse output)
   assignee?: string;
+  // Creator email when available from the remote backend
+  creator?: string;
   // Optional fields for list output
   dependency_count?: number;
   dependent_count?: number;
@@ -103,6 +105,11 @@ export interface LinearIssue {
     }>;
   };
   assignee?: {
+    id: string;
+    email: string;
+    name: string;
+  } | null;
+  creator?: {
     id: string;
     email: string;
     name: string;

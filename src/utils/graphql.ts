@@ -740,6 +740,11 @@ export const ISSUE_FRAGMENT = `
     email
     name
   }
+  creator {
+    id
+    email
+    name
+  }
   parent {
     id
     identifier

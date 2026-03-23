@@ -749,6 +749,17 @@ function initSchema(db: Database, dbPath: string): void {
     db.exec("PRAGMA user_version = 12");
   }
 
+  if (currentVersion < 13) {
+    addColumnIfMissing(
+      db,
+      "issues",
+      "creator",
+      "ALTER TABLE issues ADD COLUMN creator TEXT"
+    );
+
+    db.exec("PRAGMA user_version = 13");
+  }
+
   ensureDependencyAliasIntegrity(db);
   ensureRelatedDependencyIntegrity(db);
 }
@@ -1284,10 +1295,11 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
         closed_at,
         remote_archived_at,
         assignee,
+        creator,
         linear_state_id,
         cached_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(local_id) DO UPDATE SET
         linear_id = COALESCE(excluded.linear_id, issues.linear_id),
         linear_identifier = COALESCE(excluded.linear_identifier, issues.linear_identifier),
@@ -1303,6 +1315,7 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
         closed_at = excluded.closed_at,
         remote_archived_at = excluded.remote_archived_at,
         assignee = excluded.assignee,
+        creator = excluded.creator,
         linear_state_id = excluded.linear_state_id,
         cached_at = datetime('now')
     `,
@@ -1322,6 +1335,7 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
       issue.closed_at || null,
       issue.remote_archived_at || null,
       issue.assignee || null,
+      issue.creator || null,
       issue.linear_state_id || null,
     ]
   );
@@ -1346,6 +1360,7 @@ function rowToIssue(row: Record<string, unknown>): Issue {
     updated_at: row.updated_at as string,
     closed_at: row.closed_at as string | undefined,
     assignee: row.assignee as string | undefined,
+    creator: row.creator as string | undefined,
   };
 
   if (row.issue_type) {

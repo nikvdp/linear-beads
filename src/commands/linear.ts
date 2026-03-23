@@ -161,7 +161,7 @@ async function getTeamWidePruneCandidates(
   if (ownershipScope === "viewer") {
     const viewer = await getViewer();
     const viewerEmail = viewer.email.toLowerCase();
-    issues = issues.filter((issue) => issue.assignee?.toLowerCase() === viewerEmail);
+    issues = issues.filter((issue) => issue.creator?.toLowerCase() === viewerEmail);
   }
 
   const candidates = issues
@@ -260,7 +260,7 @@ function getNoCandidatesMessage(options: {
     return "No closed synced Linear issues in the current Linear team are eligible for prune.";
   }
 
-  return "No closed synced Linear issues assigned to you are eligible for prune.";
+  return "No closed synced Linear issues created by you are eligible for prune.";
 }
 
 function getTeamScopeDescription(options: {
@@ -272,10 +272,10 @@ function getTeamScopeDescription(options: {
   }
 
   if (options.all) {
-    return " from the current Linear team across all users";
+    return " from the current Linear team created by any user";
   }
 
-  return " from the current Linear team assigned to you";
+  return " from the current Linear team created by you";
 }
 
 export const linearCommand = new Command("linear")
@@ -286,8 +286,8 @@ export const linearCommand = new Command("linear")
       .argument("[ids...]", "Specific issue IDs to archive on Linear")
       .option("-l, --limit <count>", "Limit automatic prune candidates when no IDs are provided")
       .option("--age <duration>", "Only prune issues at least this old (for example: 7d, 2w, 1mo)")
-      .option("--mine", "Scan the current Linear team for issues assigned to you")
-      .option("--all", "Scan the current Linear team for issues assigned to any user")
+      .option("--mine", "Scan the current Linear team for issues created by you")
+      .option("--all", "Scan the current Linear team for issues created by any user")
       .option("--dry-run", "Force preview-only output without archiving anything")
       .option("-y, --yes", "Archive the selected issues instead of showing a preview")
       .option("-j, --json", "Output as JSON")
