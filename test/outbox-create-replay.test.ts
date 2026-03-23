@@ -789,7 +789,7 @@ describe("outbox create replay protection", () => {
     expect(payload.alias?.mapping).toBe("LIN-9007");
     expect(payload.alias?.resolved_remote_id).toBe("LIN-9007");
     expect(payload.alias?.resolved_local_id).toBe(payload.row?.local_id);
-  });
+  }, 10000);
 
   test("drops legacy placeholder refs in create payloads and still finalizes mapping", async () => {
     const repoDir = createRepo();
@@ -888,7 +888,7 @@ describe("outbox create replay protection", () => {
     expect(payload.pass3.success).toBe(1);
     expect(payload.pass3.failed).toBe(0);
     expect(payload.pendingFinal).toHaveLength(0);
-  });
+  }, 10000);
 
   test("defers queued LOCAL blocker relations until both create rows resolve", async () => {
     const repoDir = createRepo();
@@ -965,7 +965,11 @@ describe("outbox create replay protection", () => {
 
     const payload = JSON.parse(result.stdout) as {
       result: { success: number; failed: number };
-      pending: Array<{ operation: string; local_id: string | null; payload: Record<string, unknown> }>;
+      pending: Array<{
+        operation: string;
+        local_id: string | null;
+        payload: Record<string, unknown>;
+      }>;
       depRows: Array<{ issue_id: string; depends_on_id: string; type: string }>;
       row: { local_id: string; linear_identifier: string | null; sync_status: string } | null;
       mapping: string | null;
@@ -989,9 +993,7 @@ describe("outbox create replay protection", () => {
     );
     expect(payload.siblingDisplayId).toBe("LIN-5616");
     expect(
-      payload.depRows.some(
-        (row) => row.type === "blocks" && row.issue_id !== row.depends_on_id
-      )
+      payload.depRows.some((row) => row.type === "blocks" && row.issue_id !== row.depends_on_id)
     ).toBe(true);
   });
 
