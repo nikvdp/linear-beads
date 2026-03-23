@@ -241,6 +241,7 @@ describe("local media CLI authoring", () => {
       created[0].id,
       "--replace",
       `Depends on ${dependency[0].id}`,
+      "--with",
       "Resolved dependency"
     );
 
@@ -272,6 +273,7 @@ describe("local media CLI authoring", () => {
       created[0].id,
       "--replace",
       `@${needlePath}`,
+      "--with",
       `@${replacementPath}`
     );
 
@@ -294,6 +296,7 @@ describe("local media CLI authoring", () => {
       created[0].id,
       "--replace",
       "Missing",
+      "--with",
       "Replacement"
     );
 
@@ -311,10 +314,50 @@ describe("local media CLI authoring", () => {
       "-d",
       "repeat and repeat"
     );
-    const result = await lb(repoDir, "update", created[0].id, "--replace", "repeat", "done");
+    const result = await lb(
+      repoDir,
+      "update",
+      created[0].id,
+      "--replace",
+      "repeat",
+      "--with",
+      "done"
+    );
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("--replace needle matched 2 times");
+  });
+
+  test("update --replace fails when --with is missing", async () => {
+    const repoDir = createLocalRepo();
+
+    const created = await lbJson<Array<{ id: string }>>(
+      repoDir,
+      "create",
+      "Dangling replace",
+      "-d",
+      "Body"
+    );
+    const result = await lb(repoDir, "update", created[0].id, "--replace", "Body");
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--replace must be followed by --with");
+  });
+
+  test("update --replace fails when --with has no preceding --replace", async () => {
+    const repoDir = createLocalRepo();
+
+    const created = await lbJson<Array<{ id: string }>>(
+      repoDir,
+      "create",
+      "Orphaned with",
+      "-d",
+      "Body"
+    );
+    const result = await lb(repoDir, "update", created[0].id, "--with", "Replacement");
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--with requires a preceding --replace");
   });
 
   test("fails when inline media ids have no matching uploaded file or cached media", async () => {
