@@ -15,12 +15,16 @@ import {
   updateLastSyncContext,
   updateIssueUpdateWatermarkFromIssues,
   canonicalizeDependencyAliases,
+  getCachedIssues,
+  getPendingOutboxItems,
+  listMediaItemsForIssue,
 } from "./database.js";
 import {
   fetchIssues,
   fetchAllIssuesPaginated,
   fetchAllUpdatedIssues,
   getTeamId,
+  updateIssue,
 } from "./issue-backend.js";
 import { exportToJsonl } from "./jsonl.js";
 import { isWorkerRunning } from "./pid-manager.js";
@@ -208,6 +212,44 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function hasDeferredLocalOnlyDescriptionMedia(issue: Issue): boolean {
+  const issueId = issue.local_id || issue.id;
+  return listMediaItemsForIssue(issueId).some(
+    (item) => item.source === "description" && Boolean(item.local_path) && !item.remote_url
+  );
+}
+
+async function healDeferredDescriptionMediaIssues(teamId: string): Promise<number> {
+  const pendingIssueIds = new Set(
+    getPendingOutboxItems()
+      .map((item) => item.local_id)
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+  );
+
+  let healed = 0;
+  for (const issue of getCachedIssues()) {
+    const issueId = issue.local_id || issue.id;
+    if (!issue.linear_identifier || issue.sync_status === "pending" || pendingIssueIds.has(issueId)) {
+      continue;
+    }
+    if (!hasDeferredLocalOnlyDescriptionMedia(issue)) {
+      continue;
+    }
+
+    try {
+      await updateIssue(issue.linear_identifier, {}, teamId);
+      healed += 1;
+    } catch (error) {
+      if (recordRemoteSyncPause(error)) {
+        break;
+      }
+      syncDebug(`deferred media heal skipped for ${issue.linear_identifier}: ${formatError(error)}`);
+    }
+  }
+
+  return healed;
+}
+
 function buildSyncContextKey(teamKeyOverride?: string): string {
   return JSON.stringify({
     teamKey: teamKeyOverride || getTeamKey() || "__auto__",
@@ -262,6 +304,18 @@ export async function incrementalSync(teamKey?: string): Promise<{
   if (!getActiveRemoteSyncPauseForEndpoints(MAIL_INGEST_ENDPOINTS)) {
     try {
       await measureSyncPhase("incremental.mailIngest", () => getMailBackendAdapter().ingest());
+    } catch (error) {
+      if (!recordRemoteSyncPause(error)) {
+        throw error;
+      }
+    }
+  }
+
+  if (!getActiveRemoteSyncPauseForEndpoints(ISSUE_PULL_ENDPOINTS)) {
+    try {
+      await measureSyncPhase("incremental.healDeferredDescriptionMedia", () =>
+        healDeferredDescriptionMediaIssues(teamId)
+      );
     } catch (error) {
       if (!recordRemoteSyncPause(error)) {
         throw error;
@@ -327,6 +381,18 @@ export async function fullSyncPaginated(teamKey?: string): Promise<{
     }
   }
 
+  if (!getActiveRemoteSyncPauseForEndpoints(ISSUE_PULL_ENDPOINTS)) {
+    try {
+      await measureSyncPhase("full.healDeferredDescriptionMedia", () =>
+        healDeferredDescriptionMediaIssues(teamId)
+      );
+    } catch (error) {
+      if (!recordRemoteSyncPause(error)) {
+        throw error;
+      }
+    }
+  }
+
   canonicalizeDependencyAliases();
 
   // Export to JSONL
@@ -374,6 +440,18 @@ export async function fullSync(teamKey?: string): Promise<{
   if (!getActiveRemoteSyncPauseForEndpoints(MAIL_INGEST_ENDPOINTS)) {
     try {
       await measureSyncPhase("legacyFull.mailIngest", () => getMailBackendAdapter().ingest());
+    } catch (error) {
+      if (!recordRemoteSyncPause(error)) {
+        throw error;
+      }
+    }
+  }
+
+  if (!getActiveRemoteSyncPauseForEndpoints(ISSUE_PULL_ENDPOINTS)) {
+    try {
+      await measureSyncPhase("legacyFull.healDeferredDescriptionMedia", () =>
+        healDeferredDescriptionMediaIssues(teamId)
+      );
     } catch (error) {
       if (!recordRemoteSyncPause(error)) {
         throw error;

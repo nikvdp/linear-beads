@@ -49,6 +49,7 @@ import {
   deleteMediaItems,
   getPendingOutboxItems,
   getCachedIssues,
+  getCachedIssue,
   getDatabase,
   resolveIssueLocalId,
 } from "./database.js";
@@ -662,6 +663,153 @@ function preferredMediaLabel(item: MediaItem, fallbackLabel?: string): string {
   return item.id;
 }
 
+type DeferredDescriptionMediaHealPlan = {
+  description: string | undefined;
+  staleMediaIds: string[];
+};
+
+function appendMediaTokensToDescription(
+  description: string | undefined,
+  tokens: string[]
+): string | undefined {
+  if (tokens.length === 0) {
+    return description;
+  }
+
+  if (!description || description.trim() === "") {
+    return tokens.join("\n\n");
+  }
+
+  return `${description.replace(/\s+$/, "")}\n\n${tokens.join("\n\n")}`;
+}
+
+function replaceFirstExact(
+  description: string | undefined,
+  needle: string | undefined,
+  replacement: string
+): { description: string | undefined; changed: boolean } {
+  if (!description || !needle || !needle.trim()) {
+    return { description, changed: false };
+  }
+
+  const index = description.indexOf(needle);
+  if (index === -1) {
+    return { description, changed: false };
+  }
+
+  return {
+    description:
+      description.slice(0, index) + replacement + description.slice(index + needle.length),
+    changed: true,
+  };
+}
+
+function localOnlyDescriptionMediaSignature(item: MediaItem): string {
+  return JSON.stringify({
+    source: item.source,
+    kind: item.kind,
+    localPath: item.local_path || "",
+    label: item.label || "",
+    filename: item.original_filename || "",
+  });
+}
+
+export function planDeferredDescriptionMediaHeal(
+  issueId: string,
+  description: string | undefined
+): DeferredDescriptionMediaHealPlan | null {
+  const localOnlyItems = listMediaItemsForIssue(issueId).filter(
+    (item) => item.source === "description" && item.local_path && !item.remote_url
+  );
+  if (localOnlyItems.length === 0) {
+    return null;
+  }
+
+  const groupedItems = new Map<string, { primary: MediaItem; duplicates: MediaItem[] }>();
+  for (const item of localOnlyItems) {
+    const signature = localOnlyDescriptionMediaSignature(item);
+    const existing = groupedItems.get(signature);
+    if (!existing) {
+      groupedItems.set(signature, { primary: item, duplicates: [] });
+      continue;
+    }
+    existing.duplicates.push(item);
+  }
+
+  const duplicateReplacement = new Map<string, MediaItem>();
+  const staleMediaIds: string[] = [];
+  for (const group of groupedItems.values()) {
+    for (const duplicate of group.duplicates) {
+      duplicateReplacement.set(duplicate.id, group.primary);
+      staleMediaIds.push(duplicate.id);
+    }
+  }
+
+  let nextDescription = description;
+  let changed = false;
+
+  if (duplicateReplacement.size > 0 && nextDescription) {
+    const rewritten = rewriteCanonicalMediaTokensOutsideBackticks(nextDescription, (token) => {
+      const replacement = duplicateReplacement.get(token.mediaId);
+      if (!replacement) {
+        return token.full;
+      }
+      return renderCanonicalMediaToken({
+        mediaId: replacement.id,
+        kind: replacement.kind,
+        label: preferredMediaLabel(replacement, token.label),
+      });
+    });
+    if (rewritten !== nextDescription) {
+      nextDescription = rewritten;
+      changed = true;
+    }
+  }
+
+  const referencedCanonicalIds = new Set(
+    nextDescription ? collectCanonicalMediaTokens(nextDescription).map((token) => token.mediaId) : []
+  );
+  const appendedTokens: string[] = [];
+
+  for (const group of groupedItems.values()) {
+    const item = group.primary;
+    if (referencedCanonicalIds.has(item.id)) {
+      continue;
+    }
+
+    const token = renderCanonicalMediaToken({
+      mediaId: item.id,
+      kind: item.kind,
+      label: preferredMediaLabel(item),
+    });
+
+    const replacedPath = replaceFirstExact(nextDescription, item.local_path, token);
+    if (replacedPath.changed) {
+      nextDescription = replacedPath.description;
+      referencedCanonicalIds.add(item.id);
+      changed = true;
+      continue;
+    }
+
+    appendedTokens.push(token);
+    referencedCanonicalIds.add(item.id);
+  }
+
+  if (appendedTokens.length > 0) {
+    nextDescription = appendMediaTokensToDescription(nextDescription, appendedTokens);
+    changed = true;
+  }
+
+  if (!changed && staleMediaIds.length === 0) {
+    return null;
+  }
+
+  return {
+    description: nextDescription,
+    staleMediaIds,
+  };
+}
+
 function collectRemoteDescriptionMediaTokens(
   description: string
 ): Array<{ kind: MediaKind; label: string; url: string }> {
@@ -895,7 +1043,10 @@ async function ensureLinearMediaRemoteUrl(
 
   const filename = item.original_filename || basename(item.local_path);
   const contentType = item.mime_type || file.type || "application/octet-stream";
-  const size = item.byte_size ?? file.size;
+  // Standalone Bun builds have crashed when PUTing a Bun.file directly, and
+  // signed uploads need the actual on-disk byte length rather than stale cache metadata.
+  const fileBytes = new Uint8Array(await file.arrayBuffer());
+  const size = fileBytes.byteLength;
 
   const mutation = `
     mutation FileUpload($filename: String!, $contentType: String!, $size: Int!) {
@@ -950,11 +1101,14 @@ async function ensureLinearMediaRemoteUrl(
   if (!headers.has("content-type")) {
     headers.set("content-type", contentType);
   }
+  if (!headers.has("content-length")) {
+    headers.set("content-length", String(size));
+  }
 
   const uploadResponse = await fetch(uploadFile.uploadUrl, {
     method: "PUT",
     headers,
-    body: file,
+    body: fileBytes,
   }).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -2875,6 +3029,7 @@ export async function updateIssue(
 ): Promise<Issue> {
   const client: GraphqlRequestClient =
     options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
+  let deferredHeal = { staleMediaIds: [] as string[] };
 
   // Build input
   const input: Record<string, unknown> = {};
@@ -2885,7 +3040,7 @@ export async function updateIssue(
       autoFormatEscapedNewlines: options.autoFormatEscapedNewlines,
     });
   } else {
-    await applyDeferredDescriptionAutoHeal(issueId, input, client);
+    deferredHeal = await applyDeferredDescriptionAutoHeal(issueId, input, client);
   }
   if (updates.priority !== undefined) input.priority = priorityToLinear(updates.priority);
   if (updates.status) {
@@ -2917,6 +3072,9 @@ export async function updateIssue(
   reconcileIssueMediaCacheWithRemote(result.issueUpdate.issue.identifier, {
     description: result.issueUpdate.issue.description,
   });
+  if (deferredHeal.staleMediaIds.length > 0) {
+    deleteMediaItems(deferredHeal.staleMediaIds);
+  }
   const issue = linearToBdIssue(result.issueUpdate.issue);
   cacheIssue(issue);
   return issue;
@@ -2926,9 +3084,9 @@ async function applyDeferredDescriptionAutoHeal(
   issueId: string,
   input: Record<string, unknown>,
   client: GraphqlRequestClient
-): Promise<void> {
+): Promise<{ staleMediaIds: string[] }> {
   if (input.description !== undefined) {
-    return;
+    return { staleMediaIds: [] };
   }
 
   const query = `
@@ -2947,16 +3105,21 @@ async function applyDeferredDescriptionAutoHeal(
     }>(query, { id: issueId });
 
     const currentDescription = result.issue?.description ?? undefined;
-    if (currentDescription === undefined) {
-      return;
+    const cachedDescription = getCachedIssue(issueId)?.description;
+    const planned = planDeferredDescriptionMediaHeal(issueId, cachedDescription ?? currentDescription);
+    const sourceDescription = planned?.description ?? currentDescription;
+    if (sourceDescription === undefined) {
+      return { staleMediaIds: planned?.staleMediaIds || [] };
     }
 
-    const healedDescription = await toLinearRichDescription(currentDescription, { client });
+    const healedDescription = await toLinearRichDescription(sourceDescription, { client });
     if (healedDescription !== undefined && healedDescription !== currentDescription) {
       input.description = healedDescription;
     }
+    return { staleMediaIds: planned?.staleMediaIds || [] };
   } catch {
     // Best effort only. Update should still proceed even if description heal lookup fails.
+    return { staleMediaIds: [] };
   }
 }
 
@@ -3002,7 +3165,7 @@ export async function closeIssue(
 
   // Build input - add reason as comment if provided
   const input: Record<string, unknown> = { stateId };
-  await applyDeferredDescriptionAutoHeal(issueId, input, client);
+  const deferredHeal = await applyDeferredDescriptionAutoHeal(issueId, input, client);
 
   const mutation = `
     mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
@@ -3021,6 +3184,10 @@ export async function closeIssue(
 
   if (!result.issueUpdate.success || !result.issueUpdate.issue) {
     throw new Error("Failed to close issue");
+  }
+
+  if (deferredHeal.staleMediaIds.length > 0) {
+    deleteMediaItems(deferredHeal.staleMediaIds);
   }
 
   // Add close reason as comment if provided
