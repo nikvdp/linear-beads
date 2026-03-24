@@ -42,14 +42,96 @@ async function runEval(
     | "canonical_description_preserve"
     | "startup_media_cache_repair"
     | "startup_media_cache_repair_pending_skip"
+    | "deferred_local_media_update_replace_and_dedupe"
+    | "deferred_local_media_update_append"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
     import { cacheIssue, cacheMediaItem, getMediaItem, listMediaItemsForIssue, queueOutboxItem } from ${JSON.stringify(DATABASE_UTILS_PATH)};
-    import { reconcileIssueMediaCacheWithRemote, renderDescriptionWithCanonicalMedia, repairCachedMediaRegistryFromIssueCache, toLinearRichDescription } from ${JSON.stringify(LINEAR_UTILS_PATH)};
+    import { reconcileIssueMediaCacheWithRemote, renderDescriptionWithCanonicalMedia, repairCachedMediaRegistryFromIssueCache, toLinearRichDescription, updateIssue } from ${JSON.stringify(LINEAR_UTILS_PATH)};
 
     const mode = process.argv[1];
     const now = "2026-03-09T00:00:00.000Z";
     const repoDir = process.cwd();
+
+    function buildUpdatedIssue(identifier, description) {
+      return {
+        id: identifier,
+        identifier,
+        title: "Deferred media heal",
+        description,
+        priority: 2,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: null,
+        canceledAt: null,
+        state: {
+          id: "state-open",
+          name: "Open",
+          type: "unstarted",
+        },
+        labels: { nodes: [] },
+        assignee: null,
+        creator: null,
+        parent: null,
+      };
+    }
+
+    function createDeferredHealClient(captured, uploadSuffix) {
+      return {
+        async request(query, variables = {}) {
+          if (query.includes("GetIssueDescriptionForHeal")) {
+            return {
+              issue: {
+                description: variables.id === "LIN-5008"
+                  ? "Before artifact\\n\\n* Screenshot path: /tmp/screen4.png\\n\\nValidation\\nCompare against /tmp/screen4.png."
+                  : "Validation\\n\\nSave an after screenshot path in the ticket.",
+              },
+            };
+          }
+
+          if (query.includes("mutation FileUpload")) {
+            captured.fileUploads.push({
+              filename: variables.filename,
+              contentType: variables.contentType,
+              size: variables.size,
+            });
+            return {
+              fileUpload: {
+                uploadFile: {
+                  uploadUrl: "https://upload.invalid/" + variables.filename,
+                  assetUrl: "https://uploads.linear.app/" + uploadSuffix + "/" + variables.filename,
+                  headers: [],
+                  filename: variables.filename,
+                  contentType: variables.contentType,
+                  size: variables.size,
+                },
+              },
+            };
+          }
+
+          if (query.includes("GetWorkspaceUrlKey")) {
+            return {
+              viewer: {
+                url: "https://linear.app/linear-beads",
+                organization: { urlKey: "linear-beads" },
+              },
+            };
+          }
+
+          if (query.includes("mutation UpdateIssue")) {
+            captured.description = variables.input.description;
+            return {
+              issueUpdate: {
+                success: true,
+                issue: buildUpdatedIssue(variables.id, variables.input.description),
+              },
+            };
+          }
+
+          throw new Error("Unexpected query: " + query.slice(0, 80));
+        },
+      };
+    }
 
     if (mode === "upload_roundtrip") {
       const imagePath = ${JSON.stringify(join("__REPO__", "shot.png"))}.replace("__REPO__", repoDir);
@@ -78,10 +160,19 @@ async function runEval(
 
       const uploads = [];
       globalThis.fetch = async (input, init) => {
+        const body = init?.body;
+        const bodySize = body instanceof Uint8Array
+          ? body.byteLength
+          : body instanceof ArrayBuffer
+            ? body.byteLength
+            : body instanceof Blob
+              ? body.size
+              : null;
         uploads.push({
           url: String(input),
           method: init?.method || "GET",
           headers: Object.fromEntries(new Headers(init?.headers).entries()),
+          bodySize,
         });
         return new Response("", { status: 200 });
       };
@@ -377,6 +468,127 @@ async function runEval(
       }));
       process.exit(0);
     }
+
+    if (mode === "deferred_local_media_update_replace_and_dedupe") {
+      const imagePath = "/tmp/screen4.png";
+      cacheIssue({
+        id: "LIN-5008",
+        title: "Deferred media replace",
+        description: "Before artifact\\n\\n* Screenshot path: /tmp/screen4.png\\n\\nValidation\\nCompare against /tmp/screen4.png.",
+        status: "open",
+        priority: 2,
+        created_at: now,
+        updated_at: now,
+      });
+      cacheMediaItem({
+        id: "m_local001",
+        issue_local_id: "LIN-5008",
+        kind: "image",
+        label: "screen4.png",
+        source: "description",
+        original_filename: "screen4.png",
+        mime_type: "image/png",
+        byte_size: 66117,
+        local_path: imagePath,
+      });
+      cacheMediaItem({
+        id: "m_local002",
+        issue_local_id: "LIN-5008",
+        kind: "image",
+        label: "screen4.png",
+        source: "description",
+        original_filename: "screen4.png",
+        mime_type: "image/png",
+        byte_size: 66117,
+        local_path: imagePath,
+      });
+
+      const uploads = [];
+      globalThis.fetch = async (input, init) => {
+        const body = init?.body;
+        const bodySize = body instanceof Uint8Array
+          ? body.byteLength
+          : body instanceof ArrayBuffer
+            ? body.byteLength
+            : body instanceof Blob
+              ? body.size
+              : null;
+        uploads.push({
+          url: String(input),
+          method: init?.method || "GET",
+          headers: Object.fromEntries(new Headers(init?.headers).entries()),
+          bodySize,
+        });
+        return new Response("", { status: 200 });
+      };
+
+      const captured = { description: null, fileUploads: [] };
+      const client = createDeferredHealClient(captured, "replace");
+      await updateIssue("LIN-5008", {}, "team-1", { client });
+
+      console.log(JSON.stringify({
+        description: captured.description,
+        fileUploads: captured.fileUploads,
+        media: listMediaItemsForIssue("LIN-5008"),
+        uploads,
+      }));
+      process.exit(0);
+    }
+
+    if (mode === "deferred_local_media_update_append") {
+      const imagePath = ${JSON.stringify(join("__REPO__", "after.png"))}.replace("__REPO__", repoDir);
+      cacheIssue({
+        id: "LIN-5009",
+        title: "Deferred media append",
+        description: "Validation\\n\\nSave an after screenshot path in the ticket.",
+        status: "open",
+        priority: 2,
+        created_at: now,
+        updated_at: now,
+      });
+      cacheMediaItem({
+        id: "m_after001",
+        issue_local_id: "LIN-5009",
+        kind: "image",
+        label: "after.png",
+        source: "description",
+        original_filename: "after.png",
+        mime_type: "image/png",
+        byte_size: 68,
+        local_path: imagePath,
+      });
+
+      const uploads = [];
+      globalThis.fetch = async (input, init) => {
+        const body = init?.body;
+        const bodySize = body instanceof Uint8Array
+          ? body.byteLength
+          : body instanceof ArrayBuffer
+            ? body.byteLength
+            : body instanceof Blob
+              ? body.size
+              : null;
+        uploads.push({
+          url: String(input),
+          method: init?.method || "GET",
+          headers: Object.fromEntries(new Headers(init?.headers).entries()),
+          bodySize,
+        });
+        return new Response("", { status: 200 });
+      };
+
+      const captured = { description: null, fileUploads: [] };
+      const client = createDeferredHealClient(captured, "append");
+      await updateIssue("LIN-5009", {}, "team-1", { client });
+
+      console.log(JSON.stringify({
+        description: captured.description,
+        fileUploads: captured.fileUploads,
+        media: listMediaItemsForIssue("LIN-5009"),
+        uploads,
+      }));
+      process.exit(0);
+    }
   `;
 
   const proc = Bun.spawn(["bun", "--eval", script, mode], {
@@ -417,7 +629,12 @@ describe("Linear media adapter", () => {
       rendered: string;
       image: { remote_url: string };
       file: { remote_url: string };
-      uploads: Array<{ url: string; method: string; headers: Record<string, string> }>;
+      uploads: Array<{
+        url: string;
+        method: string;
+        headers: Record<string, string>;
+        bodySize: number | null;
+      }>;
     };
 
     expect(payload.linear).toBe(
@@ -431,6 +648,8 @@ describe("Linear media adapter", () => {
     expect(payload.uploads).toHaveLength(2);
     expect(payload.uploads.every((upload) => upload.method === "PUT")).toBe(true);
     expect(payload.uploads[0].headers["content-disposition"]).toBeDefined();
+    expect(payload.uploads[0].headers["content-length"]).toBe("68");
+    expect(payload.uploads[0].bodySize).toBe(68);
   });
 
   test("appends detached attachments after the rendered description body", async () => {
@@ -533,5 +752,89 @@ describe("Linear media adapter", () => {
     };
     expect(payload.repaired).toBe(0);
     expect(payload.media.map((item) => item.id)).toEqual(["m_pending_startup001"]);
+  });
+
+  test("deferred auto-heal replaces the first local screenshot path, uploads it, and drops duplicate local rows", async () => {
+    const repoDir = createRepo();
+    writeFileSync(
+      "/tmp/screen4.png",
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2Z8ioAAAAASUVORK5CYII=",
+        "base64"
+      )
+    );
+
+    const result = await runEval(repoDir, "deferred_local_media_update_replace_and_dedupe");
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      description: string;
+      fileUploads: Array<{ filename: string; size: number }>;
+      media: Array<{ id: string; remote_url?: string }>;
+      uploads: Array<{
+        url: string;
+        method: string;
+        headers: Record<string, string>;
+        bodySize: number | null;
+      }>;
+    };
+    expect(payload.description).toContain("https://uploads.linear.app/replace/screen4.png");
+    expect(payload.description).toContain("Compare against /tmp/screen4.png.");
+    expect(payload.fileUploads).toEqual([
+      expect.objectContaining({
+        filename: "screen4.png",
+        size: 68,
+      }),
+    ]);
+    expect(payload.media).toHaveLength(1);
+    expect(payload.media[0].id).toBe("m_local001");
+    expect(payload.media[0].remote_url).toBe("https://uploads.linear.app/replace/screen4.png");
+    expect(payload.uploads).toHaveLength(1);
+    expect(payload.uploads[0].method).toBe("PUT");
+    expect(payload.uploads[0].headers["content-length"]).toBe("68");
+    expect(payload.uploads[0].bodySize).toBe(68);
+  });
+
+  test("deferred auto-heal appends missing local media references and uploads them", async () => {
+    const repoDir = createRepo();
+    writeFileSync(
+      join(repoDir, "after.png"),
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2Z8ioAAAAASUVORK5CYII=",
+        "base64"
+      )
+    );
+
+    const result = await runEval(repoDir, "deferred_local_media_update_append");
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      description: string;
+      fileUploads: Array<{ filename: string; size: number }>;
+      media: Array<{ id: string; remote_url?: string }>;
+      uploads: Array<{
+        url: string;
+        method: string;
+        headers: Record<string, string>;
+        bodySize: number | null;
+      }>;
+    };
+    expect(payload.description).toContain("Save an after screenshot path in the ticket.");
+    expect(payload.description).toContain("https://uploads.linear.app/append/after.png");
+    expect(payload.fileUploads).toEqual([
+      expect.objectContaining({
+        filename: "after.png",
+        size: 68,
+      }),
+    ]);
+    expect(payload.media).toHaveLength(1);
+    expect(payload.media[0].id).toBe("m_after001");
+    expect(payload.media[0].remote_url).toBe("https://uploads.linear.app/append/after.png");
+    expect(payload.uploads).toHaveLength(1);
+    expect(payload.uploads[0].method).toBe("PUT");
+    expect(payload.uploads[0].headers["content-length"]).toBe("68");
+    expect(payload.uploads[0].bodySize).toBe(68);
   });
 });
