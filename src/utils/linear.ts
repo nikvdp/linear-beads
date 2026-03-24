@@ -48,6 +48,8 @@ import {
   listMediaItemsForIssue,
   deleteMediaItems,
   getPendingOutboxItems,
+  getCachedIssues,
+  getDatabase,
   resolveIssueLocalId,
 } from "./database.js";
 import type {
@@ -142,6 +144,7 @@ export type CanonicalMediaToken = {
 };
 
 let workspaceUrlKeyCache: string | null = null;
+let repairedCachedMediaThisProcess = false;
 
 function stripMarkdownUrlWrapper(rawUrl: string): string {
   const trimmed = rawUrl.trim();
@@ -798,6 +801,76 @@ export function reconcileIssueMediaCacheWithRemote(
   if (staleIds.length > 0) {
     deleteMediaItems(staleIds);
   }
+}
+
+export function repairCachedMediaRegistryFromIssueCache(): number {
+  if (repairedCachedMediaThisProcess) {
+    return 0;
+  }
+  repairedCachedMediaThisProcess = true;
+
+  const pendingIssueIds = new Set(
+    getPendingOutboxItems()
+      .filter((item) => item.operation === "create" || item.operation === "update")
+      .map((item) => item.local_id)
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((issueId) => resolveIssueLocalId(issueId))
+  );
+
+  const staleIds = new Set<string>();
+  for (const issue of getCachedIssues()) {
+    const issueLocalId = resolveIssueLocalId(issue.local_id || issue.id);
+    if (pendingIssueIds.has(issueLocalId)) {
+      continue;
+    }
+
+    const description = typeof issue.description === "string" ? issue.description : "";
+    const referencedCanonicalIds = new Set(
+      collectCanonicalMediaTokens(description).map((token) => token.mediaId)
+    );
+    const referencedRemoteUrls = new Set<string>();
+    for (const token of collectRemoteDescriptionMediaTokens(description)) {
+      const item = registerRemoteDescriptionMedia(issueLocalId, token);
+      if (item.remote_url) {
+        referencedRemoteUrls.add(item.remote_url);
+      }
+    }
+
+    for (const item of listMediaItemsForIssue(issueLocalId)) {
+      if (item.source !== "description") {
+        continue;
+      }
+      if (referencedCanonicalIds.has(item.id)) {
+        continue;
+      }
+      if (item.remote_url && referencedRemoteUrls.has(item.remote_url)) {
+        continue;
+      }
+      staleIds.add(item.id);
+    }
+  }
+
+  const db = getDatabase();
+  const stagingRows = db
+    .query(
+      `
+        SELECT media_id
+        FROM media_items
+        WHERE issue_local_id LIKE 'MEDIA-STAGING-%'
+      `
+    )
+    .all() as Array<{ media_id: string }>;
+  for (const row of stagingRows) {
+    if (getMediaItem(row.media_id)) {
+      staleIds.add(row.media_id);
+    }
+  }
+
+  if (staleIds.size > 0) {
+    deleteMediaItems([...staleIds]);
+  }
+
+  return staleIds.size;
 }
 
 async function ensureLinearMediaRemoteUrl(

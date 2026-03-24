@@ -4,6 +4,8 @@
  */
 
 import { Command } from "commander";
+import { existsSync } from "fs";
+import { dirname } from "path";
 import { initCommand } from "./commands/init.js";
 import { authCommand } from "./commands/auth.js";
 import { importCommand } from "./commands/import.js";
@@ -32,12 +34,13 @@ import { skillCommand } from "./commands/skill.js";
 import { styleCommand } from "./commands/style.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { linearCommand } from "./commands/linear.js";
+import { repairCachedMediaRegistryFromIssueCache } from "./utils/linear.js";
 import { verifyConnection } from "./utils/issue-backend.js";
 import { closeDatabase } from "./utils/database.js";
 import { getRuntimeCliVersion } from "./utils/runtime-version.js";
 import { exportToJsonl } from "./utils/jsonl.js";
 import { processOutbox } from "./utils/background-sync-worker.js";
-import { assertMinCliVersion, setRuntimeOverrides } from "./utils/config.js";
+import { assertMinCliVersion, getDbPath, setRuntimeOverrides } from "./utils/config.js";
 
 function currentCliVersion(): string {
   return getRuntimeCliVersion();
@@ -58,6 +61,29 @@ function shouldSkipMinCliGate(argv: string[]): boolean {
 
 function isValidTempNameMode(mode: string): mode is "label" | "project" | "both" {
   return mode === "label" || mode === "project" || mode === "both";
+}
+
+const MEDIA_REPAIR_SKIPPED_COMMANDS = new Set(["auth", "init", "onboard", "self-update", "whoami"]);
+
+function getTopLevelCommandName(actionCommand: Command | undefined): string | null {
+  if (!actionCommand) {
+    return null;
+  }
+
+  let current: Command = actionCommand;
+  while (current.parent && current.parent.name() !== "lb") {
+    current = current.parent;
+  }
+  return current.name();
+}
+
+function shouldAttemptStartupMediaRepair(actionCommand: Command | undefined): boolean {
+  const topLevelCommandName = getTopLevelCommandName(actionCommand);
+  if (!topLevelCommandName || MEDIA_REPAIR_SKIPPED_COMMANDS.has(topLevelCommandName)) {
+    return false;
+  }
+
+  return existsSync(dirname(getDbPath()));
 }
 
 const cliVersion = currentCliVersion();
@@ -137,7 +163,7 @@ if (process.argv.includes("--worker")) {
   program.addCommand(dedupeCommand);
   program.addCommand(skillCommand);
 
-  program.hook("preAction", () => {
+  program.hook("preAction", (_command, actionCommand) => {
     const opts = program.opts<{ tempName?: string; tempNameMode?: string }>();
     const overrides: { repo_name?: string; repo_scope?: "label" | "project" | "both" } = {};
 
@@ -158,6 +184,14 @@ if (process.argv.includes("--worker")) {
 
     if (Object.keys(overrides).length > 0) {
       setRuntimeOverrides(overrides);
+    }
+
+    if (shouldAttemptStartupMediaRepair(actionCommand)) {
+      try {
+        repairCachedMediaRegistryFromIssueCache();
+      } catch {
+        // Best effort: stale media repair should not block the requested command.
+      }
     }
   });
 
