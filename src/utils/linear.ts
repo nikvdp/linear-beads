@@ -46,6 +46,8 @@ import {
   getLinearIdentifierForLocalId,
   getSyncedIssueBySyncKey,
   listMediaItemsForIssue,
+  deleteMediaItems,
+  getPendingOutboxItems,
   resolveIssueLocalId,
 } from "./database.js";
 import type {
@@ -657,6 +659,28 @@ function preferredMediaLabel(item: MediaItem, fallbackLabel?: string): string {
   return item.id;
 }
 
+function collectRemoteDescriptionMediaTokens(
+  description: string
+): Array<{ kind: MediaKind; label: string; url: string }> {
+  const tokens: Array<{ kind: MediaKind; label: string; url: string }> = [];
+  rewriteMarkdownLinksAndImagesOutsideBackticks(description, (full, kind, label, url) => {
+    if (isLinearUploadUrl(url)) {
+      tokens.push({ kind, label, url });
+    }
+    return full;
+  });
+  return tokens;
+}
+
+function hasPendingIssueMutation(issueId: string): boolean {
+  const resolvedIssueId = resolveIssueLocalId(issueId);
+  return getPendingOutboxItems().some(
+    (item) =>
+      item.local_id === resolvedIssueId &&
+      (item.operation === "create" || item.operation === "update")
+  );
+}
+
 function registerRemoteDescriptionMedia(
   issueId: string | undefined,
   token: { kind: MediaKind; label: string; url: string }
@@ -681,41 +705,98 @@ function registerRemoteDescriptionMedia(
   return next;
 }
 
-function registerIssueAttachments(issueId: string, issue: LinearIssue): void {
+export function reconcileIssueMediaCacheWithRemote(
+  issueId: string,
+  input: {
+    description?: string | null;
+    attachments?: LinearIssue["attachments"] | null;
+    allowDescriptionPrune?: boolean;
+  }
+): void {
   const issueLocalId = resolveIssueLocalId(issueId);
-  const attachments = issue.attachments?.nodes || [];
-  for (const attachment of attachments) {
-    const existing =
-      getMediaItemByLinearAttachmentId(attachment.id) || getMediaItemByRemoteUrl(attachment.url);
-    const metadata = attachment.metadata || {};
-    const mimeType =
-      typeof metadata.mimetype === "string"
-        ? metadata.mimetype
-        : typeof metadata.mimeType === "string"
-          ? metadata.mimeType
-          : existing?.mime_type;
-    cacheMediaItem({
-      id: existing?.id || generateMediaId(),
-      issue_local_id: issueLocalId,
-      source: "attachment",
-      kind: existing?.kind || inferMediaKind({ label: attachment.title, mimeType }),
-      label: existing?.label || attachment.title || undefined,
-      original_filename:
-        existing?.original_filename ||
-        attachment.title ||
-        guessFilenameFromUrl(attachment.url) ||
-        undefined,
-      mime_type: mimeType,
-      byte_size:
-        typeof metadata.size === "number"
-          ? metadata.size
-          : typeof metadata.fileSize === "number"
-            ? metadata.fileSize
-            : existing?.byte_size,
-      local_path: existing?.local_path,
-      remote_url: attachment.url,
-      attachment_id: attachment.id,
-    });
+  const keepDescriptionUrls = new Set<string>();
+  const keepAttachmentIds = new Set<string>();
+  const keepAttachmentUrls = new Set<string>();
+
+  if (typeof input.description === "string") {
+    for (const token of collectRemoteDescriptionMediaTokens(input.description)) {
+      const item = registerRemoteDescriptionMedia(issueLocalId, token);
+      if (item.remote_url) {
+        keepDescriptionUrls.add(item.remote_url);
+      }
+    }
+  }
+
+  if (input.attachments !== undefined) {
+    const attachments = input.attachments?.nodes || [];
+    for (const attachment of attachments) {
+      const existing =
+        getMediaItemByLinearAttachmentId(attachment.id) || getMediaItemByRemoteUrl(attachment.url);
+      const metadata = attachment.metadata || {};
+      const mimeType =
+        typeof metadata.mimetype === "string"
+          ? metadata.mimetype
+          : typeof metadata.mimeType === "string"
+            ? metadata.mimeType
+            : existing?.mime_type;
+      const cached = cacheMediaItem({
+        id: existing?.id || generateMediaId(),
+        issue_local_id: issueLocalId,
+        source: "attachment",
+        kind: existing?.kind || inferMediaKind({ label: attachment.title, mimeType }),
+        label: existing?.label || attachment.title || undefined,
+        original_filename:
+          existing?.original_filename ||
+          attachment.title ||
+          guessFilenameFromUrl(attachment.url) ||
+          undefined,
+        mime_type: mimeType,
+        byte_size:
+          typeof metadata.size === "number"
+            ? metadata.size
+            : typeof metadata.fileSize === "number"
+              ? metadata.fileSize
+              : existing?.byte_size,
+        local_path: existing?.local_path,
+        remote_url: attachment.url,
+        attachment_id: attachment.id,
+      });
+      if (cached.attachment_id) {
+        keepAttachmentIds.add(cached.attachment_id);
+      }
+      if (cached.remote_url) {
+        keepAttachmentUrls.add(cached.remote_url);
+      }
+    }
+  }
+
+  const allowDescriptionPrune =
+    input.allowDescriptionPrune ?? !hasPendingIssueMutation(issueLocalId);
+  const staleIds = listMediaItemsForIssue(issueLocalId)
+    .filter((item) => {
+      if (item.source === "description") {
+        const remoteUrl = item.remote_url;
+        if (!allowDescriptionPrune || !remoteUrl) {
+          return false;
+        }
+        return !keepDescriptionUrls.has(remoteUrl);
+      }
+
+      if (item.source === "attachment" && input.attachments !== undefined) {
+        const matchesAttachmentId = Boolean(
+          item.attachment_id && keepAttachmentIds.has(item.attachment_id)
+        );
+        const remoteUrl = item.remote_url;
+        const matchesRemoteUrl = Boolean(remoteUrl && keepAttachmentUrls.has(remoteUrl));
+        return Boolean(item.attachment_id || item.remote_url) && !matchesAttachmentId && !matchesRemoteUrl;
+      }
+
+      return false;
+    })
+    .map((item) => item.id);
+
+  if (staleIds.length > 0) {
+    deleteMediaItems(staleIds);
   }
 }
 
@@ -871,6 +952,10 @@ export function renderDescriptionWithCanonicalMedia(
 
   if (!issueId) {
     return rendered;
+  }
+
+  if (collectRemoteDescriptionMediaTokens(description).length > 0) {
+    reconcileIssueMediaCacheWithRemote(issueId, { description });
   }
 
   const renderedMediaIds = new Set<string>();
@@ -2371,7 +2456,10 @@ export async function fetchIssue(issueId: string): Promise<Issue | null> {
 
     if (!result.issue) return null;
 
-    registerIssueAttachments(issueId, result.issue);
+    reconcileIssueMediaCacheWithRemote(issueId, {
+      description: result.issue.description,
+      attachments: result.issue.attachments,
+    });
     const issue = linearToBdIssue(result.issue);
     cacheIssue(issue);
 
@@ -2687,6 +2775,9 @@ export async function createIssue(params: {
     throw new Error("Failed to create issue");
   }
 
+  reconcileIssueMediaCacheWithRemote(result.issueCreate.issue.identifier, {
+    description: result.issueCreate.issue.description,
+  });
   const issue = linearToBdIssue(result.issueCreate.issue);
   if (!params.skipCache) {
     cacheIssue(issue);
@@ -2750,6 +2841,9 @@ export async function updateIssue(
     throw new Error("Failed to update issue");
   }
 
+  reconcileIssueMediaCacheWithRemote(result.issueUpdate.issue.identifier, {
+    description: result.issueUpdate.issue.description,
+  });
   const issue = linearToBdIssue(result.issueUpdate.issue);
   cacheIssue(issue);
   return issue;
