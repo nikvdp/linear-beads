@@ -32,11 +32,20 @@ function createRepo(): string {
 
 async function runEval(
   cwd: string,
-  mode: "upload_roundtrip" | "detached_attachment_append" | "detached_attachment_idempotent"
+  mode:
+    | "upload_roundtrip"
+    | "detached_attachment_append"
+    | "detached_attachment_idempotent"
+    | "stale_description_media_prune"
+    | "pending_description_media_preserve"
+    | "stale_attachment_media_prune"
+    | "canonical_description_preserve"
+    | "startup_media_cache_repair"
+    | "startup_media_cache_repair_pending_skip"
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const script = `
-    import { cacheIssue, cacheMediaItem, getMediaItem } from ${JSON.stringify(DATABASE_UTILS_PATH)};
-    import { renderDescriptionWithCanonicalMedia, toLinearRichDescription } from ${JSON.stringify(LINEAR_UTILS_PATH)};
+    import { cacheIssue, cacheMediaItem, getMediaItem, listMediaItemsForIssue, queueOutboxItem } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+    import { reconcileIssueMediaCacheWithRemote, renderDescriptionWithCanonicalMedia, repairCachedMediaRegistryFromIssueCache, toLinearRichDescription } from ${JSON.stringify(LINEAR_UTILS_PATH)};
 
     const mode = process.argv[1];
     const now = "2026-03-09T00:00:00.000Z";
@@ -180,6 +189,194 @@ async function runEval(
       console.log(JSON.stringify({ once, twice }));
       process.exit(0);
     }
+
+    if (mode === "stale_description_media_prune") {
+      cacheIssue({
+        id: "LIN-5002",
+        title: "Description prune",
+        description: "Body",
+        status: "open",
+        priority: 2,
+        created_at: now,
+        updated_at: now,
+      });
+      cacheMediaItem({
+        id: "m_stale_desc001",
+        issue_local_id: "LIN-5002",
+        kind: "image",
+        label: "old.png",
+        source: "description",
+        original_filename: "old.png",
+        remote_url: "https://uploads.linear.app/old.png",
+      });
+
+      reconcileIssueMediaCacheWithRemote("LIN-5002", {
+        description: "Body",
+      });
+      console.log(JSON.stringify({
+        media: listMediaItemsForIssue("LIN-5002"),
+      }));
+      process.exit(0);
+    }
+
+    if (mode === "pending_description_media_preserve") {
+      cacheIssue({
+        id: "LIN-5003",
+        title: "Pending prune",
+        description: "Body",
+        status: "open",
+        priority: 2,
+        created_at: now,
+        updated_at: now,
+      });
+      cacheMediaItem({
+        id: "m_pending_desc001",
+        issue_local_id: "LIN-5003",
+        kind: "image",
+        label: "pending.png",
+        source: "description",
+        original_filename: "pending.png",
+        remote_url: "https://uploads.linear.app/pending.png",
+      });
+      queueOutboxItem("update", { issueId: "LIN-5003", description: "Body" }, "LIN-5003");
+
+      reconcileIssueMediaCacheWithRemote("LIN-5003", {
+        description: "Body",
+      });
+      console.log(JSON.stringify({
+        media: listMediaItemsForIssue("LIN-5003"),
+      }));
+      process.exit(0);
+    }
+
+    if (mode === "stale_attachment_media_prune") {
+      cacheIssue({
+        id: "LIN-5004",
+        title: "Attachment prune",
+        description: "Body",
+        status: "open",
+        priority: 2,
+        created_at: now,
+        updated_at: now,
+      });
+      cacheMediaItem({
+        id: "m_stale_attach001",
+        issue_local_id: "LIN-5004",
+        kind: "file",
+        label: "old.pdf",
+        source: "attachment",
+        original_filename: "old.pdf",
+        remote_url: "https://uploads.linear.app/old.pdf",
+        attachment_id: "att_old",
+      });
+
+      reconcileIssueMediaCacheWithRemote("LIN-5004", {
+        description: "Body",
+        attachments: { nodes: [] },
+      });
+      console.log(JSON.stringify({
+        media: listMediaItemsForIssue("LIN-5004"),
+      }));
+      process.exit(0);
+    }
+
+    if (mode === "canonical_description_preserve") {
+      cacheIssue({
+        id: "LIN-5005",
+        title: "Canonical preserve",
+        description: "Body\\n\\n![shot](lb-media:m_canonical001)",
+        status: "open",
+        priority: 2,
+        created_at: now,
+        updated_at: now,
+      });
+      cacheMediaItem({
+        id: "m_canonical001",
+        issue_local_id: "LIN-5005",
+        kind: "image",
+        label: "shot",
+        source: "description",
+        original_filename: "shot.png",
+        remote_url: "https://uploads.linear.app/canonical.png",
+      });
+
+      const rendered = renderDescriptionWithCanonicalMedia(
+        "Body\\n\\n![shot](lb-media:m_canonical001)",
+        "LIN-5005"
+      );
+      console.log(JSON.stringify({
+        rendered,
+        media: listMediaItemsForIssue("LIN-5005"),
+      }));
+      process.exit(0);
+    }
+
+    if (mode === "startup_media_cache_repair") {
+      cacheIssue({
+        id: "LIN-5006",
+        title: "Startup repair",
+        description: "Body\\n\\n![shot](https://uploads.linear.app/repaired.png)",
+        status: "open",
+        priority: 2,
+        created_at: now,
+        updated_at: now,
+      });
+      cacheMediaItem({
+        id: "m_stale_startup001",
+        issue_local_id: "LIN-5006",
+        kind: "image",
+        label: "stale.png",
+        source: "description",
+        original_filename: "stale.png",
+        remote_url: "https://uploads.linear.app/stale.png",
+      });
+      cacheMediaItem({
+        id: "m_staging001",
+        issue_local_id: "MEDIA-STAGING-old-run",
+        kind: "image",
+        label: "staging.png",
+        source: "description",
+        original_filename: "staging.png",
+        local_path: "/tmp/staging.png",
+      });
+
+      const repaired = repairCachedMediaRegistryFromIssueCache();
+      console.log(JSON.stringify({
+        repaired,
+        repairedMedia: listMediaItemsForIssue("LIN-5006"),
+        stagingGone: getMediaItem("m_staging001"),
+      }));
+      process.exit(0);
+    }
+
+    if (mode === "startup_media_cache_repair_pending_skip") {
+      cacheIssue({
+        id: "LIN-5007",
+        title: "Startup repair pending",
+        description: "Body",
+        status: "open",
+        priority: 2,
+        created_at: now,
+        updated_at: now,
+      });
+      cacheMediaItem({
+        id: "m_pending_startup001",
+        issue_local_id: "LIN-5007",
+        kind: "image",
+        label: "pending.png",
+        source: "description",
+        original_filename: "pending.png",
+        remote_url: "https://uploads.linear.app/pending-startup.png",
+      });
+      queueOutboxItem("update", { issueId: "LIN-5007", description: "Body" }, "LIN-5007");
+
+      const repaired = repairCachedMediaRegistryFromIssueCache();
+      console.log(JSON.stringify({
+        repaired,
+        media: listMediaItemsForIssue("LIN-5007"),
+      }));
+      process.exit(0);
+    }
   `;
 
   const proc = Bun.spawn(["bun", "--eval", script, mode], {
@@ -255,5 +452,86 @@ describe("Linear media adapter", () => {
     const payload = JSON.parse(result.stdout) as { once: string; twice: string };
     expect(payload.once).toBe("Body\n\n[detached.txt](lb-media:m_attach002)");
     expect(payload.twice).toBe(payload.once);
+  });
+
+  test("prunes stale description media when remote text no longer references it", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "stale_description_media_prune");
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      media: Array<{ id: string }>;
+    };
+    expect(payload.media).toEqual([]);
+  });
+
+  test("preserves remote-backed description media while a local issue mutation is still pending", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "pending_description_media_preserve");
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      media: Array<{ id: string }>;
+    };
+    expect(payload.media.map((item) => item.id)).toEqual(["m_pending_desc001"]);
+  });
+
+  test("prunes stale attachment media when the remote issue no longer lists the attachment", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "stale_attachment_media_prune");
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      media: Array<{ id: string }>;
+    };
+    expect(payload.media).toEqual([]);
+  });
+
+  test("does not prune remote-backed media when rendering already-canonical lb-media text", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "canonical_description_preserve");
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      rendered: string;
+      media: Array<{ id: string }>;
+    };
+    expect(payload.rendered).toBe("Body\n\n![shot](lb-media:m_canonical001)");
+    expect(payload.media.map((item) => item.id)).toEqual(["m_canonical001"]);
+  });
+
+  test("startup media repair backfills remote upload rows and drops stale startup leftovers", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "startup_media_cache_repair");
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      repaired: number;
+      repairedMedia: Array<{ id: string; remote_url?: string }>;
+      stagingGone: unknown;
+    };
+    expect(payload.repaired).toBe(2);
+    expect(payload.repairedMedia).toHaveLength(1);
+    expect(payload.repairedMedia[0].remote_url).toBe("https://uploads.linear.app/repaired.png");
+    expect(payload.stagingGone).toBeNull();
+  });
+
+  test("startup media repair skips stale pruning while a local mutation is pending", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "startup_media_cache_repair_pending_skip");
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      repaired: number;
+      media: Array<{ id: string }>;
+    };
+    expect(payload.repaired).toBe(0);
+    expect(payload.media.map((item) => item.id)).toEqual(["m_pending_startup001"]);
   });
 });

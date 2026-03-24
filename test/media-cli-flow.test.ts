@@ -185,6 +185,78 @@ describe("media CLI flow", () => {
     expect(shown.stdout).not.toContain("use 'lb media' to retrieve them");
   });
 
+  test("repo-backed commands auto-heal stale startup media rows before rendering", async () => {
+    const repoDir = createLocalRepo();
+
+    const seeded = await runEval(
+      repoDir,
+      `
+        import { cacheIssue, cacheMediaItem, getMediaItem, listMediaItemsForIssue } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+
+        const now = "2026-03-09T00:00:00.000Z";
+        cacheIssue({
+          id: "LIN-5006",
+          title: "Startup repair",
+          description: "Body\\n\\n![shot](https://uploads.linear.app/repaired.png)",
+          status: "open",
+          priority: 2,
+          created_at: now,
+          updated_at: now,
+        });
+        cacheMediaItem({
+          id: "m_stale_startup001",
+          issue_local_id: "LIN-5006",
+          kind: "image",
+          label: "stale.png",
+          source: "description",
+          original_filename: "stale.png",
+          remote_url: "https://uploads.linear.app/stale.png",
+        });
+        cacheMediaItem({
+          id: "m_staging001",
+          issue_local_id: "MEDIA-STAGING-old-run",
+          kind: "image",
+          label: "staging.png",
+          source: "description",
+          original_filename: "staging.png",
+          local_path: "/tmp/staging.png",
+        });
+
+        console.log(JSON.stringify({
+          before: listMediaItemsForIssue("LIN-5006"),
+          stagingBefore: getMediaItem("m_staging001"),
+        }));
+      `
+    );
+    expect(seeded.exitCode).toBe(0);
+
+    const shown = await runCli(repoDir, ["show", "LIN-5006"]);
+    expect(shown.exitCode).toBe(0);
+    expect(shown.stdout).toContain("Media: 1 item (use 'lb media' to retrieve them)");
+    expect(shown.stdout).toContain("![shot](lb-media:");
+    expect(shown.stdout).not.toContain("stale.png");
+
+    const repaired = await runEval(
+      repoDir,
+      `
+        import { getMediaItem, listMediaItemsForIssue } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+        console.log(JSON.stringify({
+          media: listMediaItemsForIssue("LIN-5006"),
+          stagingGone: getMediaItem("m_staging001"),
+        }));
+      `
+    );
+    expect(repaired.exitCode).toBe(0);
+
+    const payload = JSON.parse(repaired.stdout) as {
+      media: Array<{ id: string; remote_url?: string }>;
+      stagingGone: unknown;
+    };
+    expect(payload.media).toHaveLength(1);
+    expect(payload.media[0].remote_url).toBe("https://uploads.linear.app/repaired.png");
+    expect(payload.stagingGone).toBeNull();
+  });
+
   test("lb media info and get work for cached local media", async () => {
     const repoDir = createLocalRepo();
     const sourcePath = join(repoDir, "report.txt");
