@@ -19,11 +19,12 @@
     "build": "bun build src/cli.ts --outdir dist --target node",
     "build:bin": "bun build src/cli.ts --compile --outfile dist/lb",
     "build:linux-x64": "bun build src/cli.ts --compile --target=bun-linux-x64 --outfile dist/lb-linux-x64",
+    "build:linux-x64-baseline": "bun build src/cli.ts --compile --target=bun-linux-x64-baseline --outfile dist/lb-linux-x64-baseline",
     "build:linux-arm64": "bun build src/cli.ts --compile --target=bun-linux-arm64 --outfile dist/lb-linux-arm64",
     "build:darwin-x64": "bun build src/cli.ts --compile --target=bun-darwin-x64 --outfile dist/lb-darwin-x64",
     "build:darwin-arm64": "bun build src/cli.ts --compile --target=bun-darwin-arm64 --outfile dist/lb-darwin-arm64",
     "build:windows-x64": "bun build src/cli.ts --compile --target=bun-windows-x64 --outfile dist/lb-windows-x64.exe",
-    "build:all": "bun run build:linux-x64 && bun run build:linux-arm64 && bun run build:darwin-x64 && bun run build:darwin-arm64 && bun run build:windows-x64"
+    "build:all": "bun run build:linux-x64 && bun run build:linux-x64-baseline && bun run build:linux-arm64 && bun run build:darwin-x64 && bun run build:darwin-arm64 && bun run build:windows-x64"
   },
   "dependencies": {
     "commander": "^12.1.0",
