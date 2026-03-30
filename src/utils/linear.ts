@@ -1360,7 +1360,8 @@ async function getWorkspaceUrlKey(
 
 async function rewriteIssueTokenForLinearDescription(
   token: string,
-  workspaceUrlKey: string | null
+  workspaceUrlKey: string | null,
+  knownIssuePrefixes: ReadonlySet<string>
 ): Promise<DescriptionRefRewrite | null> {
   const normalized = normalizeIssueToken(token);
   const trackedRef = resolveTrackedIssueRef(normalized);
@@ -1383,7 +1384,13 @@ async function rewriteIssueTokenForLinearDescription(
     };
   }
 
-  if (!normalized.startsWith("LOCAL-") && CANONICAL_ISSUE_TOKEN_RE.test(normalized)) {
+  const prefix = normalized.split("-", 1)[0];
+  if (
+    prefix &&
+    !normalized.startsWith("LOCAL-") &&
+    CANONICAL_ISSUE_TOKEN_RE.test(normalized) &&
+    knownIssuePrefixes.has(prefix)
+  ) {
     return {
       text: normalized,
       url: workspaceUrlKey
@@ -1515,9 +1522,21 @@ export async function toLinearRichDescription(
     options.workspaceUrlKey !== undefined
       ? options.workspaceUrlKey
       : await getWorkspaceUrlKey(client);
+  const knownIssuePrefixes = new Set<string>();
+  const configuredTeamKey = getTeamKey()?.trim();
+  if (configuredTeamKey) {
+    knownIssuePrefixes.add(configuredTeamKey.toUpperCase());
+  }
+  for (const issue of getCachedIssues()) {
+    const candidate = issue.linear_identifier || issue.id;
+    const prefix = normalizeIssueToken(candidate).split("-", 1)[0];
+    if (prefix && prefix !== "LOCAL") {
+      knownIssuePrefixes.add(prefix);
+    }
+  }
 
   const encoded = await encodeIssueRefsInDescription(mediaExpandedDescription, (token) =>
-    rewriteIssueTokenForLinearDescription(token, workspaceUrlKey)
+    rewriteIssueTokenForLinearDescription(token, workspaceUrlKey, knownIssuePrefixes)
   );
   if (encoded === undefined) {
     return undefined;
