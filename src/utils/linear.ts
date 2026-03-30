@@ -147,6 +147,19 @@ export type CanonicalMediaToken = {
 let workspaceUrlKeyCache: string | null = null;
 let repairedCachedMediaThisProcess = false;
 
+function assignLinearDescriptionReplacement(
+  input: Record<string, unknown>,
+  description: string | undefined
+): void {
+  if (description === undefined) {
+    return;
+  }
+  input.description = description;
+  // Force Linear to rebuild its rich-text document from the replacement markdown
+  // instead of carrying stale inline marks forward from older content.
+  input.descriptionData = null;
+}
+
 function stripMarkdownUrlWrapper(rawUrl: string): string {
   const trimmed = rawUrl.trim();
   if (trimmed.startsWith("<") && trimmed.endsWith(">") && trimmed.length > 2) {
@@ -2961,15 +2974,18 @@ export async function createIssue(params: {
 
     const input: Record<string, unknown> = {
       title: params.title,
-      description: await toLinearRichDescription(params.description, {
-        client,
-        autoFormatEscapedNewlines: params.autoFormatEscapedNewlines,
-      }),
       priority: priorityToLinear(params.priority),
       teamId: params.teamId,
       stateId,
       parentId: parentUuid,
     };
+    assignLinearDescriptionReplacement(
+      input,
+      await toLinearRichDescription(params.description, {
+        client,
+        autoFormatEscapedNewlines: params.autoFormatEscapedNewlines,
+      })
+    );
     if (isUuid(params.syncKey)) {
       // Hidden idempotency key path: use sync key as Linear UUID.
       input.id = params.syncKey;
@@ -3054,10 +3070,13 @@ export async function updateIssue(
   const input: Record<string, unknown> = {};
   if (updates.title) input.title = updates.title;
   if (updates.description !== undefined) {
-    input.description = await toLinearRichDescription(updates.description, {
-      client,
-      autoFormatEscapedNewlines: options.autoFormatEscapedNewlines,
-    });
+    assignLinearDescriptionReplacement(
+      input,
+      await toLinearRichDescription(updates.description, {
+        client,
+        autoFormatEscapedNewlines: options.autoFormatEscapedNewlines,
+      })
+    );
   } else {
     deferredHeal = await applyDeferredDescriptionAutoHeal(issueId, input, client);
   }
@@ -3133,7 +3152,7 @@ async function applyDeferredDescriptionAutoHeal(
 
     const healedDescription = await toLinearRichDescription(sourceDescription, { client });
     if (healedDescription !== undefined && healedDescription !== currentDescription) {
-      input.description = healedDescription;
+      assignLinearDescriptionReplacement(input, healedDescription);
     }
     return { staleMediaIds: planned?.staleMediaIds || [] };
   } catch {
