@@ -18,9 +18,7 @@ function parseFrontmatterValue(markdown: string, key: string): string {
     throw new Error(`Missing frontmatter in packaged skill for key '${key}'.`);
   }
 
-  const line = match[1]
-    .split("\n")
-    .find((entry) => entry.startsWith(`${key}:`));
+  const line = match[1].split("\n").find((entry) => entry.startsWith(`${key}:`));
 
   if (!line) {
     throw new Error(`Missing frontmatter key '${key}' in packaged skill.`);

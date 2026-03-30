@@ -229,7 +229,11 @@ async function healDeferredDescriptionMediaIssues(teamId: string): Promise<numbe
   let healed = 0;
   for (const issue of getCachedIssues()) {
     const issueId = issue.local_id || issue.id;
-    if (!issue.linear_identifier || issue.sync_status === "pending" || pendingIssueIds.has(issueId)) {
+    if (
+      !issue.linear_identifier ||
+      issue.sync_status === "pending" ||
+      pendingIssueIds.has(issueId)
+    ) {
       continue;
     }
     if (!hasDeferredLocalOnlyDescriptionMedia(issue)) {
@@ -243,7 +247,9 @@ async function healDeferredDescriptionMediaIssues(teamId: string): Promise<numbe
       if (recordRemoteSyncPause(error)) {
         break;
       }
-      syncDebug(`deferred media heal skipped for ${issue.linear_identifier}: ${formatError(error)}`);
+      syncDebug(
+        `deferred media heal skipped for ${issue.linear_identifier}: ${formatError(error)}`
+      );
     }
   }
 

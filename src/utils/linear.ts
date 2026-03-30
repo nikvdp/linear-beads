@@ -780,7 +780,9 @@ export function planDeferredDescriptionMediaHeal(
   }
 
   const referencedCanonicalIds = new Set(
-    nextDescription ? collectCanonicalMediaTokens(nextDescription).map((token) => token.mediaId) : []
+    nextDescription
+      ? collectCanonicalMediaTokens(nextDescription).map((token) => token.mediaId)
+      : []
   );
   const appendedTokens: string[] = [];
 
@@ -952,7 +954,11 @@ export function reconcileIssueMediaCacheWithRemote(
         );
         const remoteUrl = item.remote_url;
         const matchesRemoteUrl = Boolean(remoteUrl && keepAttachmentUrls.has(remoteUrl));
-        return Boolean(item.attachment_id || item.remote_url) && !matchesAttachmentId && !matchesRemoteUrl;
+        return (
+          Boolean(item.attachment_id || item.remote_url) &&
+          !matchesAttachmentId &&
+          !matchesRemoteUrl
+        );
       }
 
       return false;
@@ -3144,7 +3150,10 @@ async function applyDeferredDescriptionAutoHeal(
 
     const currentDescription = result.issue?.description ?? undefined;
     const cachedDescription = getCachedIssue(issueId)?.description;
-    const planned = planDeferredDescriptionMediaHeal(issueId, cachedDescription ?? currentDescription);
+    const planned = planDeferredDescriptionMediaHeal(
+      issueId,
+      cachedDescription ?? currentDescription
+    );
     const sourceDescription = planned?.description ?? currentDescription;
     if (sourceDescription === undefined) {
       return { staleMediaIds: planned?.staleMediaIds || [] };
