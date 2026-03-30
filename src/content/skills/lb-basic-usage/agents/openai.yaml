@@ -1,0 +1,3 @@
+display_name: LB Basic Usage
+short_description: Use lb as the persistent task tracker and dependency graph.
+default_prompt: Use this skill to follow lb-first task tracking and issue lifecycle workflows.
