@@ -162,6 +162,12 @@ async function runEval(
       );
 
       payload.capturedDescription = capturedInputs[0]?.description;
+      payload.capturedDescriptionData = Object.prototype.hasOwnProperty.call(
+        capturedInputs[0] || {},
+        "descriptionData"
+      )
+        ? capturedInputs[0]?.descriptionData
+        : "__missing__";
       console.log(JSON.stringify(payload));
       process.exit(0);
     }
@@ -239,6 +245,12 @@ async function runEval(
 
       payload.unresolvedDescription = unresolvedDescription;
       payload.capturedDescription = capturedInputs[0]?.description;
+      payload.capturedDescriptionData = Object.prototype.hasOwnProperty.call(
+        capturedInputs[0] || {},
+        "descriptionData"
+      )
+        ? capturedInputs[0]?.descriptionData
+        : "__missing__";
       payload.capturedStateId = capturedInputs[0]?.stateId;
       console.log(JSON.stringify(payload));
       process.exit(0);
@@ -359,6 +371,12 @@ async function runEval(
       await updateIssue("LIN-5000", { description }, "team-1", { client: fakeClient });
 
       payload.outboundDescription = capturedInputs[0]?.description;
+      payload.outboundDescriptionData = Object.prototype.hasOwnProperty.call(
+        capturedInputs[0] || {},
+        "descriptionData"
+      )
+        ? capturedInputs[0]?.descriptionData
+        : "__missing__";
       payload.canonicalDescription = description;
       console.log(JSON.stringify(payload));
       process.exit(0);
@@ -576,10 +594,14 @@ describe("toLinearRichDescription", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
 
-    const payload = JSON.parse(result.stdout) as { capturedDescription: string };
+    const payload = JSON.parse(result.stdout) as {
+      capturedDescription: string;
+      capturedDescriptionData: null | "__missing__";
+    };
     expect(payload.capturedDescription).toBe(
       "test reference to <https://linear.app/linear-beads/issue/LIN-4465>"
     );
+    expect(payload.capturedDescriptionData).toBeNull();
   });
 
   test("status-only updates auto-heal previously unresolved LOCAL refs after alias reconciliation", async () => {
@@ -592,12 +614,14 @@ describe("toLinearRichDescription", () => {
     const payload = JSON.parse(result.stdout) as {
       unresolvedDescription: string;
       capturedDescription: string;
+      capturedDescriptionData: null | "__missing__";
       capturedStateId: string;
     };
     expect(payload.unresolvedDescription).toContain("https://lb-ref.invalid/issue?");
     expect(payload.capturedDescription).toBe(
       "test reference to <https://linear.app/linear-beads/issue/LIN-4465>"
     );
+    expect(payload.capturedDescriptionData).toBeNull();
     expect(payload.capturedStateId).toBe("state-started");
   });
 
@@ -664,10 +688,12 @@ describe("toLinearRichDescription", () => {
     const payload = JSON.parse(drained.stdout) as {
       canonicalDescription: string;
       outboundDescription: string;
+      outboundDescriptionData: null | "__missing__";
     };
     expect(payload.canonicalDescription).toContain("https://lb-ref.invalid/issue?");
     expect(payload.outboundDescription).toBe(
       "the final test to <https://linear.app/linear-beads/issue/LIN-4471> let us see now"
     );
+    expect(payload.outboundDescriptionData).toBeNull();
   });
 });

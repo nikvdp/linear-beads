@@ -175,7 +175,7 @@ describe("Linear description auto-heal on update paths", () => {
     expect(result.stderr).toBe("");
 
     const payload = JSON.parse(result.stdout) as {
-      capturedInputs: Array<{ description?: string }>;
+      capturedInputs: Array<{ description?: string; descriptionData?: null }>;
       healReadCalls: number;
     };
 
@@ -183,6 +183,7 @@ describe("Linear description auto-heal on update paths", () => {
     expect(payload.capturedInputs[0]?.description).toBe(
       "Legacy literal <https://linear.app/linear-beads/issue/LIN-4274> reference"
     );
+    expect(payload.capturedInputs[0]?.descriptionData).toBeNull();
   });
 
   test("does not add redundant description writes when already rich", async () => {
@@ -193,12 +194,13 @@ describe("Linear description auto-heal on update paths", () => {
     expect(result.stderr).toBe("");
 
     const payload = JSON.parse(result.stdout) as {
-      capturedInputs: Array<{ description?: string }>;
+      capturedInputs: Array<{ description?: string; descriptionData?: null }>;
       healReadCalls: number;
     };
 
     expect(payload.healReadCalls).toBe(1);
     expect(payload.capturedInputs[0]?.description).toBeUndefined();
+    expect(payload.capturedInputs[0]?.descriptionData).toBeUndefined();
   });
 
   test("auto-heals backticked literal refs into rich mentions on later update writes", async () => {
@@ -209,7 +211,7 @@ describe("Linear description auto-heal on update paths", () => {
     expect(result.stderr).toBe("");
 
     const payload = JSON.parse(result.stdout) as {
-      capturedInputs: Array<{ description?: string }>;
+      capturedInputs: Array<{ description?: string; descriptionData?: null }>;
       healReadCalls: number;
     };
 
@@ -217,6 +219,7 @@ describe("Linear description auto-heal on update paths", () => {
     expect(payload.capturedInputs[0]?.description).toBe(
       "Backticked literal <https://linear.app/linear-beads/issue/LIN-4274> reference"
     );
+    expect(payload.capturedInputs[0]?.descriptionData).toBeNull();
   });
 
   test("auto-heals generic Linear markdown fallback links once workspace slug is known", async () => {
@@ -227,7 +230,7 @@ describe("Linear description auto-heal on update paths", () => {
     expect(result.stderr).toBe("");
 
     const payload = JSON.parse(result.stdout) as {
-      capturedInputs: Array<{ description?: string }>;
+      capturedInputs: Array<{ description?: string; descriptionData?: null }>;
       healReadCalls: number;
     };
 
@@ -235,6 +238,7 @@ describe("Linear description auto-heal on update paths", () => {
     expect(payload.capturedInputs[0]?.description).toBe(
       "Already fallback <https://linear.app/linear-beads/issue/LIN-4274>"
     );
+    expect(payload.capturedInputs[0]?.descriptionData).toBeNull();
   });
 
   test("does not heal generic Linear markdown links inside backticks", async () => {
@@ -245,12 +249,13 @@ describe("Linear description auto-heal on update paths", () => {
     expect(result.stderr).toBe("");
 
     const payload = JSON.parse(result.stdout) as {
-      capturedInputs: Array<{ description?: string }>;
+      capturedInputs: Array<{ description?: string; descriptionData?: null }>;
       healReadCalls: number;
     };
 
     expect(payload.healReadCalls).toBe(1);
     expect(payload.capturedInputs[0]?.description).toBeUndefined();
+    expect(payload.capturedInputs[0]?.descriptionData).toBeUndefined();
   });
 
   test("does not rewrite backticked model identifiers that only look like issue refs", async () => {
@@ -261,12 +266,13 @@ describe("Linear description auto-heal on update paths", () => {
     expect(result.stderr).toBe("");
 
     const payload = JSON.parse(result.stdout) as {
-      capturedInputs: Array<{ description?: string }>;
+      capturedInputs: Array<{ description?: string; descriptionData?: null }>;
       healReadCalls: number;
     };
 
     expect(payload.healReadCalls).toBe(1);
     expect(payload.capturedInputs[0]?.description).toBeUndefined();
+    expect(payload.capturedInputs[0]?.descriptionData).toBeUndefined();
   });
 
   test("auto-heals malformed raw-url labels into safe mention URLs", async () => {
@@ -277,7 +283,7 @@ describe("Linear description auto-heal on update paths", () => {
     expect(result.stderr).toBe("");
 
     const payload = JSON.parse(result.stdout) as {
-      capturedInputs: Array<{ description?: string }>;
+      capturedInputs: Array<{ description?: string; descriptionData?: null }>;
       healReadCalls: number;
     };
 
@@ -285,6 +291,7 @@ describe("Linear description auto-heal on update paths", () => {
     expect(payload.capturedInputs[0]?.description).toBe(
       "Broken <https://linear.app/linear-beads/issue/LIN-4274>:"
     );
+    expect(payload.capturedInputs[0]?.descriptionData).toBeNull();
   });
 
   test("auto-heals legacy literal references when closing an issue", async () => {
@@ -295,7 +302,7 @@ describe("Linear description auto-heal on update paths", () => {
     expect(result.stderr).toBe("");
 
     const payload = JSON.parse(result.stdout) as {
-      capturedInputs: Array<{ description?: string; stateId?: string }>;
+      capturedInputs: Array<{ description?: string; descriptionData?: null; stateId?: string }>;
       healReadCalls: number;
     };
 
@@ -304,5 +311,6 @@ describe("Linear description auto-heal on update paths", () => {
     expect(payload.capturedInputs[0]?.description).toBe(
       "Legacy literal <https://linear.app/linear-beads/issue/LIN-4274> reference"
     );
+    expect(payload.capturedInputs[0]?.descriptionData).toBeNull();
   });
 });
