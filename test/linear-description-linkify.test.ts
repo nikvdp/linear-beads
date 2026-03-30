@@ -404,13 +404,11 @@ async function runCli(
 }
 
 describe("toLinearRichDescription", () => {
-  test("rewrites literal team issue IDs to safe Linear mention URLs", async () => {
-    const output = await toLinearRichDescription("Discuss LIN-4274 and ABC-99", {
+  test("rewrites known issue IDs to safe Linear mention URLs", async () => {
+    const output = await toLinearRichDescription("Discuss LIN-4274", {
       workspaceUrlKey: "linear-beads",
     });
-    expect(output).toBe(
-      "Discuss <https://linear.app/linear-beads/issue/LIN-4274> and <https://linear.app/linear-beads/issue/ABC-99>"
-    );
+    expect(output).toBe("Discuss <https://linear.app/linear-beads/issue/LIN-4274>");
   });
 
   test("does not rewrite unresolved LOCAL IDs", async () => {
@@ -480,6 +478,20 @@ describe("toLinearRichDescription", () => {
         "  * merge step: <https://linear.app/linear-beads/issue/LIN-4593> (open)",
       ].join("\n")
     );
+  });
+
+  test("keeps lowercase backticked model identifiers literal", async () => {
+    const input = [
+      "* local aliases to audit: `gpt-5`, `gpt-4o`, `gpt-4.1-mini`",
+      "* local aliases to audit: `claude-sonnet-4.5`, `claude-sonnet-4`, `claude-opus`",
+      "* likely current targets: `anthropic/claude-sonnet-4.6`, `anthropic/claude-opus-4.6`",
+      "* local aliases to audit: `gemini-3-pro`, `gemini-pro-2.5`, `xai-grok-2`",
+      "* local aliases to audit: `llama-3.1-405b`",
+    ].join("\n");
+    const output = await toLinearRichDescription(input, {
+      workspaceUrlKey: "linear-beads",
+    });
+    expect(output).toBe(input);
   });
 
   test("heals generic LIN fallback markdown links forward once workspace slug is known", async () => {

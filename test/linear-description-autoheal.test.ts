@@ -34,6 +34,7 @@ async function runEval(
   mode:
     | "update_auto_heals"
     | "update_heals_backticked_literal_ref"
+    | "update_skips_backticked_model_ids"
     | "update_skips_when_already_rich"
     | "update_skips_backticked_generic_link"
     | "update_heals_generic_link_fallback"
@@ -54,6 +55,18 @@ async function runEval(
     const existingDescription =
       mode === "update_heals_backticked_literal_ref"
         ? ${JSON.stringify("Backticked literal `LIN-4274` reference")}
+        : mode === "update_skips_backticked_model_ids"
+        ? ${JSON.stringify(
+            [
+              "Model families that need dedicated follow-up tickets:",
+              "",
+              "* OpenAI latest-offering refresh",
+              "  * local aliases to audit: `gpt-5`, `gpt-4o`, `gpt-4.1-mini`",
+              "* Anthropic latest-offering refresh",
+              "  * local aliases to audit: `claude-sonnet-4.5`, `claude-sonnet-4`, `claude-opus`",
+              "* likely current targets: `anthropic/claude-sonnet-4.6`, `anthropic/claude-opus-4.6`",
+            ].join("\\n")
+          )}
         : mode === "update_skips_when_already_rich"
         ? "Already rich [LIN-4274](https://linear.app/linear-beads/issue/LIN-4274)"
         : mode === "update_skips_backticked_generic_link"
@@ -227,6 +240,22 @@ describe("Linear description auto-heal on update paths", () => {
   test("does not heal generic Linear markdown links inside backticks", async () => {
     const repoDir = createRepo();
     const result = await runEval(repoDir, "update_skips_backticked_generic_link");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      capturedInputs: Array<{ description?: string }>;
+      healReadCalls: number;
+    };
+
+    expect(payload.healReadCalls).toBe(1);
+    expect(payload.capturedInputs[0]?.description).toBeUndefined();
+  });
+
+  test("does not rewrite backticked model identifiers that only look like issue refs", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "update_skips_backticked_model_ids");
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
