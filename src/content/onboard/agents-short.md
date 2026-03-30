@@ -51,20 +51,11 @@ When changing part of a long ticket body:
 
 For other long text flags, use the same `@file` pattern:
 - `lb close LIN-XXX --reason @reason.md`
-- `lb mail send ... --body @body.md`
-- `lb mail reply ... --body @reply.md`
 
 ### Remote IDs
 
 Default to local-first issue creation and keep using the returned local id for normal graph building.
 Use `lb create --wait --json` only when a script truly needs a resolved remote `LIN-*` immediately.
-
-### Agent Mail
-
-If you use shared Linear mail addressing:
-- configure `mail_backend: "linear"`, `issue_backend: "linear"`, and `mail_registry_work_item`
-- treat the handle returned by `lb agent register` as the real address, even if it gained a short suffix
-- do not assume repo-local handles are globally discoverable without the shared directory
 
 ### Keep Guidance Persistent
 

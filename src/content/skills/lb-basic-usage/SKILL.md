@@ -33,8 +33,6 @@ Use `--no-auto-format-escaped-newlines` only when you intentionally need literal
 
 Use the same pattern for other long body-like flags:
 - `lb close <id> --reason @reason.md`
-- `lb mail send ... --body @body.md`
-- `lb mail reply ... --body @reply.md`
 
 ## Editing long ticket bodies
 
