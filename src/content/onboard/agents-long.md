@@ -153,6 +153,23 @@ lb create "Step 2: Do Y" --parent LIN-XXX -d "Details..."
 lb create "Step 3: Do Z" --parent LIN-XXX --blocked-by LIN-YYY  # If order matters
 ```
 
+Prefer hierarchy and encapsulation:
+- one parent issue for the overall outcome
+- child issues for independently executable implementation units
+- deeper descendants only when a child still hides multiple real steps
+
+Use blockers to encode execution order:
+- if one child must land before another, express that with `--blocked-by` or `--blocks`
+- if work can proceed in parallel, leave the sibling issues unblocked
+- another agent should be able to run `lb ready` and see the intended next step
+
+Write implementation tickets so another agent can execute them without re-planning the whole change. Good tickets should include:
+- why the work exists and the exact behavior change
+- non-goals so scope stays bounded
+- likely files, functions, commands, or modules to edit
+- concrete implementation notes, not vague handwaves
+- validation steps and important edge cases
+
 **Why subissues instead of your built-in task tools?**
 - Subissues persist across sessions - built-in todos don't
 - Other agents and humans can see them in Linear
@@ -219,7 +236,7 @@ Precedence: CLI temp flags > env temp vars > config > git heuristic.
 2. **Always `lb sync` then `lb ready`** before asking what to work on
 3. **Always `lb show`** to read the full description before starting
 4. **Link discovered work** with `--discovered-from` to maintain context graph
-5. **Include descriptions** with enough context for handoff
+5. **Write handoff-ready tickets** with concrete files, edit points, and validation, not vague summaries
 6. **Close with reasons** explaining what was done
 
 ### Why No Built-in Task Tools?
@@ -240,6 +257,7 @@ Precedence: CLI temp flags > env temp vars > config > git heuristic.
 - Design decisions, context, research findings
 - Implementation notes and code snippets  
 - Blockers and dependencies
+- File paths, symbols, and exact intended edits
 - "Where I left off" checkpoints
 
 **Think of `lb` as your persistent brain supplement.** Your memory is cache, `lb` is database.

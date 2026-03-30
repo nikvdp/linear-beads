@@ -20,6 +20,14 @@ lb create "Step 1: ..." --parent LIN-XXX
 lb create "Step 2: ..." --parent LIN-XXX --blocked-by LIN-YYY
 ```
 
+Prefer one parent issue for the overall goal and child issues for independently executable implementation units. Use blockers to encode order so another agent can run `lb ready` and see the intended next step.
+
+Write implementation tickets with enough detail for handoff:
+- exact behavior change and non-goals
+- likely files, functions, or commands to edit
+- concrete edit notes, not vague summaries
+- validation steps
+
 ### Dependency Links
 
 ```bash
