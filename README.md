@@ -33,6 +33,15 @@ When your agent runs `lb onboard`, it will:
 
 After onboarding, your agent uses `lb` instead of its built-in task tools. Issues sync to Linear so you can see them in the Linear UI.
 
+## Editing bundled onboarding and skills
+
+The packaged onboarding text and installable skills are authored as normal repo files under `src/content/`:
+
+- `src/content/onboard/` holds the long, short, and wrapper markdown used by `lb onboard`
+- `src/content/skills/` holds each packaged skill's `SKILL.md` and `agents/openai.yaml`
+
+The CLI still bundles those files into the app at build time, but the source of truth for editing is now the markdown and yaml on disk rather than large TypeScript string literals.
+
 ## Repo Scoping (Label vs Project)
 
 `lb` supports three scoping modes:
