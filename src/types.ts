@@ -60,6 +60,18 @@ export interface Issue {
   dependencies?: Dependency[];
 }
 
+export interface IssueComment {
+  id: string;
+  issue_id: string;
+  issue_local_id?: string;
+  parent_id?: string;
+  body: string;
+  author?: string;
+  created_at: string;
+  updated_at: string;
+  sync_status?: "synced" | "pending" | "failed";
+}
+
 export type MediaKind = "image" | "file";
 
 export type MediaSource = "description" | "attachment";
@@ -154,6 +166,30 @@ export interface LinearIssue {
   };
 }
 
+export interface LinearComment {
+  id: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  parent?: {
+    id: string;
+  } | null;
+  user?: {
+    id: string;
+    email?: string | null;
+    name?: string | null;
+  } | null;
+  externalUser?: {
+    id?: string | null;
+    name?: string | null;
+    email?: string | null;
+  } | null;
+  issue?: {
+    id: string;
+    identifier: string;
+  } | null;
+}
+
 /**
  * Outbox item for queued mutations
  */
@@ -166,6 +202,7 @@ export interface OutboxItem {
     | "delete"
     | "create_relation"
     | "delete_relation"
+    | "comment_create"
     | "mail_send"
     | "mail_mark_read"
     | "mail_ack"

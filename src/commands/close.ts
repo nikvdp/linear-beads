@@ -8,6 +8,7 @@ import {
   getCachedIssue,
   getChildIds,
   cacheIssue,
+  createLocalIssueComment,
   getDisplayId,
   resolveIssueId,
   isLocalId,
@@ -148,6 +149,13 @@ export const closeCommand = new Command("close")
           updated_at: now,
         };
         cacheIssue(closed);
+        if (reason) {
+          createLocalIssueComment({
+            issueId: resolvedId,
+            body: `Closed: ${reason}`,
+            syncStatus: "synced",
+          });
+        }
 
         if (options.json) {
           output(formatIssueJson(closed));
@@ -209,6 +217,13 @@ export const closeCommand = new Command("close")
 
       // Ensure worker processes the outbox
       ensureOutboxProcessed();
+      if (reason) {
+        createLocalIssueComment({
+          issueId: resolvedId,
+          body: `Closed: ${reason}`,
+          syncStatus: "pending",
+        });
+      }
 
       // Return cached issue with status updated
       let issue = getCachedIssue(resolvedId);

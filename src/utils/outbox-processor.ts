@@ -44,6 +44,7 @@ import {
   deleteIssue,
   createRelation,
   deleteRelation,
+  addComment,
   findIssueBySyncKey,
 } from "./issue-backend.js";
 import { getMailBackendAdapter } from "./mail-backend.js";
@@ -367,6 +368,10 @@ function resolveOutboxItem(item: OutboxItem, context: ResolutionContext): Resolu
       resolveField("issueId", { dropOperationIfOrphan: true });
       break;
     }
+    case "comment_create": {
+      resolveField("issueId", { dropOperationIfOrphan: true });
+      break;
+    }
     case "create_relation": {
       resolveField("issueId", { dropOperationIfOrphan: true });
       resolveField("relatedIssueId", { dropOperationIfOrphan: true });
@@ -639,6 +644,18 @@ async function processResolvedItem(
       }
       return { usedRemoteBackend: true };
     }
+    case "comment_create": {
+      const commentPayload = payload as {
+        issueId: string;
+        body: string;
+        parentId?: string;
+      };
+      if (!commentPayload.issueId || !commentPayload.body) {
+        throw new Error("Missing issueId or body for comment_create operation");
+      }
+      await addComment(commentPayload.issueId, commentPayload.body, commentPayload.parentId);
+      return { usedRemoteBackend: true };
+    }
     case "create_relation": {
       const relPayload = payload as {
         issueId: string;
@@ -709,6 +726,7 @@ export function operationRequiresTeamId(operation: OutboxItem["operation"]): boo
     case "delete":
     case "create_relation":
     case "delete_relation":
+    case "comment_create":
       return true;
     case "mail_send":
     case "mail_mark_read":
@@ -737,6 +755,8 @@ export function getOutboxItemEndpointNames(item: OutboxItem): string[] {
       return ["issue", "issueRelationCreate"];
     case "delete_relation":
       return ["issue", "issueRelationDelete"];
+    case "comment_create":
+      return ["issue", "commentCreate"];
     case "mail_send":
     case "mail_reply":
       return getMailBackendAdapter().name === "linear" ? ["commentCreate"] : [];

@@ -1,4 +1,4 @@
-import type { Issue, IssueType, Priority, IssueStatus } from "../types.js";
+import type { Issue, IssueComment, IssueType, Priority, IssueStatus } from "../types.js";
 
 export interface IssueBackendAdapter {
   readonly name: string;
@@ -55,7 +55,8 @@ export interface IssueBackendAdapter {
     relatedIssueId: string,
     relationType?: "blocks" | "related"
   ): Promise<void>;
-  addComment(issueId: string, body: string): Promise<void>;
+  fetchIssueComments(issueId: string): Promise<IssueComment[]>;
+  addComment(issueId: string, body: string, parentId?: string): Promise<IssueComment>;
 }
 
 export interface MailBackendAdapter {

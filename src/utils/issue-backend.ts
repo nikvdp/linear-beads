@@ -22,6 +22,7 @@ const linearIssueBackend: IssueBackendAdapter = {
   deleteIssue: linear.deleteIssue,
   createRelation: linear.createRelation,
   deleteRelation: linear.deleteRelation,
+  fetchIssueComments: linear.fetchIssueComments,
   addComment: linear.addComment,
 };
 
@@ -88,6 +89,9 @@ const localIssueBackend: IssueBackendAdapter = {
     _relationType?: "blocks" | "related"
   ) {
     throw localIssueBackendError("deleteRelation");
+  },
+  async fetchIssueComments() {
+    throw localIssueBackendError("fetchIssueComments");
   },
   async addComment() {
     throw localIssueBackendError("addComment");
@@ -210,9 +214,16 @@ export async function deleteRelation(
   return getIssueBackendAdapter().deleteRelation(issueId, relatedIssueId, relationType);
 }
 
+export async function fetchIssueComments(
+  issueId: string
+): ReturnType<IssueBackendAdapter["fetchIssueComments"]> {
+  return getIssueBackendAdapter().fetchIssueComments(issueId);
+}
+
 export async function addComment(
   issueId: string,
-  body: string
+  body: string,
+  parentId?: string
 ): ReturnType<IssueBackendAdapter["addComment"]> {
-  return getIssueBackendAdapter().addComment(issueId, body);
+  return getIssueBackendAdapter().addComment(issueId, body, parentId);
 }
