@@ -342,8 +342,25 @@ describe("linear mail adapter envelope", () => {
       }
 
       if (payload.query?.includes("mutation CreateComment")) {
-        directoryBodies.push(payload.variables?.input?.body || "");
-        return jsonResponse({ data: { commentCreate: { success: true } } });
+        const body = payload.variables?.input?.body || "";
+        directoryBodies.push(body);
+        return jsonResponse({
+          data: {
+            commentCreate: {
+              success: true,
+              comment: {
+                id: `comment-${directoryBodies.length}`,
+                body,
+                createdAt: "2026-03-21T08:10:00.000Z",
+                updatedAt: "2026-03-21T08:10:00.000Z",
+                parent: null,
+                user: null,
+                externalUser: null,
+                issue: { id: "issue-registry-uuid", identifier: "LIN-REG-1" },
+              },
+            },
+          },
+        });
       }
 
       throw new Error(`Unexpected GraphQL query: ${payload.query}`);
