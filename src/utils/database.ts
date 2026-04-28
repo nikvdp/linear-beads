@@ -1609,7 +1609,7 @@ export function getIssueComments(issueId: string, limit?: number): IssueComment[
           SELECT *
           FROM issue_comments
           WHERE issue_local_id = ? OR issue_id = ?
-          ORDER BY datetime(created_at) ASC, id ASC
+          ORDER BY created_at ASC, id ASC
           LIMIT ?
         `
         )
