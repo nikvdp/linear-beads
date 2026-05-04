@@ -751,6 +751,19 @@ function isPermanentEntityError(errorMessage: string): boolean {
   return msg.includes("entity not found") || msg.includes("entity is trashed");
 }
 
+export function isIdempotentOutboxSuccessError(
+  operation: OutboxItem["operation"],
+  errorMessage: string
+): boolean {
+  if (operation !== "delete_relation") {
+    return false;
+  }
+
+  return /^No (?:(?:blocks|related) )?relation found between \S+ and \S+/i.test(
+    errorMessage.trim()
+  );
+}
+
 export async function processOutboxQueue(
   teamId: string,
   options: { propagateParent?: boolean } = {}
@@ -864,8 +877,12 @@ export async function processOutboxQueue(
       success++;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      if (isPermanentEntityError(errorMsg) && item.operation !== "create") {
+      if (
+        (isPermanentEntityError(errorMsg) && item.operation !== "create") ||
+        isIdempotentOutboxSuccessError(item.operation, errorMsg)
+      ) {
         // Legacy queue rows can reference deleted/trashed entities forever.
+        // Relation deletes are also complete if Linear says the relation is already absent.
         // Drop these rows so sync converges instead of retrying indefinitely.
         removeOutboxItem(item.id);
         success++;
