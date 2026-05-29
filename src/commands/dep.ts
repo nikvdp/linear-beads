@@ -3,7 +3,12 @@
  */
 
 import { Command } from "commander";
-import { createRelation, deleteRelation, updateIssueParent } from "../utils/issue-backend.js";
+import {
+  createRelation,
+  deleteRelation,
+  fetchIssue,
+  updateIssueParent,
+} from "../utils/issue-backend.js";
 import {
   getBacklogDescendantIssueIds,
   getCachedIssue,
@@ -218,10 +223,6 @@ function sortIssueIdsForExecution(issueIds: string[], backlogDescendantIds: Set<
       if (dep.type !== "blocks" || !issueSet.has(dep.depends_on_id)) {
         continue;
       }
-      const blockerIssue = getCachedIssue(dep.issue_id);
-      if (blockerIssue && isTerminalStatus(blockerIssue.status)) {
-        continue;
-      }
       const outgoingForIssue = outgoingByIssue.get(dep.issue_id);
       if (!outgoingForIssue || outgoingForIssue.has(dep.depends_on_id)) {
         continue;
@@ -301,7 +302,7 @@ function getTreeRelationSections(
     {
       title: "Children (execution order)",
       issueIds: children,
-      recursive: true,
+      recursive: false,
     },
     {
       title: "Blocked by",
@@ -1003,7 +1004,10 @@ const treeCommand = new Command("tree")
       }
 
       const resolvedId = resolveIssueId(issueId);
-      const issue = getCachedIssue(resolvedId);
+      let issue = getCachedIssue(resolvedId);
+      if (!isLocalOnly() && !isLocalId(resolvedId)) {
+        issue = (await fetchIssue(resolvedId)) || issue;
+      }
       if (!issue) {
         outputError(`Issue not found: ${issueId}`);
         process.exit(1);

@@ -1688,6 +1688,20 @@ export function clearIssueDependencies(issueId: string): void {
 }
 
 /**
+ * Clear cached child links for a parent before refreshing children from remote.
+ */
+export function clearChildDependenciesForParent(parentId: string): void {
+  const db = getDatabase();
+  const resolvedId = resolveIssueLocalId(parentId);
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM dependencies WHERE depends_on_id = ? AND type = 'parent-child'", [
+      resolvedId,
+    ]);
+  });
+  requestJsonlExport();
+}
+
+/**
  * Delete a specific dependency between two issues
  */
 export function deleteDependency(issueId: string, dependsOnId: string): void {

@@ -130,10 +130,7 @@ export interface LinearIssue {
     identifier: string;
   } | null;
   children?: {
-    nodes: Array<{
-      id: string;
-      identifier: string;
-    }>;
+    nodes: LinearIssue[];
   };
   relations?: {
     nodes: Array<{
