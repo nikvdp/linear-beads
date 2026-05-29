@@ -1640,10 +1640,15 @@ describe("Local-only Mode", () => {
         "--parent",
         parent[0].id
       );
+      const blocker = await lbLocalJson<Array<{ id: string }>>("create", "Root blocker");
+      const blocked = await lbLocalJson<Array<{ id: string }>>("create", "Root blocked");
+      const related = await lbLocalJson<Array<{ id: string }>>("create", "Root related");
 
       await lbLocal("dep", "add", firstChild[0].id, "--blocks", secondChild[0].id);
       await lbLocal("dep", "add", secondChild[0].id, "--blocks", thirdChild[0].id);
-      await lbLocal("dep", "add", firstChild[0].id, "--related", thirdChild[0].id);
+      await lbLocal("dep", "add", parent[0].id, "--blocked-by", blocker[0].id);
+      await lbLocal("dep", "add", parent[0].id, "--blocks", blocked[0].id);
+      await lbLocal("dep", "add", parent[0].id, "--related", related[0].id);
 
       const result = await lbLocal("dep", "tree", parent[0].id);
 
@@ -1653,6 +1658,9 @@ describe("Local-only Mode", () => {
       expect(result.stdout).toContain("Blocks (1)");
       expect(result.stdout).toContain("Blocked by (1)");
       expect(result.stdout).toContain("Related (1)");
+      expect(result.stdout).toContain(blocker[0].id);
+      expect(result.stdout).toContain(blocked[0].id);
+      expect(result.stdout).toContain(related[0].id);
 
       const firstIndex = result.stdout.indexOf(firstChild[0].id);
       const secondIndex = result.stdout.indexOf(secondChild[0].id);
