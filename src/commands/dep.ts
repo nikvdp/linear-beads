@@ -6,7 +6,6 @@ import { Command } from "commander";
 import { createRelation, deleteRelation, updateIssueParent } from "../utils/issue-backend.js";
 import {
   getBacklogDescendantIssueIds,
-  getDependencies,
   getCachedIssue,
   getBlockedIssueIds,
   getDatabase,
@@ -119,6 +118,209 @@ function parseLimitOption(value: unknown): number | undefined {
   return parsed;
 }
 
+interface TreeRelationSection {
+  title: string;
+  issueIds: string[];
+  recursive: boolean;
+}
+
+function treeConnector(prefix: string, isLast: boolean): string {
+  return prefix === "" ? "" : `${prefix}${isLast ? "└── " : "├── "}`;
+}
+
+function treeChildPrefix(prefix: string, isLast: boolean): string {
+  return prefix + (isLast ? "    " : "│   ");
+}
+
+function formatTreeIssueLine(
+  issueId: string,
+  style: "classic" | "beads",
+  blockedIds: Set<string>,
+  backlogDescendantIds: Set<string>,
+  prefix: string,
+  isLast: boolean,
+  suffix: string = ""
+): string {
+  const issue = getCachedIssue(issueId);
+  const title = issue?.title || "Unknown";
+  const priority = issue?.priority ?? "?";
+  const status = issue?.status || "unknown";
+  const readyTag = getReadyTag(issueId, status, backlogDescendantIds);
+
+  if (style === "beads") {
+    const displayId = getDisplayId(issueId);
+    return formatIssueSummaryBeads(
+      {
+        id: issueId,
+        display_id: displayId,
+        title: `${title}${readyTag}${suffix}`,
+        status: issue?.status || "open",
+        priority: typeof priority === "number" ? priority : 2,
+        is_blocked: blockedIds.has(issueId),
+        sync_status: issue?.sync_status,
+      },
+      treeConnector(prefix, isLast)
+    );
+  }
+
+  const displayTitle = `${title}${readyTag}${suffix}`;
+  if (prefix === "") {
+    return `${getDisplayId(issueId)}: ${displayTitle} [P${priority}] (${status})`;
+  }
+  return `${treeConnector(prefix, isLast)}${getDisplayId(issueId)}: ${displayTitle} [P${priority}] (${status})`;
+}
+
+function getReadyTag(issueId: string, status: string, backlogDescendantIds: Set<string>): string {
+  const { incoming } = getAllDependencies(issueId);
+  const openBlockers = incoming.filter((dep) => {
+    if (dep.type !== "blocks") {
+      return false;
+    }
+    const blockerIssue = getCachedIssue(dep.issue_id);
+    return blockerIssue && !isTerminalStatus(blockerIssue.status);
+  });
+  const isReady =
+    openBlockers.length === 0 && isReadyStatus(status) && !backlogDescendantIds.has(issueId);
+  return isReady ? " [READY]" : "";
+}
+
+function compareTreeIssueIds(a: string, b: string, backlogDescendantIds: Set<string>): number {
+  const issueA = getCachedIssue(a);
+  const issueB = getCachedIssue(b);
+  const statusA = issueA?.status || "unknown";
+  const statusB = issueB?.status || "unknown";
+  const readyA = getReadyTag(a, statusA, backlogDescendantIds) ? 0 : 1;
+  const readyB = getReadyTag(b, statusB, backlogDescendantIds) ? 0 : 1;
+
+  if (readyA !== readyB) {
+    return readyA - readyB;
+  }
+  if ((issueA?.priority ?? 2) !== (issueB?.priority ?? 2)) {
+    return (issueA?.priority ?? 2) - (issueB?.priority ?? 2);
+  }
+  return (issueA?.title || "").localeCompare(issueB?.title || "");
+}
+
+function sortIssueIdsForExecution(issueIds: string[], backlogDescendantIds: Set<string>): string[] {
+  const uniqueIds = [...new Set(issueIds.map((id) => resolveIssueLocalId(id)))];
+  const issueSet = new Set(uniqueIds);
+  const outgoingByIssue = new Map<string, Set<string>>();
+  const incomingCount = new Map<string, number>();
+
+  for (const issueId of uniqueIds) {
+    outgoingByIssue.set(issueId, new Set());
+    incomingCount.set(issueId, 0);
+  }
+
+  for (const issueId of uniqueIds) {
+    const { outgoing } = getAllDependencies(issueId);
+    for (const dep of outgoing) {
+      if (dep.type !== "blocks" || !issueSet.has(dep.depends_on_id)) {
+        continue;
+      }
+      const blockerIssue = getCachedIssue(dep.issue_id);
+      if (blockerIssue && isTerminalStatus(blockerIssue.status)) {
+        continue;
+      }
+      const outgoingForIssue = outgoingByIssue.get(dep.issue_id);
+      if (!outgoingForIssue || outgoingForIssue.has(dep.depends_on_id)) {
+        continue;
+      }
+      outgoingForIssue.add(dep.depends_on_id);
+      incomingCount.set(dep.depends_on_id, (incomingCount.get(dep.depends_on_id) || 0) + 1);
+    }
+  }
+
+  const result: string[] = [];
+  const queue = uniqueIds
+    .filter((issueId) => (incomingCount.get(issueId) || 0) === 0)
+    .sort((a, b) => compareTreeIssueIds(a, b, backlogDescendantIds));
+
+  while (queue.length > 0) {
+    const issueId = queue.shift()!;
+    result.push(issueId);
+
+    const blockedIssueIds = [...(outgoingByIssue.get(issueId) || [])].sort((a, b) =>
+      compareTreeIssueIds(a, b, backlogDescendantIds)
+    );
+    for (const blockedIssueId of blockedIssueIds) {
+      incomingCount.set(blockedIssueId, (incomingCount.get(blockedIssueId) || 0) - 1);
+      if (incomingCount.get(blockedIssueId) === 0) {
+        queue.push(blockedIssueId);
+        queue.sort((a, b) => compareTreeIssueIds(a, b, backlogDescendantIds));
+      }
+    }
+  }
+
+  const unresolvedIds = uniqueIds
+    .filter((issueId) => !result.includes(issueId))
+    .sort((a, b) => compareTreeIssueIds(a, b, backlogDescendantIds));
+
+  return [...result, ...unresolvedIds];
+}
+
+function uniqueIssueIds(ids: string[]): string[] {
+  return [...new Set(ids.map((id) => resolveIssueLocalId(id)))];
+}
+
+function getTreeRelationSections(
+  issueId: string,
+  backlogDescendantIds: Set<string>,
+  includeParent: boolean
+): TreeRelationSection[] {
+  const { outgoing, incoming } = getAllDependencies(issueId);
+  const parent = includeParent
+    ? uniqueIssueIds(
+        outgoing.filter((dep) => dep.type === "parent-child").map((dep) => dep.depends_on_id)
+      )
+    : [];
+  const children = sortIssueIdsForExecution(
+    incoming.filter((dep) => dep.type === "parent-child").map((dep) => dep.issue_id),
+    backlogDescendantIds
+  );
+  const blockedBy = sortIssueIdsForExecution(
+    incoming.filter((dep) => dep.type === "blocks").map((dep) => dep.issue_id),
+    backlogDescendantIds
+  );
+  const blocks = sortIssueIdsForExecution(
+    outgoing.filter((dep) => dep.type === "blocks").map((dep) => dep.depends_on_id),
+    backlogDescendantIds
+  );
+  const related = uniqueIssueIds(
+    [...outgoing, ...incoming]
+      .filter((dep) => dep.type === "related")
+      .map((dep) => getRelatedCounterpartId(dep, issueId))
+  ).sort((a, b) => compareTreeIssueIds(a, b, backlogDescendantIds));
+
+  return [
+    {
+      title: "Parent",
+      issueIds: parent,
+      recursive: false,
+    },
+    {
+      title: "Children (execution order)",
+      issueIds: children,
+      recursive: true,
+    },
+    {
+      title: "Blocked by",
+      issueIds: blockedBy,
+      recursive: true,
+    },
+    {
+      title: "Blocks",
+      issueIds: blocks,
+      recursive: true,
+    },
+    {
+      title: "Related",
+      issueIds: related,
+      recursive: false,
+    },
+  ].filter((section) => section.issueIds.length > 0);
+}
+
 /**
  * Print dependency tree recursively
  */
@@ -132,70 +334,58 @@ function printTree(
   visited: Set<string> = new Set()
 ): void {
   if (visited.has(issueId)) {
-    output(`${prefix}${isLast ? "└── " : "├── "}${issueId} (circular)`);
+    output(
+      formatTreeIssueLine(
+        issueId,
+        style,
+        blockedIds,
+        backlogDescendantIds,
+        prefix,
+        isLast,
+        " (circular)"
+      )
+    );
     return;
   }
   visited.add(issueId);
 
-  const issue = getCachedIssue(issueId);
-  const title = issue?.title || "Unknown";
-  const priority = issue?.priority ?? "?";
-  const status = issue?.status || "unknown";
+  output(formatTreeIssueLine(issueId, style, blockedIds, backlogDescendantIds, prefix, isLast));
 
-  // Check if this issue is ready (no open blockers)
-  const { incoming } = getAllDependencies(issueId);
-  const blockers = incoming.filter((d) => d.type === "blocks");
-  const openBlockers = blockers.filter((d) => {
-    const blockerIssue = getCachedIssue(d.issue_id);
-    return blockerIssue && !isTerminalStatus(blockerIssue.status);
-  });
-  const isReady =
-    openBlockers.length === 0 && isReadyStatus(status) && !backlogDescendantIds.has(issueId);
-  const readyTag = isReady ? " [READY]" : "";
+  const sections = getTreeRelationSections(issueId, backlogDescendantIds, prefix === "");
+  const sectionPrefix = treeChildPrefix(prefix, isLast);
 
-  if (style === "beads") {
-    const displayId = getDisplayId(issueId);
-    const connectorPrefix = prefix === "" ? "" : `${prefix}${isLast ? "└── " : "├── "}`;
+  sections.forEach((section, sectionIndex) => {
+    const isLastSection = sectionIndex === sections.length - 1;
     output(
-      formatIssueSummaryBeads(
-        {
-          id: issueId,
-          display_id: displayId,
-          title: `${title}${readyTag}`,
-          status: issue?.status || "open",
-          priority: typeof priority === "number" ? priority : 2,
-          is_blocked: blockedIds.has(issueId),
-          sync_status: issue?.sync_status,
-        },
-        connectorPrefix
-      )
+      `${treeConnector(sectionPrefix, isLastSection)}${section.title} (${section.issueIds.length})`
     );
-  } else {
-    if (prefix === "") {
-      // Root node
-      output(`${getDisplayId(issueId)}: ${title} [P${priority}] (${status})${readyTag}`);
-    } else {
-      output(
-        `${prefix}${isLast ? "└── " : "├── "}${getDisplayId(issueId)}: ${title} [P${priority}] (${status})${readyTag}`
-      );
-    }
-  }
+    const relationPrefix = treeChildPrefix(sectionPrefix, isLastSection);
 
-  // Get outgoing dependencies (things this issue depends on)
-  const deps = getDependencies(issueId);
-  const childPrefix = prefix + (isLast ? "    " : "│   ");
-
-  deps.forEach((dep, index) => {
-    const isLastDep = index === deps.length - 1;
-    printTree(
-      dep.depends_on_id,
-      style,
-      blockedIds,
-      backlogDescendantIds,
-      childPrefix,
-      isLastDep,
-      visited
-    );
+    section.issueIds.forEach((relatedIssueId, issueIndex) => {
+      const isLastIssue = issueIndex === section.issueIds.length - 1;
+      if (section.recursive) {
+        printTree(
+          relatedIssueId,
+          style,
+          blockedIds,
+          backlogDescendantIds,
+          relationPrefix,
+          isLastIssue,
+          new Set(visited)
+        );
+      } else {
+        output(
+          formatTreeIssueLine(
+            relatedIssueId,
+            style,
+            blockedIds,
+            backlogDescendantIds,
+            relationPrefix,
+            isLastIssue
+          )
+        );
+      }
+    });
   });
 }
 
