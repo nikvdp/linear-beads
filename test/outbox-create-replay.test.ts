@@ -47,6 +47,7 @@ async function runEval(
     | "missing_cached_issue_row"
     | "alias_merge_resolution"
     | "shared_parent_resolution"
+    | "bulk_fetch_canonicalizes_local_dependency_aliases"
     | "local_blocker_relation_replays_after_create_resolution"
     | "invalid_issue_refs_are_dropped_from_create_payloads"
     | "self_referential_pending_sync_state"
@@ -58,6 +59,7 @@ async function runEval(
       cacheIssue,
       generateLocalId,
       getDisplayId,
+      getInverseDependencies,
       getIssueIdMapping,
       getPendingOutboxItems,
       resolveIssueId,
@@ -67,6 +69,7 @@ async function runEval(
       setIssueIdMapping,
     } from ${JSON.stringify(DATABASE_UTILS_PATH)};
     import { processOutboxQueue } from ${JSON.stringify(OUTBOX_PROCESSOR_PATH)};
+    import { fetchIssues } from ${JSON.stringify(join(import.meta.dir, "..", "src", "utils", "linear.ts"))};
 
     const mode = process.argv[1];
     const localId = generateLocalId();
@@ -298,6 +301,95 @@ async function runEval(
           siblingLocalId,
           siblingDisplayId: getDisplayId(siblingLocalId),
           siblingRow,
+        })
+      );
+      process.exit(0);
+    } else if (mode === "bulk_fetch_canonicalizes_local_dependency_aliases") {
+      process.env.LINEAR_API_KEY = "test-linear-key";
+      const blockerLocalId = generateLocalId();
+      const blockedLocalId = generateLocalId();
+
+      cacheIssue({
+        id: blockerLocalId,
+        title: "Local blocker",
+        status: "open",
+        priority: 2,
+        sync_status: "pending",
+        created_at: now,
+        updated_at: now,
+      });
+      cacheIssue({
+        id: blockedLocalId,
+        title: "Local blocked",
+        status: "open",
+        priority: 2,
+        sync_status: "pending",
+        created_at: now,
+        updated_at: now,
+      });
+      cacheDependency({
+        issue_id: blockerLocalId,
+        depends_on_id: blockedLocalId,
+        type: "blocks",
+        created_at: now,
+        created_by: "local",
+      });
+      setIssueIdMapping(blockerLocalId, "LIN-9101");
+      setIssueIdMapping(blockedLocalId, "LIN-9102");
+
+      const linearIssue = (id, identifier, title) => ({
+        id,
+        identifier,
+        title,
+        description: "",
+        priority: 2,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: null,
+        canceledAt: null,
+        state: { id: "state-open", name: "Open", type: "unstarted" },
+        labels: { nodes: [] },
+        assignee: null,
+        creator: null,
+        parent: null,
+      });
+
+      globalThis.fetch = async (_url, init) => {
+        const body = JSON.parse(init.body);
+        if (!body.query.includes("query GetIssues")) {
+          throw new Error("Unexpected query: " + body.query);
+        }
+        return new Response(
+          JSON.stringify({
+            data: {
+              team: {
+                issues: {
+                  nodes: [
+                    linearIssue("uuid-blocker", "LIN-9101", "Remote blocker"),
+                    linearIssue("uuid-blocked", "LIN-9102", "Remote blocked"),
+                  ],
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      };
+
+      await fetchIssues("TEAM");
+
+      const db = new Database(".lb/cache.db", { readonly: true });
+      const depRows = db
+        .query("SELECT issue_id, depends_on_id, type FROM dependencies ORDER BY issue_id, depends_on_id")
+        .all() as Array<{ issue_id: string; depends_on_id: string; type: string }>;
+      db.close();
+
+      console.log(
+        JSON.stringify({
+          depRows,
+          blockedBy: getInverseDependencies("LIN-9102").map((dep) => dep.issue_id),
+          blockerDisplayId: getDisplayId(blockerLocalId),
+          blockedDisplayId: getDisplayId(blockedLocalId),
         })
       );
       process.exit(0);
@@ -891,6 +983,30 @@ describe("outbox create replay protection", () => {
     expect(payload.pass3.failed).toBe(0);
     expect(payload.pendingFinal).toHaveLength(0);
   }, 10000);
+
+  test("keeps local blocker rows visible after a bulk Linear fetch rebuilds issue rows", async () => {
+    const repoDir = createRepo();
+    const result = await runEval(repoDir, "bulk_fetch_canonicalizes_local_dependency_aliases");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      depRows: Array<{ issue_id: string; depends_on_id: string; type: string }>;
+      blockedBy: string[];
+      blockerDisplayId: string;
+      blockedDisplayId: string;
+    };
+
+    expect(payload.blockerDisplayId).toBe("LIN-9101");
+    expect(payload.blockedDisplayId).toBe("LIN-9102");
+    expect(payload.depRows).toContainEqual({
+      issue_id: "LIN-9101",
+      depends_on_id: "LIN-9102",
+      type: "blocks",
+    });
+    expect(payload.blockedBy).toEqual(["LIN-9101"]);
+  });
 
   test("defers queued LOCAL blocker relations until both create rows resolve", async () => {
     const repoDir = createRepo();
