@@ -1619,6 +1619,48 @@ describe("Local-only Mode", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(parent[0].id);
     });
+
+    test("dep tree surfaces parent children in executable blocker order", async () => {
+      const parent = await lbLocalJson<Array<{ id: string }>>("create", "Execution graph parent");
+      const firstChild = await lbLocalJson<Array<{ id: string }>>(
+        "create",
+        "First implementation child",
+        "--parent",
+        parent[0].id
+      );
+      const secondChild = await lbLocalJson<Array<{ id: string }>>(
+        "create",
+        "Second implementation child",
+        "--parent",
+        parent[0].id
+      );
+      const thirdChild = await lbLocalJson<Array<{ id: string }>>(
+        "create",
+        "Third implementation child",
+        "--parent",
+        parent[0].id
+      );
+
+      await lbLocal("dep", "add", firstChild[0].id, "--blocks", secondChild[0].id);
+      await lbLocal("dep", "add", secondChild[0].id, "--blocks", thirdChild[0].id);
+      await lbLocal("dep", "add", firstChild[0].id, "--related", thirdChild[0].id);
+
+      const result = await lbLocal("dep", "tree", parent[0].id);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Children (execution order) (3)");
+      expect(result.stdout).toContain(`${firstChild[0].id}: First implementation child [READY]`);
+      expect(result.stdout).toContain("Blocks (1)");
+      expect(result.stdout).toContain("Blocked by (1)");
+      expect(result.stdout).toContain("Related (1)");
+
+      const firstIndex = result.stdout.indexOf(firstChild[0].id);
+      const secondIndex = result.stdout.indexOf(secondChild[0].id);
+      const thirdIndex = result.stdout.indexOf(thirdChild[0].id);
+      expect(firstIndex).toBeGreaterThan(-1);
+      expect(secondIndex).toBeGreaterThan(firstIndex);
+      expect(thirdIndex).toBeGreaterThan(secondIndex);
+    });
   });
 
   describe("outbox locking", () => {
