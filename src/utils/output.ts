@@ -276,6 +276,13 @@ export function formatIssueSummaryBeads(issue: HumanOutputIssue, prefix: string 
   return formatIssueLineBeads(issue, prefix);
 }
 
+function formatReadyIssueLineBeads(issue: HumanOutputIssue, prefix: string = ""): string {
+  const parentSuffix = issue.parent_display_id
+    ? ` ${beadsDim(`(child of ${issue.parent_display_id})`)}`
+    : "";
+  return formatIssueLineBeads({ ...issue, title: `${issue.title}${parentSuffix}` }, prefix);
+}
+
 export function formatIssueRelationSectionBeads(
   title: string,
   issues: HumanOutputIssue[],
@@ -435,7 +442,7 @@ export function formatReadyHuman(issues: HumanOutputIssue[]): string {
   );
 
   issues.forEach((issue, index) => {
-    const parentInfo = issue.parent_display_id ? ` (↳ ${issue.parent_display_id})` : "";
+    const parentInfo = issue.parent_display_id ? ` (child of ${issue.parent_display_id})` : "";
     lines.push(
       `${index + 1}. [P${issue.priority}] ${issue.display_id}: ${issue.title}${parentInfo}`
     );
@@ -450,7 +457,8 @@ export function formatReadyHumanBeads(issues: HumanOutputIssue[]): string {
     return "No ready issues.";
   }
 
-  return `${buildBeadsTreeLines(issues).join("\n")}\n\n${formatBeadsFooter(issues, false)}`;
+  const lines = issues.map((issue) => formatReadyIssueLineBeads(issue));
+  return `${lines.join("\n")}\n\n${formatBeadsFooter(issues, false)}`;
 }
 
 /**
