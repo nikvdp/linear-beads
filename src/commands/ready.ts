@@ -5,6 +5,7 @@
 import { Command } from "commander";
 import { ensureFresh, ensureFreshBestEffort } from "../utils/sync.js";
 import {
+  getCachedIssue,
   getCachedIssues,
   getChildIds,
   getDependencies,
