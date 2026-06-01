@@ -144,7 +144,7 @@ describe("human output style modes", () => {
     const readyBeads = await runCli(repoDir, ["ready", "--all", "--style", "beads"]);
     expect(readyBeads.exitCode).toBe(0);
     expect(readyBeads.stdout).toContain(
-      `○ ${firstChild.id} ● P2 First executable child (child of ${parent.id})`
+      `○ ${firstChild.id} (↳ ${parent.id}) ● P2 First executable child`
     );
     expect(readyBeads.stdout).not.toContain(`○ ${parent.id} ● P2 Umbrella parent`);
     expect(readyBeads.stdout).not.toContain(`● ${secondChild.id} ● P2 Second executable child`);
