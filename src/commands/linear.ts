@@ -34,6 +34,12 @@ type PruneCandidate = Issue & {
   pre_archive_action?: "close";
 };
 
+type SkippedPruneIssue = {
+  id: string;
+  title: string;
+  reason: "already_archived";
+};
+
 type PruneSelectionOptions = {
   ageMs?: number;
   ageLabel?: string;
@@ -195,8 +201,9 @@ async function resolveRequestedIssueForPrune(rawId: string): Promise<Issue> {
 async function getRequestedPruneCandidates(
   ids: string[],
   options: PruneSelectionOptions = {}
-): Promise<PruneCandidate[]> {
+): Promise<{ candidates: PruneCandidate[]; skipped: SkippedPruneIssue[] }> {
   const candidates: PruneCandidate[] = [];
+  const skipped: SkippedPruneIssue[] = [];
   const seenIssueIds = new Set<string>();
 
   for (const rawId of ids) {
@@ -205,7 +212,12 @@ async function getRequestedPruneCandidates(
     const candidate = toPruneCandidate(issue, options, { allowActive: true });
     if (!candidate) {
       if (issue.remote_archived_at) {
-        throw new Error(`${getDisplayId(issue.id)} is already archived on Linear`);
+        skipped.push({
+          id: getDisplayId(issue.id),
+          title: issue.title,
+          reason: "already_archived",
+        });
+        continue;
       }
       if (!issue.linear_id || issue.sync_status !== "synced") {
         throw new Error(`${getDisplayId(issue.id)} is not synced to Linear yet`);
@@ -225,7 +237,10 @@ async function getRequestedPruneCandidates(
     candidates.push(candidate);
   }
 
-  return candidates.sort(comparePruneCandidates);
+  return {
+    candidates: candidates.sort(comparePruneCandidates),
+    skipped,
+  };
 }
 
 function formatCandidateJson(candidate: PruneCandidate): Record<string, unknown> {
@@ -238,6 +253,14 @@ function formatCandidateJson(candidate: PruneCandidate): Record<string, unknown>
     status: candidate.status,
     closed_at: candidate.closed_at || null,
     pre_archive_action: candidate.pre_archive_action || null,
+  };
+}
+
+function formatSkippedJson(skipped: SkippedPruneIssue): Record<string, unknown> {
+  return {
+    id: skipped.id,
+    title: skipped.title,
+    reason: skipped.reason,
   };
 }
 
@@ -346,13 +369,16 @@ export const linearCommand = new Command("linear")
 
           const selectionOptions: PruneSelectionOptions = ageFilter || {};
           const ownershipScope: TeamWideOwnershipScope = options.all ? "all_users" : "viewer";
+          const explicitSelection =
+            ids.length > 0 ? await getRequestedPruneCandidates(ids, selectionOptions) : null;
 
           const candidates =
             ids.length > 0
-              ? await getRequestedPruneCandidates(ids, selectionOptions)
+              ? explicitSelection?.candidates || []
               : options.mine || options.all
                 ? await getTeamWidePruneCandidates(limit, selectionOptions, ownershipScope)
                 : getAutomaticPruneCandidates(limit, selectionOptions);
+          const skipped = explicitSelection?.skipped || [];
 
           const previewOnly = options.dryRun || !options.yes;
           const { scanScope, ownershipScope: outputOwnershipScope } = getPruneScanScope(options);
@@ -368,6 +394,7 @@ export const linearCommand = new Command("linear")
                     dry_run: Boolean(options.dryRun),
                     age: ageFilter?.ageLabel || null,
                     candidates: [],
+                    skipped: skipped.map(formatSkippedJson),
                     count: 0,
                   },
                   null,
@@ -376,6 +403,11 @@ export const linearCommand = new Command("linear")
               );
             } else {
               output(getNoCandidatesMessage(options));
+              for (const skippedIssue of skipped) {
+                output(
+                  `Skipped ${skippedIssue.id}: already archived on Linear (${skippedIssue.title})`
+                );
+              }
             }
             return;
           }
@@ -393,6 +425,7 @@ export const linearCommand = new Command("linear")
                     age: ageFilter?.ageLabel || null,
                     count: candidates.length,
                     candidates: candidates.map(formatCandidateJson),
+                    skipped: skipped.map(formatSkippedJson),
                   },
                   null,
                   2
@@ -411,6 +444,9 @@ export const linearCommand = new Command("linear")
                 output(
                   `- ${getDisplayId(candidate.id)} [${candidate.status}] ${candidate.title}${action}`
                 );
+              }
+              for (const skippedIssue of skipped) {
+                output(`- ${skippedIssue.id} [skipped: already archived] ${skippedIssue.title}`);
               }
               output(
                 options.dryRun
@@ -463,6 +499,7 @@ export const linearCommand = new Command("linear")
                   scan_scope: scanScope,
                   ownership_scope: outputOwnershipScope,
                   archived: archived.map(formatCandidateJson),
+                  skipped: skipped.map(formatSkippedJson),
                   count: archived.length,
                   cleared_remote_pause: true,
                 },
@@ -474,6 +511,9 @@ export const linearCommand = new Command("linear")
             output(
               `Archived ${archived.length} Linear issue${archived.length === 1 ? "" : "s"} and kept the local cache intact.`
             );
+            for (const skippedIssue of skipped) {
+              output(`Skipped ${skippedIssue.id}: already archived on Linear`);
+            }
             output("Stored remote sync pause state was cleared. Run `lb sync` to retry.");
           }
         } catch (error) {
