@@ -461,11 +461,14 @@ describe("linear prune command", () => {
         const query = String(body.query || "");
 
         if (query.includes("query GetTeam")) {
+          if (body.variables?.key !== "LIN") {
+            throw new Error("expected inferred team key LIN, got " + JSON.stringify(body.variables));
+          }
           return new Response(
             JSON.stringify({
               data: {
                 teams: {
-                  nodes: [{ id: "team-prn", key: "PRN", name: "Prune Team" }],
+                  nodes: [{ id: "team-lin", key: "LIN", name: "Linear Team" }],
                 },
               },
             }),
@@ -844,7 +847,7 @@ describe("linear prune command", () => {
       repoDir,
       ["linear", "prune", "LIN-150", "--yes", "--json"],
       setupSource,
-      { LB_TEAM_KEY: "PRN", LINEAR_API_KEY: "linear-test-key" }
+      { LINEAR_API_KEY: "linear-test-key" }
     );
 
     expect(result.exitCode).toBe(0);
