@@ -42,6 +42,8 @@ type PruneSelectionOptions = {
 
 type TeamWideOwnershipScope = "viewer" | "all_users";
 
+const LINEAR_IDENTIFIER_RE = /^([A-Z][A-Z0-9]{1,14})-\d+$/;
+
 function parsePositiveLimit(value: unknown): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -239,6 +241,27 @@ function formatCandidateJson(candidate: PruneCandidate): Record<string, unknown>
   };
 }
 
+function inferTeamKeyFromCandidate(candidate: PruneCandidate): string | undefined {
+  const identifiers = [candidate.linear_identifier, getDisplayId(candidate.id), candidate.id];
+
+  for (const identifier of identifiers) {
+    if (!identifier) {
+      continue;
+    }
+
+    const match = identifier.match(LINEAR_IDENTIFIER_RE);
+    if (match) {
+      return match[1];
+    }
+  }
+
+  return undefined;
+}
+
+async function getCloseTeamIdForCandidate(candidate: PruneCandidate): Promise<string> {
+  return await getTeamId(inferTeamKeyFromCandidate(candidate));
+}
+
 function markArchivedCandidateLocally(candidate: PruneCandidate, archivedAt: string): void {
   const cached = getCachedIssue(candidate.id);
   if (!cached?.local_id) {
@@ -406,16 +429,13 @@ export const linearCommand = new Command("linear")
 
           const archivedAt = new Date().toISOString();
           const archived: PruneCandidate[] = [];
-          const closeTeamId = candidates.some((candidate) => candidate.pre_archive_action)
-            ? await getTeamId()
-            : null;
 
           for (const candidate of candidates) {
             let archivedCandidate = candidate;
             if (candidate.pre_archive_action === "close") {
               const closedIssue = await closeIssue(
                 candidate.linear_id,
-                closeTeamId as string,
+                await getCloseTeamIdForCandidate(candidate),
                 "Pruned by lb linear prune before archiving."
               );
               archivedCandidate = {
