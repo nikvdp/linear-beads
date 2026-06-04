@@ -34,6 +34,7 @@ import {
   updateLastSync,
   updateLastFullSync,
   pruneStaleIssues,
+  canonicalizeDependencyAliases,
   cacheViewer,
   cacheMediaItem,
   getCachedViewer,
@@ -2309,6 +2310,7 @@ export async function fetchIssues(teamId: string): Promise<Issue[]> {
   // Note: We don't fetch relations on bulk sync (too slow - O(n) network calls).
   // Relations are fetched on-demand via `lb show <id> --sync`.
   // This means `lb ready` may show blocked issues until their blockers are synced individually.
+  canonicalizeDependencyAliases();
 
   updateLastSync();
   return issues;
@@ -2420,6 +2422,7 @@ export async function fetchAllIssuesPaginated(
 
   // Prune stale issues that are no longer in remote
   const pruned = pruneStaleIssues(allIssueIds);
+  canonicalizeDependencyAliases();
 
   updateLastSync();
   updateLastFullSync();
@@ -2564,6 +2567,7 @@ export async function fetchUpdatedIssues(
       });
     }
   }
+  canonicalizeDependencyAliases();
 
   return {
     issues,

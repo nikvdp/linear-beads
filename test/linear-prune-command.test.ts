@@ -307,6 +307,135 @@ describe("linear prune command", () => {
     expect(archivedRow?.remote_archived_at).toBeNull();
   });
 
+  test("previews close-before-archive for active explicit issues", async () => {
+    const { repoDir, dbPath } = createRepo();
+    const setupSource = `
+      import { cacheIssue } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+
+      const now = new Date().toISOString();
+      cacheIssue({
+        id: "LIN-121",
+        local_id: "LOCAL-121",
+        linear_id: "issue-121",
+        linear_identifier: "LIN-121",
+        title: "Active explicit issue",
+        status: "open",
+        priority: 2,
+        sync_status: "synced",
+        created_at: now,
+        updated_at: now,
+      });
+
+      globalThis.fetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body || "{}"));
+        throw new Error("preview should not call Linear: " + JSON.stringify(body));
+      };
+    `;
+
+    const result = await runInlineCli(
+      repoDir,
+      ["linear", "prune", "LIN-121", "--dry-run", "--json"],
+      setupSource,
+      { LINEAR_API_KEY: "linear-test-key" }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      preview: boolean;
+      count: number;
+      candidates: Array<{ id: string; status: string; pre_archive_action: string | null }>;
+    };
+
+    expect(payload.preview).toBe(true);
+    expect(payload.count).toBe(1);
+    expect(payload.candidates[0]).toMatchObject({
+      id: "LIN-121",
+      status: "open",
+      pre_archive_action: "close",
+    });
+
+    const archivedRow = readArchivedRow(dbPath, "LOCAL-121");
+    expect(archivedRow?.remote_archived_at).toBeNull();
+  });
+
+  test("fetches uncached explicit issues before previewing prune", async () => {
+    const { repoDir, dbPath } = createRepo();
+    const setupSource = `
+      const now = new Date().toISOString();
+
+      globalThis.fetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body || "{}"));
+        const query = String(body.query || "");
+
+        if (query.includes("query GetIssue")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                issue: {
+                  id: "issue-122",
+                  identifier: "LIN-122",
+                  title: "Uncached explicit issue",
+                  description: null,
+                  priority: 2,
+                  createdAt: now,
+                  updatedAt: now,
+                  completedAt: now,
+                  canceledAt: null,
+                  state: { id: "state-done", name: "Done", type: "completed" },
+                  labels: { nodes: [] },
+                  assignee: null,
+                  creator: { id: "user-me", email: "me@example.com", name: "Me" },
+                  parent: null,
+                  children: { nodes: [] },
+                  relations: { nodes: [] },
+                  inverseRelations: { nodes: [] },
+                  attachments: { nodes: [] },
+                },
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+
+        if (query.includes("issueArchive")) {
+          throw new Error("preview should not call issueArchive");
+        }
+
+        throw new Error("Unexpected GraphQL request: " + JSON.stringify(body));
+      };
+    `;
+
+    const result = await runInlineCli(
+      repoDir,
+      ["linear", "prune", "LIN-122", "--json"],
+      setupSource,
+      { LINEAR_API_KEY: "linear-test-key" }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      preview: boolean;
+      count: number;
+      candidates: Array<{ id: string; title: string; pre_archive_action: string | null }>;
+    };
+
+    expect(payload.preview).toBe(true);
+    expect(payload.count).toBe(1);
+    expect(payload.candidates[0]).toMatchObject({
+      id: "LIN-122",
+      title: "Uncached explicit issue",
+      pre_archive_action: null,
+    });
+
+    const cachedRow = readArchivedRow(dbPath, "LIN-122");
+    expect(cachedRow?.title).toBe("Uncached explicit issue");
+    expect(cachedRow?.remote_archived_at).toBeNull();
+  });
+
   test("can opt into scanning the current Linear team by issue creator with --mine or --all", async () => {
     const { repoDir } = createRepo();
     const setupSource = `
@@ -332,11 +461,14 @@ describe("linear prune command", () => {
         const query = String(body.query || "");
 
         if (query.includes("query GetTeam")) {
+          if (body.variables?.key !== "LIN") {
+            throw new Error("expected inferred team key LIN, got " + JSON.stringify(body.variables));
+          }
           return new Response(
             JSON.stringify({
               data: {
                 teams: {
-                  nodes: [{ id: "team-prn", key: "PRN", name: "Prune Team" }],
+                  nodes: [{ id: "team-lin", key: "LIN", name: "Linear Team" }],
                 },
               },
             }),
@@ -413,6 +545,22 @@ describe("linear prune command", () => {
                         labels: { nodes: [] },
                         assignee: { id: "assignee-me", email: "me@example.com", name: "Me" },
                         creator: { id: "user-other", email: "other@example.com", name: "Other" },
+                        parent: null,
+                      },
+                      {
+                        id: "issue-143",
+                        identifier: "LIN-143",
+                        title: "Active team issue",
+                        description: null,
+                        priority: 2,
+                        createdAt: now,
+                        updatedAt: now,
+                        completedAt: null,
+                        canceledAt: null,
+                        state: { id: "state-open", name: "Todo", type: "unstarted" },
+                        labels: { nodes: [] },
+                        assignee: { id: "assignee-me", email: "me@example.com", name: "Me" },
+                        creator: { id: "user-me", email: "me@example.com", name: "Me" },
                         parent: null,
                       },
                     ],
@@ -583,6 +731,144 @@ describe("linear prune command", () => {
 
     const archivedRow = readArchivedRow(dbPath, "LOCAL-130");
     expect(archivedRow?.remote_archived_at).toBeNull();
+  });
+
+  test("closes an active explicit issue before archiving with yes", async () => {
+    const { repoDir, dbPath } = createRepo();
+    const setupSource = `
+      import { cacheIssue } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+
+      const now = new Date().toISOString();
+      let closedBeforeArchive = false;
+
+      cacheIssue({
+        id: "LIN-150",
+        local_id: "LOCAL-150",
+        linear_id: "issue-150",
+        linear_identifier: "LIN-150",
+        title: "Close then archive",
+        status: "open",
+        priority: 2,
+        sync_status: "synced",
+        created_at: now,
+        updated_at: now,
+      });
+
+      globalThis.fetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body || "{}"));
+        const query = String(body.query || "");
+
+        if (query.includes("query GetTeam")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                teams: {
+                  nodes: [{ id: "team-prn", key: "PRN", name: "Prune Team" }],
+                },
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+
+        if (query.includes("query GetWorkflowStates")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                team: {
+                  states: {
+                    nodes: [{ id: "state-closed", name: "Done", type: "completed" }],
+                  },
+                },
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+
+        if (query.includes("mutation UpdateIssue")) {
+          closedBeforeArchive = true;
+          return new Response(
+            JSON.stringify({
+              data: {
+                issueUpdate: {
+                  success: true,
+                  issue: {
+                    id: "issue-150",
+                    identifier: "LIN-150",
+                    title: "Close then archive",
+                    description: null,
+                    priority: 2,
+                    createdAt: now,
+                    updatedAt: now,
+                    completedAt: now,
+                    canceledAt: null,
+                    state: { id: "state-closed", name: "Done", type: "completed" },
+                    labels: { nodes: [] },
+                    assignee: null,
+                    creator: { id: "user-me", email: "me@example.com", name: "Me" },
+                    parent: null,
+                  },
+                },
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+
+        if (query.includes("mutation CreateComment")) {
+          return new Response(
+            JSON.stringify({ data: { commentCreate: { success: true } } }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+
+        if (query.includes("issueArchive")) {
+          if (!closedBeforeArchive) {
+            throw new Error("issueArchive called before issueUpdate");
+          }
+          return new Response(
+            JSON.stringify({
+              data: {
+                issueArchive: {
+                  success: true,
+                },
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+
+        throw new Error("Unexpected GraphQL request: " + JSON.stringify(body));
+      };
+    `;
+
+    const result = await runInlineCli(
+      repoDir,
+      ["linear", "prune", "LIN-150", "--yes", "--json"],
+      setupSource,
+      { LINEAR_API_KEY: "linear-test-key" }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      preview: boolean;
+      count: number;
+      archived: Array<{ id: string; status: string; pre_archive_action: string | null }>;
+    };
+
+    expect(payload.preview).toBe(false);
+    expect(payload.count).toBe(1);
+    expect(payload.archived[0]).toMatchObject({
+      id: "LIN-150",
+      status: "closed",
+      pre_archive_action: "close",
+    });
+
+    const archivedRow = readArchivedRow(dbPath, "LOCAL-150");
+    expect(archivedRow?.remote_archived_at).toBeTruthy();
   });
 
   test("archives the selected issue remotely and preserves it across stale pruning", async () => {

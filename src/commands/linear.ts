@@ -3,7 +3,14 @@
  */
 
 import { Command } from "commander";
-import { archiveIssue, fetchAllTeamIssuesForPrune, getTeamId, getViewer } from "../utils/linear.js";
+import {
+  archiveIssue,
+  closeIssue,
+  fetchAllTeamIssuesForPrune,
+  fetchIssue,
+  getTeamId,
+  getViewer,
+} from "../utils/linear.js";
 import {
   cacheIssue,
   getCachedIssue,
@@ -24,6 +31,7 @@ import {
 type PruneCandidate = Issue & {
   local_id?: string;
   linear_id: string;
+  pre_archive_action?: "close";
 };
 
 type PruneSelectionOptions = {
@@ -33,6 +41,8 @@ type PruneSelectionOptions = {
 };
 
 type TeamWideOwnershipScope = "viewer" | "all_users";
+
+const LINEAR_IDENTIFIER_RE = /^([A-Z][A-Z0-9]{1,14})-\d+$/;
 
 function parsePositiveLimit(value: unknown): number | undefined {
   if (value === undefined) {
@@ -106,7 +116,8 @@ function isOldEnoughForPrune(issue: Issue, options: PruneSelectionOptions = {}):
 
 function toPruneCandidate(
   issue: Issue,
-  options: PruneSelectionOptions = {}
+  options: PruneSelectionOptions = {},
+  behavior: { allowActive?: boolean } = {}
 ): PruneCandidate | null {
   if (!issue.linear_id) {
     return null;
@@ -114,7 +125,7 @@ function toPruneCandidate(
   if ((issue.sync_status || "synced") !== "synced") {
     return null;
   }
-  if (!isTerminalStatus(issue.status)) {
+  if (!isTerminalStatus(issue.status) && !behavior.allowActive) {
     return null;
   }
   if (issue.remote_archived_at) {
@@ -128,6 +139,7 @@ function toPruneCandidate(
     ...issue,
     local_id: issue.local_id,
     linear_id: issue.linear_id,
+    pre_archive_action: isTerminalStatus(issue.status) ? undefined : "close",
   };
 }
 
@@ -165,21 +177,32 @@ async function getTeamWidePruneCandidates(
   return limit ? candidates.slice(0, limit) : candidates;
 }
 
-function getRequestedPruneCandidates(
+async function resolveRequestedIssueForPrune(rawId: string): Promise<Issue> {
+  const resolvedId = resolveIssueId(rawId);
+  const cachedIssue = getCachedIssue(resolvedId);
+  if (cachedIssue) {
+    return cachedIssue;
+  }
+
+  const remoteIssue = await fetchIssue(resolvedId);
+  if (!remoteIssue) {
+    throw new Error(`Issue not found: ${rawId}`);
+  }
+
+  return getCachedIssue(remoteIssue.id) || remoteIssue;
+}
+
+async function getRequestedPruneCandidates(
   ids: string[],
   options: PruneSelectionOptions = {}
-): PruneCandidate[] {
+): Promise<PruneCandidate[]> {
   const candidates: PruneCandidate[] = [];
   const seenIssueIds = new Set<string>();
 
   for (const rawId of ids) {
-    const resolvedId = resolveIssueId(rawId);
-    const issue = getCachedIssue(resolvedId);
-    if (!issue) {
-      throw new Error(`Issue not found: ${rawId}`);
-    }
+    const issue = await resolveRequestedIssueForPrune(rawId);
 
-    const candidate = toPruneCandidate(issue, options);
+    const candidate = toPruneCandidate(issue, options, { allowActive: true });
     if (!candidate) {
       if (issue.remote_archived_at) {
         throw new Error(`${getDisplayId(issue.id)} is already archived on Linear`);
@@ -192,9 +215,7 @@ function getRequestedPruneCandidates(
           `${getDisplayId(issue.id)} is newer than --age ${options.ageLabel || "the requested threshold"}`
         );
       }
-      throw new Error(
-        `${getDisplayId(issue.id)} is not closed or cancelled, so it is not eligible for prune`
-      );
+      throw new Error(`${getDisplayId(issue.id)} is not eligible for prune`);
     }
 
     if (seenIssueIds.has(candidate.id)) {
@@ -216,7 +237,29 @@ function formatCandidateJson(candidate: PruneCandidate): Record<string, unknown>
     title: candidate.title,
     status: candidate.status,
     closed_at: candidate.closed_at || null,
+    pre_archive_action: candidate.pre_archive_action || null,
   };
+}
+
+function inferTeamKeyFromCandidate(candidate: PruneCandidate): string | undefined {
+  const identifiers = [candidate.linear_identifier, getDisplayId(candidate.id), candidate.id];
+
+  for (const identifier of identifiers) {
+    if (!identifier) {
+      continue;
+    }
+
+    const match = identifier.match(LINEAR_IDENTIFIER_RE);
+    if (match) {
+      return match[1];
+    }
+  }
+
+  return undefined;
+}
+
+async function getCloseTeamIdForCandidate(candidate: PruneCandidate): Promise<string> {
+  return await getTeamId(inferTeamKeyFromCandidate(candidate));
 }
 
 function markArchivedCandidateLocally(candidate: PruneCandidate, archivedAt: string): void {
@@ -306,7 +349,7 @@ export const linearCommand = new Command("linear")
 
           const candidates =
             ids.length > 0
-              ? getRequestedPruneCandidates(ids, selectionOptions)
+              ? await getRequestedPruneCandidates(ids, selectionOptions)
               : options.mine || options.all
                 ? await getTeamWidePruneCandidates(limit, selectionOptions, ownershipScope)
                 : getAutomaticPruneCandidates(limit, selectionOptions);
@@ -362,7 +405,12 @@ export const linearCommand = new Command("linear")
                 }${getTeamScopeDescription(options)} and keep all local data${ageFilter ? ` (age >= ${ageFilter.ageLabel})` : ""}:`
               );
               for (const candidate of candidates) {
-                output(`- ${getDisplayId(candidate.id)} [${candidate.status}] ${candidate.title}`);
+                const action = candidate.pre_archive_action
+                  ? ` (will ${candidate.pre_archive_action} before archive)`
+                  : "";
+                output(
+                  `- ${getDisplayId(candidate.id)} [${candidate.status}] ${candidate.title}${action}`
+                );
               }
               output(
                 options.dryRun
@@ -383,9 +431,26 @@ export const linearCommand = new Command("linear")
           const archived: PruneCandidate[] = [];
 
           for (const candidate of candidates) {
+            let archivedCandidate = candidate;
+            if (candidate.pre_archive_action === "close") {
+              const closedIssue = await closeIssue(
+                candidate.linear_id,
+                await getCloseTeamIdForCandidate(candidate),
+                "Pruned by lb linear prune before archiving."
+              );
+              archivedCandidate = {
+                ...candidate,
+                ...closedIssue,
+                local_id: candidate.local_id || closedIssue.local_id,
+                linear_id: candidate.linear_id,
+                linear_identifier: candidate.linear_identifier || closedIssue.linear_identifier,
+                status: "closed",
+                pre_archive_action: candidate.pre_archive_action,
+              };
+            }
             await archiveIssue(candidate.linear_id);
-            markArchivedCandidateLocally(candidate, archivedAt);
-            archived.push(candidate);
+            markArchivedCandidateLocally(archivedCandidate, archivedAt);
+            archived.push(archivedCandidate);
           }
 
           clearRemoteSyncPause();

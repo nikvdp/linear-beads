@@ -120,6 +120,36 @@ describe("human output style modes", () => {
     expect(ready.stdout).toContain("Total: 1 issues (1 open)");
   });
 
+  test("ready prefers executable children over open parent umbrellas", async () => {
+    const repoDir = createLocalRepo();
+    const parent = await createIssue(repoDir, "Umbrella parent");
+    const firstChild = await createIssue(repoDir, "First executable child", [
+      "--parent",
+      parent.id,
+    ]);
+    const secondChild = await createIssue(repoDir, "Second executable child", [
+      "--parent",
+      parent.id,
+      "--blocked-by",
+      firstChild.id,
+    ]);
+
+    const readyJson = await runCli(repoDir, ["ready", "--all", "--json"]);
+    expect(readyJson.exitCode).toBe(0);
+    const readyIssues = JSON.parse(readyJson.stdout) as Array<{ id: string }>;
+    expect(readyIssues.map((issue) => issue.id)).toContain(firstChild.id);
+    expect(readyIssues.map((issue) => issue.id)).not.toContain(parent.id);
+    expect(readyIssues.map((issue) => issue.id)).not.toContain(secondChild.id);
+
+    const readyBeads = await runCli(repoDir, ["ready", "--all", "--style", "beads"]);
+    expect(readyBeads.exitCode).toBe(0);
+    expect(readyBeads.stdout).toContain(
+      `○ ${firstChild.id} (↳ ${parent.id}) ● P2 First executable child`
+    );
+    expect(readyBeads.stdout).not.toContain(`○ ${parent.id} ● P2 Umbrella parent`);
+    expect(readyBeads.stdout).not.toContain(`● ${secondChild.id} ● P2 Second executable child`);
+  });
+
   test("lb style persists the repo default and command flags still override it", async () => {
     const repoDir = createLocalRepo();
     const issue = await createIssue(repoDir, "Styled issue");

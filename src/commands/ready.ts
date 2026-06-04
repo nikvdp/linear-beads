@@ -5,14 +5,16 @@
 import { Command } from "commander";
 import { ensureFresh, ensureFreshBestEffort } from "../utils/sync.js";
 import {
+  getCachedIssue,
   getCachedIssues,
+  getChildIds,
   getDependencies,
   getBacklogDescendantIssueIds,
   getBlockedIssueIds,
   getCacheInfo,
   getDisplayId,
 } from "../utils/database.js";
-import { isReadyStatus } from "../types.js";
+import { isReadyStatus, isTerminalStatus } from "../types.js";
 import {
   formatReadyHuman,
   formatReadyHumanBeads,
@@ -46,6 +48,13 @@ function parseLimitOption(value: unknown): number | undefined {
     process.exit(1);
   }
   return parsed;
+}
+
+function hasOpenChildWork(issueId: string): boolean {
+  return getChildIds(issueId).some((childId) => {
+    const child = getCachedIssue(childId);
+    return child && !isTerminalStatus(child.status);
+  });
 }
 
 export const readyCommand = new Command("ready")
@@ -108,7 +117,11 @@ export const readyCommand = new Command("ready")
       }
 
       let readyIssues = scopedIssues.filter(
-        (i) => isReadyStatus(i.status) && !blockedIds.has(i.id) && !backlogDescendantIds.has(i.id)
+        (i) =>
+          isReadyStatus(i.status) &&
+          !blockedIds.has(i.id) &&
+          !backlogDescendantIds.has(i.id) &&
+          !hasOpenChildWork(i.id)
       );
 
       // Sort by priority, then updated_at
@@ -138,7 +151,10 @@ export const readyCommand = new Command("ready")
           style === "beads"
             ? [
                 ...scopedIssues.filter(
-                  (issue) => issue.status === "in_progress" && !backlogDescendantIds.has(issue.id)
+                  (issue) =>
+                    issue.status === "in_progress" &&
+                    !backlogDescendantIds.has(issue.id) &&
+                    !hasOpenChildWork(issue.id)
                 ),
                 ...readyIssues,
               ]
