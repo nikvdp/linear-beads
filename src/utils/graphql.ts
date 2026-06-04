@@ -751,12 +751,68 @@ export const ISSUE_FRAGMENT = `
   }
 `;
 
+export const ISSUE_CHILD_FRAGMENT = `
+  id
+  identifier
+  title
+  description
+  priority
+  createdAt
+  updatedAt
+  completedAt
+  canceledAt
+  state {
+    id
+    name
+    type
+  }
+  labels {
+    nodes {
+      id
+      name
+    }
+  }
+  assignee {
+    id
+    email
+    name
+  }
+  creator {
+    id
+    email
+    name
+  }
+  parent {
+    id
+    identifier
+  }
+  relations {
+    nodes {
+      id
+      type
+      relatedIssue {
+        id
+        identifier
+      }
+    }
+  }
+  inverseRelations {
+    nodes {
+      id
+      type
+      issue {
+        id
+        identifier
+      }
+    }
+  }
+`;
+
 export const ISSUE_WITH_RELATIONS_FRAGMENT = `
   ${ISSUE_FRAGMENT}
   children {
     nodes {
-      id
-      identifier
+      ${ISSUE_CHILD_FRAGMENT}
     }
   }
   relations {

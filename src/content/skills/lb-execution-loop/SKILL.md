@@ -49,7 +49,8 @@ Use blockers to encode the intended execution plan.
 - If child B depends on child A landing first, add the blocker edge.
 - If a downstream agent should wait, express that in `lb`, not only in the description.
 - If work is parallelizable, leave the siblings unblocked.
-- Use `lb dep tree <id>` to verify the graph matches the intended order.
+- Use `lb dep tree <id>` to verify the graph matches the intended order. For parent
+  issues, check the `Children (execution order)` section before claiming work.
 
 The rule is simple: `lb ready` should expose the next sensible execution step without requiring another agent to read your mind.
 

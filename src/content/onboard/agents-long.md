@@ -44,7 +44,7 @@ lb create "Related work" --related LIN-200
 # Manage deps after creation
 lb dep add LIN-A --blocks LIN-B
 lb dep remove LIN-A LIN-B
-lb dep tree LIN-A          # Visualize dependency tree
+lb dep tree LIN-A          # Visualize children and blocker order
 ```
 
 **Dependency types:**
@@ -140,6 +140,7 @@ Use blockers to encode execution order:
 - if one child must land before another, express that with `--blocked-by` or `--blocks`
 - if work can proceed in parallel, leave the sibling issues unblocked
 - another agent should be able to run `lb ready` and see the intended next step
+- run `lb dep tree <parent>` and check `Children (execution order)` before claiming child work
 
 Write implementation tickets so another agent can execute them without re-planning the whole change. Good tickets should include:
 - why the work exists and the exact behavior change
@@ -202,7 +203,7 @@ Precedence: CLI temp flags > env temp vars > config > git heuristic.
 | `lb update ID --status in_progress` | Claim work |
 | `lb close ID --reason "why"` | Complete work |
 | `lb dep add ID --blocks OTHER` | Add blocking dependency |
-| `lb dep tree ID` | Show dependency tree |
+| `lb dep tree ID` | Show children and blocker order |
 
 ### Rules
 

@@ -21,7 +21,8 @@ Use `lb` as the source of truth for task tracking in this repo.
 - Create dependent work with `--blocks` and `--blocked-by`.
 - Create subissues with `--parent`.
 - Link discovered work with `--discovered-from`.
-- Use `lb dep tree <id>` to verify order.
+- Use `lb dep tree <id>` to verify order. On parent issues, check the
+  `Children (execution order)` section.
 
 ## Multiline descriptions
 

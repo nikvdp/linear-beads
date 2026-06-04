@@ -20,7 +20,7 @@ lb create "Step 1: ..." --parent LIN-XXX
 lb create "Step 2: ..." --parent LIN-XXX --blocked-by LIN-YYY
 ```
 
-Prefer one parent issue for the overall goal and child issues for independently executable implementation units. Use blockers to encode order so another agent can run `lb ready` and see the intended next step.
+Prefer one parent issue for the overall goal and child issues for independently executable implementation units. Use blockers to encode order so another agent can run `lb ready` and see the intended next step. Run `lb dep tree <parent>` and check `Children (execution order)` before claiming child work.
 
 Write implementation tickets with enough detail for handoff:
 - exact behavior change and non-goals
@@ -34,7 +34,7 @@ Write implementation tickets with enough detail for handoff:
 lb create "Must do first" --blocks LIN-123
 lb create "Depends on auth" --blocked-by LIN-100
 lb create "Found: X" --discovered-from LIN-50 -d "Details..."
-lb dep tree LIN-XXX
+lb dep tree LIN-XXX  # Shows children and blocker order
 ```
 
 ### Multiline Descriptions

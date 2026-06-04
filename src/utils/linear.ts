@@ -22,6 +22,7 @@ import {
   cacheIssue,
   cacheIssues,
   cacheDependency,
+  clearChildDependenciesForParent,
   clearIssueDependencies,
   clearIssuesCache,
   deleteDependencyByType,
@@ -2730,6 +2731,7 @@ export async function fetchIssue(issueId: string): Promise<Issue | null> {
 
     // Clear old deps before caching fresh ones (prevents stale data)
     clearIssueDependencies(result.issue.identifier);
+    clearChildDependenciesForParent(result.issue.identifier);
 
     // Cache parent-child relation
     if (result.issue.parent) {
@@ -2740,6 +2742,44 @@ export async function fetchIssue(issueId: string): Promise<Issue | null> {
         created_at: result.issue.createdAt,
         created_by: "sync",
       });
+    }
+
+    if (result.issue.children?.nodes?.length) {
+      cacheIssues(result.issue.children.nodes.map(linearToBdIssue));
+      for (const child of result.issue.children.nodes) {
+        clearIssueDependencies(child.identifier);
+        cacheDependency({
+          issue_id: child.identifier,
+          depends_on_id: result.issue.identifier,
+          type: "parent-child",
+          created_at: child.createdAt,
+          created_by: "sync",
+        });
+
+        if (child.relations?.nodes) {
+          for (const rel of child.relations.nodes) {
+            cacheDependency({
+              issue_id: child.identifier,
+              depends_on_id: rel.relatedIssue.identifier,
+              type: rel.type === "blocks" ? "blocks" : "related",
+              created_at: child.createdAt,
+              created_by: "sync",
+            });
+          }
+        }
+
+        if (child.inverseRelations?.nodes) {
+          for (const rel of child.inverseRelations.nodes) {
+            cacheDependency({
+              issue_id: rel.issue.identifier,
+              depends_on_id: child.identifier,
+              type: rel.type === "blocks" ? "blocks" : "related",
+              created_at: child.createdAt,
+              created_by: "sync",
+            });
+          }
+        }
+      }
     }
 
     // Cache other relations (outgoing: this issue blocks/relates to others)
