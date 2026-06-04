@@ -3585,7 +3585,7 @@ export async function deleteIssue(issueId: string): Promise<void> {
  */
 export async function archiveIssue(issueId: string): Promise<void> {
   const client = getGraphQLClient();
-  const issueUuid = (await resolveIssueId(issueId)) || issueId;
+  const issueUuid = isUuid(issueId) ? issueId : (await resolveIssueId(issueId)) || issueId;
 
   const mutation = `
     mutation ArchiveIssue($id: String!) {

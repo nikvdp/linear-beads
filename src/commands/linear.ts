@@ -18,7 +18,7 @@ import {
   getDisplayId,
   resolveIssueId,
 } from "../utils/database.js";
-import { output, outputError } from "../utils/output.js";
+import { output, outputError, outputProgress } from "../utils/output.js";
 import { isLocalOnly } from "../utils/config.js";
 import { isTerminalStatus, type Issue } from "../types.js";
 import {
@@ -331,6 +331,10 @@ function getTeamScopeDescription(options: { mine?: boolean; all?: boolean }): st
   return " from the current Linear team created by you";
 }
 
+function formatProgressCandidate(candidate: PruneCandidate): string {
+  return `${getDisplayId(candidate.id)} (${candidate.title})`;
+}
+
 export const linearCommand = new Command("linear")
   .description("Linear-specific maintenance commands")
   .addCommand(
@@ -466,9 +470,19 @@ export const linearCommand = new Command("linear")
           const archivedAt = new Date().toISOString();
           const archived: PruneCandidate[] = [];
 
-          for (const candidate of candidates) {
+          outputProgress(
+            `Preparing to archive ${candidates.length} Linear issue${candidates.length === 1 ? "" : "s"}${skipped.length > 0 ? `; ${skipped.length} already archived` : ""}.`
+          );
+          for (const skippedIssue of skipped) {
+            outputProgress(`Skipping ${skippedIssue.id}: already archived on Linear.`);
+          }
+
+          for (const [index, candidate] of candidates.entries()) {
             let archivedCandidate = candidate;
+            const label = formatProgressCandidate(candidate);
+            const position = `${index + 1}/${candidates.length}`;
             if (candidate.pre_archive_action === "close") {
+              outputProgress(`${position} Closing ${label} before archive...`);
               const closedIssue = await closeIssue(
                 candidate.linear_id,
                 await getCloseTeamIdForCandidate(candidate),
@@ -484,9 +498,11 @@ export const linearCommand = new Command("linear")
                 pre_archive_action: candidate.pre_archive_action,
               };
             }
+            outputProgress(`${position} Archiving ${label}...`);
             await archiveIssue(candidate.linear_id);
             markArchivedCandidateLocally(archivedCandidate, archivedAt);
             archived.push(archivedCandidate);
+            outputProgress(`${position} Archived ${label}.`);
           }
 
           clearRemoteSyncPause();

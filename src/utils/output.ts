@@ -470,6 +470,13 @@ export function output(data: string): void {
 }
 
 /**
+ * Output progress/status without interfering with JSON stdout.
+ */
+export function outputProgress(message: string): void {
+  console.error(message);
+}
+
+/**
  * Output error
  */
 export function outputError(message: string): void {
