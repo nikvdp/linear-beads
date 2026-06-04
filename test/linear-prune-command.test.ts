@@ -461,14 +461,11 @@ describe("linear prune command", () => {
         const query = String(body.query || "");
 
         if (query.includes("query GetTeam")) {
-          if (body.variables?.key !== "LIN") {
-            throw new Error("expected inferred team key LIN, got " + JSON.stringify(body.variables));
-          }
           return new Response(
             JSON.stringify({
               data: {
                 teams: {
-                  nodes: [{ id: "team-lin", key: "LIN", name: "Linear Team" }],
+                  nodes: [{ id: "team-prn", key: "PRN", name: "Prune Team" }],
                 },
               },
             }),
@@ -639,6 +636,90 @@ describe("linear prune command", () => {
     ]);
   });
 
+  test("skips already archived explicit issues without stopping the batch", async () => {
+    const { repoDir, dbPath } = createRepo();
+    const setupSource = `
+      import { cacheIssue } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+
+      const now = new Date().toISOString();
+      cacheIssue({
+        id: "LIN-160",
+        local_id: "LOCAL-160",
+        linear_id: "issue-160",
+        linear_identifier: "LIN-160",
+        title: "Already archived explicit",
+        status: "closed",
+        priority: 2,
+        sync_status: "synced",
+        created_at: now,
+        updated_at: now,
+        closed_at: now,
+        remote_archived_at: now,
+      });
+      cacheIssue({
+        id: "LIN-161",
+        local_id: "LOCAL-161",
+        linear_id: "issue-161",
+        linear_identifier: "LIN-161",
+        title: "Still needs archive",
+        status: "closed",
+        priority: 2,
+        sync_status: "synced",
+        created_at: now,
+        updated_at: now,
+        closed_at: now,
+      });
+
+      globalThis.fetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body || "{}"));
+        if (String(body.query || "").includes("issueArchive")) {
+          if (body.variables?.id !== "issue-161") {
+            throw new Error("unexpected archive target: " + JSON.stringify(body.variables));
+          }
+          return new Response(
+            JSON.stringify({
+              data: {
+                issueArchive: {
+                  success: true,
+                },
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+
+        throw new Error("Unexpected GraphQL request: " + JSON.stringify(body));
+      };
+    `;
+
+    const result = await runInlineCli(
+      repoDir,
+      ["linear", "prune", "LIN-160", "LIN-161", "--yes", "--json"],
+      setupSource,
+      { LINEAR_API_KEY: "linear-test-key" }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const payload = JSON.parse(result.stdout) as {
+      preview: boolean;
+      count: number;
+      archived: Array<{ id: string }>;
+      skipped: Array<{ id: string; reason: string }>;
+    };
+
+    expect(payload.preview).toBe(false);
+    expect(payload.count).toBe(1);
+    expect(payload.archived.map((issue) => issue.id)).toEqual(["LIN-161"]);
+    expect(payload.skipped).toEqual([
+      { id: "LIN-160", title: "Already archived explicit", reason: "already_archived" },
+    ]);
+
+    const archivedRow = readArchivedRow(dbPath, "LOCAL-161");
+    expect(archivedRow?.remote_archived_at).toBeTruthy();
+  });
+
   test("rejects --mine and --all when explicit issue IDs are provided", async () => {
     const { repoDir } = createRepo();
     const mineResult = await runInlineCli(repoDir, ["linear", "prune", "LIN-140", "--mine"], "");
@@ -759,11 +840,14 @@ describe("linear prune command", () => {
         const query = String(body.query || "");
 
         if (query.includes("query GetTeam")) {
+          if (body.variables?.key !== "LIN") {
+            throw new Error("expected inferred team key LIN, got " + JSON.stringify(body.variables));
+          }
           return new Response(
             JSON.stringify({
               data: {
                 teams: {
-                  nodes: [{ id: "team-prn", key: "PRN", name: "Prune Team" }],
+                  nodes: [{ id: "team-lin", key: "LIN", name: "Linear Team" }],
                 },
               },
             }),
