@@ -386,9 +386,6 @@ export async function fullSyncPaginated(teamKey?: string): Promise<{
         fetchAllIssuesPaginated(teamId)
       );
       updateIssueUpdateWatermarkFromIssues(pullResult.issues);
-      if (!getActiveRemoteSyncPauseForEndpoints(COMMENT_PULL_ENDPOINTS)) {
-        await measureSyncPhase("full.pullComments", () => pullIssueComments(pullResult.issues));
-      }
       pulled = pullResult.issues.length;
       pruned = pullResult.pruned;
     } catch (error) {
@@ -456,9 +453,6 @@ export async function fullSync(teamKey?: string): Promise<{
     try {
       const issues = await measureSyncPhase("legacyFull.pull", () => pullFromLinear(teamId));
       updateIssueUpdateWatermarkFromIssues(issues);
-      if (!getActiveRemoteSyncPauseForEndpoints(COMMENT_PULL_ENDPOINTS)) {
-        await measureSyncPhase("legacyFull.pullComments", () => pullIssueComments(issues));
-      }
       pulled = issues.length;
     } catch (error) {
       if (!recordRemoteSyncPause(error)) {

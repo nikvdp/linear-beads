@@ -3,7 +3,6 @@
  */
 
 import { Command } from "commander";
-import { ensureFresh, ensureFreshBestEffort } from "../utils/sync.js";
 import type { Issue } from "../types.js";
 import {
   getCachedIssue,
@@ -34,7 +33,6 @@ import {
 } from "../utils/config.js";
 import {
   formatRemoteSyncPauseNotice,
-  getActiveRemoteSyncPause,
   getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
@@ -101,37 +99,20 @@ export const showCommand = new Command("show")
 
       const resolvedId = resolveIssueId(id);
       let issue: Issue | null | undefined = getCachedIssue(resolvedId);
-      const useCachedImmediately = shouldUseCachedIssueImmediatelyForShow({
-        forceSync: Boolean(options.sync),
-        resolvedId,
-        hasCachedIssue: Boolean(issue),
-      });
       const localOnly = isLocalOnly();
       let remotePause = null;
       let remoteDisabled = false;
-      let skipRemote = localOnly || useCachedImmediately;
+      let skipRemote = localOnly || isLocalId(resolvedId);
+      let fetchedRemoteIssue = false;
 
-      if (!skipRemote) {
+      if (!skipRemote && (options.sync || !issue)) {
         remotePause = await getCommandRemoteSyncPause();
         remoteDisabled = Boolean(remotePause);
         skipRemote = localOnly || remoteDisabled;
 
-        // Ensure cache is fresh (skip in local-only mode)
-        if (!skipRemote) {
-          if (options.sync) {
-            await ensureFresh(options.team, true);
-          } else {
-            await ensureFreshBestEffort(options.team);
-          }
-          remotePause = getActiveRemoteSyncPause();
-          remoteDisabled = Boolean(remotePause);
-          skipRemote = localOnly || remoteDisabled;
-        } else if (remoteDisabled && !options.json) {
+        if (remoteDisabled && !options.json) {
           outputError(formatRemoteSyncPauseNotice(remotePause as NonNullable<typeof remotePause>));
         }
-
-        // Re-read cache after the best-effort sync path in case it refreshed the issue.
-        issue = getCachedIssue(resolvedId);
       } else if (remoteDisabled && !options.json) {
         outputError(formatRemoteSyncPauseNotice(remotePause as NonNullable<typeof remotePause>));
       }
@@ -146,6 +127,7 @@ export const showCommand = new Command("show")
       ) {
         try {
           issue = await fetchIssue(resolvedId);
+          fetchedRemoteIssue = true;
         } catch (error) {
           const pause = recordRemoteSyncPause(error);
           if (pause && !options.json) {
@@ -167,6 +149,7 @@ export const showCommand = new Command("show")
       if (!issue && !skipRemote && !isLocalId(resolvedId)) {
         try {
           issue = await fetchIssue(resolvedId);
+          fetchedRemoteIssue = true;
         } catch (error) {
           const pause = recordRemoteSyncPause(error);
           if (pause && !options.json) {
@@ -180,7 +163,12 @@ export const showCommand = new Command("show")
         process.exit(1);
       }
 
-      if (options.sync && !skipRemote && !isLocalId(issue.id)) {
+      if (
+        (options.sync || fetchedRemoteIssue) &&
+        !options.body &&
+        !skipRemote &&
+        !isLocalId(issue.id)
+      ) {
         try {
           await fetchIssueComments(issue.linear_identifier || issue.id);
         } catch (error) {
