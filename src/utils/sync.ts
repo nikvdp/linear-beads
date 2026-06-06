@@ -23,6 +23,7 @@ import {
   fetchIssues,
   fetchAllIssuesPaginated,
   fetchAllUpdatedIssues,
+  fetchIssueComments,
   getTeamId,
   updateIssue,
 } from "./issue-backend.js";
@@ -58,6 +59,7 @@ type SmartSyncRunner = (teamKey?: string, forceFullSync?: boolean) => Promise<Sm
 
 const ISSUE_PULL_ENDPOINTS = ["issues"];
 const MAIL_INGEST_ENDPOINTS = ["comments"];
+const COMMENT_PULL_ENDPOINTS = ["comments"];
 
 let smartSyncRunnerForTests: SmartSyncRunner | null = null;
 
@@ -272,6 +274,19 @@ export async function pullFromLinear(teamId: string): Promise<Issue[]> {
   return fetchIssues(teamId);
 }
 
+async function pullIssueComments(issues: Issue[]): Promise<number> {
+  let pulled = 0;
+  for (const issue of issues) {
+    const issueId = issue.linear_identifier || (!issue.id.startsWith("LOCAL-") ? issue.id : "");
+    if (!issueId) {
+      continue;
+    }
+    const comments = await fetchIssueComments(issueId);
+    pulled += comments.length;
+  }
+  return pulled;
+}
+
 /**
  * Incremental sync - only fetch issues updated since last sync.
  * Returns count of updated issues, or null if no last sync (first run).
@@ -299,6 +314,9 @@ export async function incrementalSync(teamKey?: string): Promise<{
         fetchAllUpdatedIssues(teamId, since)
       );
       updateIssueUpdateWatermarkFromIssues(issues);
+      if (!getActiveRemoteSyncPauseForEndpoints(COMMENT_PULL_ENDPOINTS)) {
+        await measureSyncPhase("incremental.pullComments", () => pullIssueComments(issues));
+      }
       pulled = issues.length;
     } catch (error) {
       if (!recordRemoteSyncPause(error)) {
@@ -368,6 +386,9 @@ export async function fullSyncPaginated(teamKey?: string): Promise<{
         fetchAllIssuesPaginated(teamId)
       );
       updateIssueUpdateWatermarkFromIssues(pullResult.issues);
+      if (!getActiveRemoteSyncPauseForEndpoints(COMMENT_PULL_ENDPOINTS)) {
+        await measureSyncPhase("full.pullComments", () => pullIssueComments(pullResult.issues));
+      }
       pulled = pullResult.issues.length;
       pruned = pullResult.pruned;
     } catch (error) {
@@ -435,6 +456,9 @@ export async function fullSync(teamKey?: string): Promise<{
     try {
       const issues = await measureSyncPhase("legacyFull.pull", () => pullFromLinear(teamId));
       updateIssueUpdateWatermarkFromIssues(issues);
+      if (!getActiveRemoteSyncPauseForEndpoints(COMMENT_PULL_ENDPOINTS)) {
+        await measureSyncPhase("legacyFull.pullComments", () => pullIssueComments(issues));
+      }
       pulled = issues.length;
     } catch (error) {
       if (!recordRemoteSyncPause(error)) {

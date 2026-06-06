@@ -13,6 +13,7 @@ import type {
   AgentIdentity,
   Dependency,
   Issue,
+  IssueComment,
   MailMessage,
   MediaItem,
   MediaKind,
@@ -397,6 +398,24 @@ function initSchema(db: Database, dbPath: string): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
+
+    -- Issue comments cache
+    CREATE TABLE IF NOT EXISTS issue_comments (
+      id TEXT PRIMARY KEY,
+      issue_local_id TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      parent_id TEXT,
+      body TEXT NOT NULL,
+      author TEXT,
+      sync_status TEXT NOT NULL DEFAULT 'synced',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_issue_comments_issue_local_id ON issue_comments(issue_local_id);
+    CREATE INDEX IF NOT EXISTS idx_issue_comments_issue_id ON issue_comments(issue_id);
+    CREATE INDEX IF NOT EXISTS idx_issue_comments_created_at ON issue_comments(created_at);
 
     -- Outbox queue for pending mutations
     CREATE TABLE IF NOT EXISTS outbox (
@@ -1418,6 +1437,205 @@ export function getCachedIssues(): Issue[] {
   );
 
   return rows.map((row) => rowToIssue(row));
+}
+
+type CachedIssueCommentInput = IssueComment & {
+  issue_local_id?: string;
+};
+
+function toIssueCommentRow(input: CachedIssueCommentInput): IssueComment {
+  const issueId = normalizeIssueInputId(input.issue_id);
+  const issueLocalId = input.issue_local_id || resolveIssueLocalId(issueId);
+
+  return {
+    id: input.id,
+    issue_id: issueId,
+    issue_local_id: issueLocalId,
+    parent_id: input.parent_id,
+    body: input.body,
+    author: input.author,
+    created_at: input.created_at,
+    updated_at: input.updated_at,
+    sync_status: input.sync_status || "synced",
+  };
+}
+
+function rowToIssueComment(row: Record<string, unknown>): IssueComment {
+  return {
+    id: row.id as string,
+    issue_id: row.issue_id as string,
+    issue_local_id: row.issue_local_id as string,
+    parent_id: (row.parent_id as string | null) || undefined,
+    body: row.body as string,
+    author: (row.author as string | null) || undefined,
+    created_at: row.created_at as string,
+    updated_at: row.updated_at as string,
+    sync_status: (row.sync_status as IssueComment["sync_status"]) || "synced",
+  };
+}
+
+export function cacheIssueComment(comment: CachedIssueCommentInput): IssueComment {
+  const db = getDatabase();
+  const normalized = toIssueCommentRow(comment);
+  runWithBusyRetry(() => {
+    if (!normalized.id.startsWith("LOCAL-COMMENT-")) {
+      db.run(
+        `
+        DELETE FROM issue_comments
+        WHERE issue_local_id = ?
+          AND body = ?
+          AND sync_status = 'pending'
+          AND id LIKE 'LOCAL-COMMENT-%'
+      `,
+        [normalized.issue_local_id || normalized.issue_id, normalized.body]
+      );
+    }
+    db.run(
+      `
+      INSERT INTO issue_comments (
+        id,
+        issue_local_id,
+        issue_id,
+        parent_id,
+        body,
+        author,
+        sync_status,
+        created_at,
+        updated_at,
+        cached_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        issue_local_id = excluded.issue_local_id,
+        issue_id = excluded.issue_id,
+        parent_id = excluded.parent_id,
+        body = excluded.body,
+        author = excluded.author,
+        sync_status = excluded.sync_status,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at,
+        cached_at = datetime('now')
+    `,
+      [
+        normalized.id,
+        normalized.issue_local_id || normalized.issue_id,
+        normalized.issue_id,
+        normalized.parent_id || null,
+        normalized.body,
+        normalized.author || null,
+        normalized.sync_status || "synced",
+        normalized.created_at,
+        normalized.updated_at,
+      ]
+    );
+  });
+  return normalized;
+}
+
+export function cacheIssueComments(comments: CachedIssueCommentInput[]): IssueComment[] {
+  const db = getDatabase();
+  const normalized = comments.map((comment) => toIssueCommentRow(comment));
+  const transaction = db.transaction(() => {
+    for (const comment of normalized) {
+      if (!comment.id.startsWith("LOCAL-COMMENT-")) {
+        db.run(
+          `
+          DELETE FROM issue_comments
+          WHERE issue_local_id = ?
+            AND body = ?
+            AND sync_status = 'pending'
+            AND id LIKE 'LOCAL-COMMENT-%'
+        `,
+          [comment.issue_local_id || comment.issue_id, comment.body]
+        );
+      }
+      db.run(
+        `
+        INSERT INTO issue_comments (
+          id,
+          issue_local_id,
+          issue_id,
+          parent_id,
+          body,
+          author,
+          sync_status,
+          created_at,
+          updated_at,
+          cached_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(id) DO UPDATE SET
+          issue_local_id = excluded.issue_local_id,
+          issue_id = excluded.issue_id,
+          parent_id = excluded.parent_id,
+          body = excluded.body,
+          author = excluded.author,
+          sync_status = excluded.sync_status,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at,
+          cached_at = datetime('now')
+      `,
+        [
+          comment.id,
+          comment.issue_local_id || comment.issue_id,
+          comment.issue_id,
+          comment.parent_id || null,
+          comment.body,
+          comment.author || null,
+          comment.sync_status || "synced",
+          comment.created_at,
+          comment.updated_at,
+        ]
+      );
+    }
+  });
+
+  runWithBusyRetry(() => {
+    transaction();
+  });
+  return normalized;
+}
+
+export function getIssueComments(issueId: string, limit?: number): IssueComment[] {
+  const db = getDatabase();
+  const normalizedId = normalizeIssueInputId(issueId);
+  const issueLocalId = resolveIssueLocalId(normalizedId);
+  const queryLimit = limit && limit > 0 ? limit : 100;
+  const rows = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+          SELECT *
+          FROM issue_comments
+          WHERE issue_local_id = ? OR issue_id = ?
+          ORDER BY created_at ASC, id ASC
+          LIMIT ?
+        `
+        )
+        .all(issueLocalId, normalizedId, queryLimit) as Array<Record<string, unknown>>
+  );
+  return rows.map((row) => rowToIssueComment(row));
+}
+
+export function createLocalIssueComment(params: {
+  issueId: string;
+  body: string;
+  parentId?: string;
+  author?: string;
+  syncStatus?: IssueComment["sync_status"];
+}): IssueComment {
+  const now = new Date().toISOString();
+  return cacheIssueComment({
+    id: `LOCAL-COMMENT-${randomUUID()}`,
+    issue_id: params.issueId,
+    parent_id: params.parentId,
+    body: params.body,
+    author: params.author,
+    created_at: now,
+    updated_at: now,
+    sync_status: params.syncStatus || "pending",
+  });
 }
 
 type CachedMediaInput = {
@@ -2557,6 +2775,7 @@ export function clearCache(): void {
     DELETE FROM dependencies WHERE type = 'parent-child';
     DELETE FROM labels;
     DELETE FROM projects;
+    DELETE FROM issue_comments;
     DELETE FROM metadata;
   `);
   });
@@ -2572,6 +2791,7 @@ export function clearIssuesCache(): void {
     db.exec(`
     DELETE FROM issues;
     DELETE FROM dependencies WHERE type = 'parent-child';
+    DELETE FROM issue_comments;
   `);
   });
   requestJsonlExport();

@@ -52,6 +52,8 @@ import {
   getPendingOutboxItems,
   getCachedIssues,
   getCachedIssue,
+  cacheIssueComment,
+  cacheIssueComments,
   getDatabase,
   resolveIssueLocalId,
 } from "./database.js";
@@ -60,6 +62,8 @@ import type {
   IssueType,
   Priority,
   LinearIssue,
+  LinearComment,
+  IssueComment,
   IssueStatus,
   MediaItem,
   MediaKind,
@@ -1777,6 +1781,31 @@ function linearToBdIssue(
   return issue;
 }
 
+function commentAuthor(linear: LinearComment): string | undefined {
+  return (
+    linear.user?.email ||
+    linear.user?.name ||
+    linear.externalUser?.email ||
+    linear.externalUser?.name ||
+    undefined
+  );
+}
+
+function linearToIssueComment(linear: LinearComment, fallbackIssueId?: string): IssueComment {
+  const issueId = linear.issue?.identifier || fallbackIssueId || "unknown";
+  return {
+    id: linear.id,
+    issue_id: issueId,
+    issue_local_id: resolveIssueLocalId(issueId),
+    parent_id: linear.parent?.id || undefined,
+    body: linear.body,
+    author: commentAuthor(linear),
+    created_at: linear.createdAt,
+    updated_at: linear.updatedAt,
+    sync_status: "synced",
+  };
+}
+
 /**
  * Get or create repo label
  */
@@ -3287,15 +3316,43 @@ export async function closeIssue(
       mutation CreateComment($input: CommentCreateInput!) {
         commentCreate(input: $input) {
           success
+          comment {
+            id
+            body
+            createdAt
+            updatedAt
+            parent {
+              id
+            }
+            user {
+              id
+              name
+              email
+            }
+            externalUser {
+              id
+              name
+              email
+            }
+            issue {
+              id
+              identifier
+            }
+          }
         }
       }
     `;
-    await client.request(commentMutation, {
+    const commentResult = await client.request<{
+      commentCreate: { success: boolean; comment: LinearComment | null };
+    }>(commentMutation, {
       input: {
         issueId,
         body: `Closed: ${reason}`,
       },
     });
+    if (commentResult.commentCreate.success && commentResult.commentCreate.comment) {
+      cacheIssueComment(linearToIssueComment(commentResult.commentCreate.comment, issueId));
+    }
   }
 
   const issue = linearToBdIssue(result.issueUpdate.issue);
@@ -3604,32 +3661,139 @@ export async function archiveIssue(issueId: string): Promise<void> {
   }
 }
 
+export async function fetchIssueComments(issueId: string): Promise<IssueComment[]> {
+  const client = getGraphQLClient();
+  const issueUuid = (await resolveIssueId(issueId)) || issueId;
+  const comments: IssueComment[] = [];
+  let cursor: string | null = null;
+  let hasNextPage = true;
+  const paginationGuard = createLinearPaginationGuard("fetchIssueComments");
+
+  const query = `
+    query IssueComments($id: String!, $after: String) {
+      issue(id: $id) {
+        identifier
+        comments(first: 100, after: $after, orderBy: createdAt) {
+          nodes {
+            id
+            body
+            createdAt
+            updatedAt
+            parent {
+              id
+            }
+            user {
+              id
+              name
+              email
+            }
+            externalUser {
+              id
+              name
+              email
+            }
+            issue {
+              id
+              identifier
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  `;
+
+  while (hasNextPage) {
+    const requestCursor = cursor;
+    const result = await client.request<{
+      issue: {
+        identifier: string;
+        comments: {
+          nodes: LinearComment[];
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        };
+      } | null;
+    }>(query, { id: issueUuid, after: cursor });
+
+    if (!result.issue) {
+      break;
+    }
+
+    comments.push(
+      ...result.issue.comments.nodes.map((comment) =>
+        linearToIssueComment(comment, result.issue?.identifier || issueId)
+      )
+    );
+    hasNextPage = result.issue.comments.pageInfo.hasNextPage;
+    cursor = paginationGuard.nextCursor(result.issue.comments.pageInfo, requestCursor);
+  }
+
+  cacheIssueComments(comments);
+  return comments;
+}
+
 /**
  * Add comment to an issue
  */
-export async function addComment(issueId: string, body: string): Promise<void> {
+export async function addComment(
+  issueId: string,
+  body: string,
+  parentId?: string
+): Promise<IssueComment> {
   const client = getGraphQLClient();
+  const issueUuid = (await resolveIssueId(issueId)) || issueId;
 
   const mutation = `
     mutation CreateComment($input: CommentCreateInput!) {
       commentCreate(input: $input) {
         success
+        comment {
+          id
+          body
+          createdAt
+          updatedAt
+          parent {
+            id
+          }
+          user {
+            id
+            name
+            email
+          }
+          externalUser {
+            id
+            name
+            email
+          }
+          issue {
+            id
+            identifier
+          }
+        }
       }
     }
   `;
 
   const result = await client.request<{
-    commentCreate: { success: boolean };
+    commentCreate: { success: boolean; comment: LinearComment | null };
   }>(mutation, {
     input: {
-      issueId,
+      issueId: issueUuid,
       body,
+      parentId,
     },
   });
 
-  if (!result.commentCreate.success) {
+  if (!result.commentCreate.success || !result.commentCreate.comment) {
     throw new Error("Failed to create comment");
   }
+
+  const comment = linearToIssueComment(result.commentCreate.comment, issueId);
+  cacheIssueComment(comment);
+  return comment;
 }
 
 /**

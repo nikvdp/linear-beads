@@ -7,6 +7,7 @@ import { ensureFresh, ensureFreshBestEffort } from "../utils/sync.js";
 import type { Issue } from "../types.js";
 import {
   getCachedIssue,
+  getIssueComments,
   getDependencies,
   getBlockedIssueIds,
   getInverseDependencies,
@@ -15,7 +16,7 @@ import {
   isLocalId,
   resolveIssueLocalId,
 } from "../utils/database.js";
-import { fetchIssue } from "../utils/issue-backend.js";
+import { fetchIssue, fetchIssueComments } from "../utils/issue-backend.js";
 import {
   formatShowJson,
   formatIssueHuman,
@@ -37,6 +38,18 @@ import {
   getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
+
+function isHiddenMailCommentBody(body: string): boolean {
+  return body.includes("<!-- lb-mail-envelope:v1") || body.includes("<!-- lb-mail-directory:v1");
+}
+
+function truncateCommentBody(body: string, maxLength: number = 160): string {
+  const oneLine = body.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= maxLength) {
+    return oneLine;
+  }
+  return `${oneLine.slice(0, maxLength - 3)}...`;
+}
 
 export function shouldPreferRemoteIssueForShow(options: {
   forceSync: boolean;
@@ -167,6 +180,17 @@ export const showCommand = new Command("show")
         process.exit(1);
       }
 
+      if (options.sync && !skipRemote && !isLocalId(issue.id)) {
+        try {
+          await fetchIssueComments(issue.linear_identifier || issue.id);
+        } catch (error) {
+          const pause = recordRemoteSyncPause(error);
+          if (pause && !options.json) {
+            outputError(formatRemoteSyncPauseNotice(pause));
+          }
+        }
+      }
+
       const normalizedDescription = normalizeIssueDescriptionForOutput(
         issue.description,
         issue.local_id || issue.id
@@ -203,6 +227,9 @@ export const showCommand = new Command("show")
         .filter((d) => d.type === "related" || d.type === "discovered-from")
         .map((d) => resolveIssueLocalId(d.issue_id));
       const related = [...new Set([...relatedOut, ...relatedIn])];
+      const comments = getIssueComments(issue.id).filter(
+        (comment) => !isHiddenMailCommentBody(comment.body)
+      );
 
       // Output
       if (options.json) {
@@ -214,6 +241,7 @@ export const showCommand = new Command("show")
           blocks: blocks.length > 0 ? blocks : undefined,
           blocked_by: blockedBy.length > 0 ? blockedBy : undefined,
           related: related.length > 0 ? related : undefined,
+          comments,
         };
         output(JSON.stringify([jsonOutput], null, 2));
       } else {
@@ -329,6 +357,22 @@ export const showCommand = new Command("show")
               const rel = getCachedIssue(relId);
               output(`  ↔ ${getDisplayId(relId)}${rel ? `: ${rel.title} [P${rel.priority}]` : ""}`);
             }
+          }
+        }
+
+        if (comments.length > 0) {
+          output("");
+          const recentComments = comments.slice(-3);
+          output(`Comments (${comments.length}, latest ${recentComments.length}):`);
+          for (const comment of recentComments) {
+            const author = comment.author ? `${comment.author}: ` : "";
+            const status =
+              comment.sync_status && comment.sync_status !== "synced"
+                ? ` [${comment.sync_status}]`
+                : "";
+            output(
+              `  - ${comment.created_at}${status} ${author}${truncateCommentBody(comment.body)}`
+            );
           }
         }
       }
