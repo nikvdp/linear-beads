@@ -69,6 +69,21 @@ async function createIssue(
 }
 
 describe("human output style modes", () => {
+  test("beads is the default human output style without saved preferences", async () => {
+    const repoDir = createLocalRepo();
+    const issue = await createIssue(repoDir, "Default beads issue");
+
+    const listedDefault = await runCli(repoDir, ["list", "--all"]);
+    expect(listedDefault.exitCode).toBe(0);
+    expect(listedDefault.stdout).toContain(`○ ${issue.id} ● P2 Default beads issue`);
+    expect(listedDefault.stdout).toContain("Total: 1 issues (1 open)");
+
+    const listedClassic = await runCli(repoDir, ["list", "--all", "--style", "classic"]);
+    expect(listedClassic.exitCode).toBe(0);
+    expect(listedClassic.stdout).toContain(`${issue.id}  open`);
+    expect(listedClassic.stdout).not.toContain("Total: 1 issues");
+  });
+
   test("list --style beads renders the beads tree layout", async () => {
     const repoDir = createLocalRepo();
     const parent = await createIssue(repoDir, "Parent issue");
@@ -221,6 +236,7 @@ describe("human output style modes", () => {
     const depList = await runCli(repoDir, ["dep", "list", blocked.id]);
     expect(depList.exitCode).toBe(0);
     expect(depList.stdout).toContain(`● ${blocked.id} ● P2 Blocked item`);
+    expect(depList.stdout).not.toContain("Description:");
     expect(depList.stdout).toContain("Blocked by (1):");
     expect(depList.stdout).toContain(`└── ○ ${blocker.id} ● P2 Primary blocker`);
 
