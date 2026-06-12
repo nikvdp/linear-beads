@@ -61,8 +61,8 @@
     "human_output_style": {
       "type": "string",
       "enum": ["classic", "beads"],
-      "default": "classic",
-      "description": "Default human-readable output style for commands like 'lb list' and 'lb ready'. JSON output is unchanged."
+      "default": "beads",
+      "description": "Default human-readable output style for issue commands. JSON output is unchanged."
     }
   },
   "additionalProperties": false

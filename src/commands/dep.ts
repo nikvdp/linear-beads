@@ -26,7 +26,6 @@ import {
   resolveIssueLocalId,
 } from "../utils/database.js";
 import {
-  formatIssueHumanBeads,
   formatIssueRelationSectionBeads,
   formatIssueSummaryBeads,
   output,
@@ -824,8 +823,14 @@ const listCommand = new Command("list")
         };
 
         output(
-          formatIssueHumanBeads(issue, getDisplayId(resolvedId), {
-            isBlocked: blockedIds.has(resolvedId),
+          formatIssueSummaryBeads({
+            id: resolvedId,
+            display_id: getDisplayId(resolvedId),
+            title: issue.title,
+            status: issue.status,
+            priority: issue.priority,
+            sync_status: issue.sync_status,
+            is_blocked: blockedIds.has(resolvedId),
           })
         );
         output("");

@@ -51,7 +51,7 @@ export interface HttpsLbCliDevConfigSchemaJson {
    */
   mail_registry_work_item?: string;
   /**
-   * Default human-readable output style for commands like 'lb list' and 'lb ready'. JSON output is unchanged.
+   * Default human-readable output style for issue commands. JSON output is unchanged.
    */
   human_output_style?: "classic" | "beads";
 }

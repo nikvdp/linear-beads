@@ -212,7 +212,7 @@ export const DEFAULT_CONFIG: LoadedConfig = {
   repo_binding_version: LEGACY_REPO_BINDING_VERSION,
   issue_backend: "linear",
   mail_backend: "local",
-  human_output_style: "classic",
+  human_output_style: "beads",
 };
 
 function parseRepoScope(value: unknown): RepoScopeMode | undefined {
@@ -515,7 +515,7 @@ export function getMailRegistryWorkItem(): string | undefined {
 }
 
 export function getHumanOutputStyle(cliValue?: HumanOutputStyle): HumanOutputStyle {
-  return parseHumanOutputStyle(getOption("human_output_style", cliValue)) || "classic";
+  return parseHumanOutputStyle(getOption("human_output_style", cliValue)) || "beads";
 }
 
 function normalizeCliVersionTag(rawVersion: string): string {
