@@ -6,10 +6,12 @@ import { Command } from "commander";
 import type { IssueComment } from "../types.js";
 import {
   createLocalIssueComment,
+  findIssueCommentByBody,
   getDisplayId,
   getIssueComments,
   isLocalId,
   queueOutboxItem,
+  removeMatchingCommentCreateOutbox,
   resolveIssueId,
 } from "../utils/database.js";
 import { addComment, fetchIssueComments } from "../utils/issue-backend.js";
@@ -54,6 +56,16 @@ function formatCommentJson(comment: IssueComment): IssueComment {
   return comment;
 }
 
+function findMatchingComment(
+  comments: IssueComment[],
+  params: { body: string; parentId?: string }
+): IssueComment | undefined {
+  return comments.find(
+    (comment) =>
+      comment.body === params.body && (comment.parent_id || "") === (params.parentId || "")
+  );
+}
+
 async function resolveCommentBody(
   argumentBody: string | undefined,
   options: CommentWriteOptions
@@ -87,6 +99,16 @@ async function writeComment(params: {
     });
   }
 
+  const pending = findIssueCommentByBody({
+    issueId: resolvedId,
+    parentId: params.parentId,
+    body: params.body,
+    syncStatus: "pending",
+  });
+  if (pending) {
+    return pending;
+  }
+
   let useImmediateSync = Boolean(params.options.sync) && !isLocalId(resolvedId);
   const remotePause = await getCommandRemoteSyncPause();
   if (useImmediateSync && remotePause) {
@@ -94,6 +116,35 @@ async function writeComment(params: {
       outputError(formatRemoteSyncPauseNotice(remotePause));
     }
     useImmediateSync = false;
+  }
+
+  const removedQueuedCreates = removeMatchingCommentCreateOutbox({
+    issueId: resolvedId,
+    parentId: params.parentId,
+    body: params.body,
+  });
+
+  if (removedQueuedCreates > 0) {
+    const synced = findIssueCommentByBody({
+      issueId: resolvedId,
+      parentId: params.parentId,
+      body: params.body,
+      syncStatus: "synced",
+    });
+    if (synced) {
+      return synced;
+    }
+
+    if (useImmediateSync) {
+      const remoteComments = await fetchIssueComments(resolvedId);
+      const remoteMatch = findMatchingComment(remoteComments, {
+        body: params.body,
+        parentId: params.parentId,
+      });
+      if (remoteMatch) {
+        return remoteMatch;
+      }
+    }
   }
 
   if (useImmediateSync) {
@@ -110,7 +161,7 @@ async function writeComment(params: {
     }
   }
 
-  const pending = createLocalIssueComment({
+  const newPending = createLocalIssueComment({
     issueId: resolvedId,
     parentId: params.parentId,
     body: params.body,
@@ -126,7 +177,7 @@ async function writeComment(params: {
     resolvedId
   );
   ensureOutboxProcessed();
-  return pending;
+  return newPending;
 }
 
 export const commentCommand = new Command("comment")

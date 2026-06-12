@@ -34,8 +34,11 @@ async function runEval(cwd: string): Promise<{ stdout: string; stderr: string; e
     import {
       cacheIssue,
       cacheIssueComment,
+      clearIssuesCache,
       createLocalIssueComment,
+      getPendingOutboxItems,
       getIssueComments,
+      queueOutboxItem,
     } from ${JSON.stringify(DATABASE_UTILS_PATH)};
 
     cacheIssue({
@@ -56,6 +59,15 @@ async function runEval(cwd: string): Promise<{ stdout: string; stderr: string; e
       body: "Closed: pending reason",
       syncStatus: "pending",
     });
+    queueOutboxItem(
+      "comment_create",
+      {
+        issueId: "LIN-101",
+        body: "Closed: pending reason",
+      },
+      "LIN-101",
+    );
+    const outboxBeforeRemote = getPendingOutboxItems();
 
     cacheIssueComment({
       id: "remote-comment-1",
@@ -66,6 +78,7 @@ async function runEval(cwd: string): Promise<{ stdout: string; stderr: string; e
       updated_at: "2026-01-02T00:00:00.000Z",
       sync_status: "synced",
     });
+    const outboxAfterRemote = getPendingOutboxItems();
 
     cacheIssueComment({
       id: "remote-comment-2",
@@ -77,8 +90,14 @@ async function runEval(cwd: string): Promise<{ stdout: string; stderr: string; e
       sync_status: "synced",
     });
 
+    const commentsBeforeIssueClear = getIssueComments("LIN-101");
+    clearIssuesCache();
+
     console.log(JSON.stringify({
       pendingId: pending.id,
+      outboxBeforeRemote,
+      outboxAfterRemote,
+      commentsBeforeIssueClear,
       comments: getIssueComments("LIN-101"),
     }));
   `;
@@ -110,6 +129,19 @@ describe("issue comments cache", () => {
 
     const payload = JSON.parse(result.stdout) as {
       pendingId: string;
+      outboxBeforeRemote: Array<{
+        operation: string;
+        payload: {
+          issueId: string;
+          body: string;
+        };
+      }>;
+      outboxAfterRemote: Array<{
+        operation: string;
+      }>;
+      commentsBeforeIssueClear: Array<{
+        id: string;
+      }>;
       comments: Array<{
         id: string;
         issue_id: string;
@@ -122,6 +154,13 @@ describe("issue comments cache", () => {
     };
 
     expect(payload.pendingId.startsWith("LOCAL-COMMENT-")).toBe(true);
+    expect(payload.outboxBeforeRemote).toHaveLength(1);
+    expect(payload.outboxBeforeRemote[0].operation).toBe("comment_create");
+    expect(payload.outboxAfterRemote).toEqual([]);
+    expect(payload.commentsBeforeIssueClear.map((comment) => comment.id)).toEqual([
+      "remote-comment-1",
+      "remote-comment-2",
+    ]);
     expect(payload.comments.map((comment) => comment.id)).toEqual([
       "remote-comment-1",
       "remote-comment-2",

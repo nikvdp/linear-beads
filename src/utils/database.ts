@@ -1479,15 +1479,25 @@ export function cacheIssueComment(comment: CachedIssueCommentInput): IssueCommen
   const normalized = toIssueCommentRow(comment);
   runWithBusyRetry(() => {
     if (!normalized.id.startsWith("LOCAL-COMMENT-")) {
+      removeMatchingCommentCreateOutboxRows(db, {
+        issueId: normalized.issue_local_id || normalized.issue_id,
+        body: normalized.body,
+        parentId: normalized.parent_id,
+      });
       db.run(
         `
         DELETE FROM issue_comments
         WHERE issue_local_id = ?
           AND body = ?
+          AND COALESCE(parent_id, '') = ?
           AND sync_status = 'pending'
           AND id LIKE 'LOCAL-COMMENT-%'
       `,
-        [normalized.issue_local_id || normalized.issue_id, normalized.body]
+        [
+          normalized.issue_local_id || normalized.issue_id,
+          normalized.body,
+          normalized.parent_id || "",
+        ]
       );
     }
     db.run(
@@ -1538,15 +1548,21 @@ export function cacheIssueComments(comments: CachedIssueCommentInput[]): IssueCo
   const transaction = db.transaction(() => {
     for (const comment of normalized) {
       if (!comment.id.startsWith("LOCAL-COMMENT-")) {
+        removeMatchingCommentCreateOutboxRows(db, {
+          issueId: comment.issue_local_id || comment.issue_id,
+          body: comment.body,
+          parentId: comment.parent_id,
+        });
         db.run(
           `
           DELETE FROM issue_comments
           WHERE issue_local_id = ?
             AND body = ?
+            AND COALESCE(parent_id, '') = ?
             AND sync_status = 'pending'
             AND id LIKE 'LOCAL-COMMENT-%'
         `,
-          [comment.issue_local_id || comment.issue_id, comment.body]
+          [comment.issue_local_id || comment.issue_id, comment.body, comment.parent_id || ""]
         );
       }
       db.run(
@@ -1616,6 +1632,89 @@ export function getIssueComments(issueId: string, limit?: number): IssueComment[
         .all(issueLocalId, normalizedId, queryLimit) as Array<Record<string, unknown>>
   );
   return rows.map((row) => rowToIssueComment(row));
+}
+
+function sameOptionalId(left: string | undefined, right: string | undefined): boolean {
+  return (left || "") === (right || "");
+}
+
+function commentCreatePayloadMatches(
+  payload: unknown,
+  params: { issueId: string; body: string; parentId?: string }
+): boolean {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+  const candidate = payload as Record<string, unknown>;
+  if (candidate.body !== params.body) {
+    return false;
+  }
+  if (!sameOptionalId(candidate.parentId as string | undefined, params.parentId)) {
+    return false;
+  }
+  const issueId = typeof candidate.issueId === "string" ? candidate.issueId : "";
+  return Boolean(issueId) && resolveIssueLocalId(issueId) === resolveIssueLocalId(params.issueId);
+}
+
+function removeMatchingCommentCreateOutboxRows(
+  db: Database,
+  params: { issueId: string; body: string; parentId?: string }
+): number {
+  const rows = db
+    .query(
+      `
+      SELECT id, payload
+      FROM outbox
+      WHERE operation = 'comment_create'
+    `
+    )
+    .all() as Array<{ id: number; payload: string }>;
+  let removed = 0;
+  const deleteRow = db.query("DELETE FROM outbox WHERE id = ?");
+
+  for (const row of rows) {
+    try {
+      if (!commentCreatePayloadMatches(JSON.parse(row.payload), params)) {
+        continue;
+      }
+    } catch {
+      // Ignore malformed rows; normal outbox processing will surface those errors.
+      continue;
+    }
+    deleteRow.run(row.id);
+    removed++;
+  }
+
+  return removed;
+}
+
+export function findIssueCommentByBody(params: {
+  issueId: string;
+  body: string;
+  parentId?: string;
+  syncStatus?: IssueComment["sync_status"];
+}): IssueComment | undefined {
+  return getIssueComments(params.issueId, 500).find((comment) => {
+    if (comment.body !== params.body) {
+      return false;
+    }
+    if (!sameOptionalId(comment.parent_id, params.parentId)) {
+      return false;
+    }
+    if (params.syncStatus && comment.sync_status !== params.syncStatus) {
+      return false;
+    }
+    return true;
+  });
+}
+
+export function removeMatchingCommentCreateOutbox(params: {
+  issueId: string;
+  body: string;
+  parentId?: string;
+}): number {
+  const db = getDatabase();
+  return runWithBusyRetry(() => removeMatchingCommentCreateOutboxRows(db, params));
 }
 
 export function createLocalIssueComment(params: {
@@ -2791,7 +2890,6 @@ export function clearIssuesCache(): void {
     db.exec(`
     DELETE FROM issues;
     DELETE FROM dependencies WHERE type = 'parent-child';
-    DELETE FROM issue_comments;
   `);
   });
   requestJsonlExport();
