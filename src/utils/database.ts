@@ -1971,6 +1971,12 @@ export function cacheDependency(dep: Dependency): void {
   const db = getDatabase();
   const resolvedIssueId = resolveIssueLocalId(dep.issue_id);
   const resolvedDependsOnId = resolveIssueLocalId(dep.depends_on_id);
+  if (!isPlausibleIssueInput(resolvedIssueId)) {
+    throw new Error(`Invalid dependency issue ID '${dep.issue_id}'.`);
+  }
+  if (!isPlausibleIssueInput(resolvedDependsOnId)) {
+    throw new Error(`Invalid dependency target ID '${dep.depends_on_id}'.`);
+  }
   if (resolvedIssueId === resolvedDependsOnId) {
     return;
   }
@@ -2290,16 +2296,31 @@ export function getBlockedIssueIds(): Set<string> {
       db
         .query(
           `
-    SELECT DISTINCT d.depends_on_id as blocked_id
+    SELECT DISTINCT
+      d.issue_id as blocker_id,
+      d.depends_on_id as blocked_id,
+      i.status as blocker_status
     FROM dependencies d
-    JOIN issues i ON d.issue_id = i.local_id
-    WHERE d.type = 'blocks' AND i.status NOT IN ('closed', 'cancelled')
+    LEFT JOIN issues i
+      ON d.issue_id = i.local_id
+      OR d.issue_id = i.linear_identifier
+      OR d.issue_id = i.linear_id
+    WHERE d.type = 'blocks'
   `
         )
-        .all() as Array<{ blocked_id: string }>
+        .all() as Array<{ blocker_id: string; blocked_id: string; blocker_status: string | null }>
   );
 
-  const blocked = new Set(directlyBlocked.map((r) => r.blocked_id));
+  const blocked = new Set(
+    directlyBlocked
+      .filter(
+        (row) =>
+          isPlausibleIssueInput(row.blocker_id) &&
+          row.blocker_status !== "closed" &&
+          row.blocker_status !== "cancelled"
+      )
+      .map((r) => r.blocked_id)
+  );
 
   // Recursively add children of blocked issues
   // Children have parent-child dep where child.depends_on_id = parent.id

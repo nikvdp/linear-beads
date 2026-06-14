@@ -18,6 +18,7 @@ import {
   isSameCanonicalIssue,
   isLocalId,
   isPlaceholderIssueInput,
+  isPlausibleIssueInput,
   runWithBusyRetry,
   generateIssueSyncKey,
 } from "../utils/database.js";
@@ -248,12 +249,20 @@ function normalizeOptionalParentInput(parent: string | undefined): string | unde
   if (!parent || isPlaceholderIssueInput(parent)) {
     return undefined;
   }
+  if (!isPlausibleIssueInput(parent)) {
+    console.error(`--parent must be a plausible issue ID, not '${parent}'.`);
+    process.exit(1);
+  }
   return parent;
 }
 
 function assertConcreteRelationTarget(value: string, flagName: string): void {
   if (isPlaceholderIssueInput(value)) {
     console.error(`${flagName} requires a real issue ID, not '${value}'.`);
+    process.exit(1);
+  }
+  if (!isPlausibleIssueInput(value)) {
+    console.error(`${flagName} must be a plausible issue ID, not '${value}'.`);
     process.exit(1);
   }
 }

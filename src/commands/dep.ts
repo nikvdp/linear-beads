@@ -22,6 +22,7 @@ import {
   resolveIssueId,
   isLocalId,
   isPlaceholderIssueInput,
+  isPlausibleIssueInput,
   isSameCanonicalIssue,
   resolveIssueLocalId,
 } from "../utils/database.js";
@@ -94,6 +95,9 @@ function hasRelatedDependencyBetween(issueA: string, issueB: string): boolean {
 function requireConcreteIssueInput(value: string, flagName: string): string {
   if (isPlaceholderIssueInput(value)) {
     throw new Error(`${flagName} requires a real issue ID, not '${value}'.`);
+  }
+  if (!isPlausibleIssueInput(value)) {
+    throw new Error(`${flagName} must be a plausible issue ID, not '${value}'.`);
   }
   return value;
 }
