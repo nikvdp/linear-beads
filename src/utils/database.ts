@@ -2126,6 +2126,47 @@ export function repairSelfReferentialDependencies(): number {
   return idsToDelete.length;
 }
 
+export type InvalidDependencyRow = {
+  id: number;
+  issue_id: string;
+  depends_on_id: string;
+  type: Dependency["type"];
+};
+
+export function getInvalidDependencyRows(): InvalidDependencyRow[] {
+  const db = getDatabase();
+  const rows = runWithBusyRetry(
+    () =>
+      db.query("SELECT id, issue_id, depends_on_id, type FROM dependencies").all() as Array<{
+        id: number;
+        issue_id: string;
+        depends_on_id: string;
+        type: Dependency["type"];
+      }>
+  );
+
+  return rows.filter(
+    (row) => !isPlausibleIssueInput(row.issue_id) || !isPlausibleIssueInput(row.depends_on_id)
+  );
+}
+
+export function repairInvalidDependencyRows(): number {
+  const invalidRows = getInvalidDependencyRows();
+  if (invalidRows.length === 0) {
+    return 0;
+  }
+
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    const placeholders = invalidRows.map(() => "?").join(", ");
+    db.query(`DELETE FROM dependencies WHERE id IN (${placeholders})`).run(
+      ...invalidRows.map((row) => row.id)
+    );
+  });
+  requestJsonlExport();
+  return invalidRows.length;
+}
+
 export function canonicalizeDependencyAliases(): number {
   const db = getDatabase();
   const rows = runWithBusyRetry(

@@ -14,9 +14,11 @@ import {
   writeGlobalConfig,
 } from "../utils/config.js";
 import {
+  getInvalidDependencyRows,
   getOutboxDiagnosticItems,
   getPendingOutboxItems,
   listMediaItemsForIssue,
+  repairInvalidDependencyRows,
 } from "../utils/database.js";
 import {
   getLinearApiErrorInfoFromResponse,
@@ -515,8 +517,17 @@ export const doctorCommand = new Command("doctor")
     const repoWorkerPid = getWorkerPidFromFile();
     let workers = inspectWorkerProcesses();
     let zombieWorkers = workers.filter((worker) => worker.zombieCandidate);
+    let invalidDependencyRows = getInvalidDependencyRows();
 
     if (options.fix) {
+      if (invalidDependencyRows.length > 0) {
+        const repaired = repairInvalidDependencyRows();
+        fixes.push(
+          `Removed ${repaired} malformed dependenc${repaired === 1 ? "y" : "ies"} from the local cache.`
+        );
+        invalidDependencyRows = getInvalidDependencyRows();
+      }
+
       if (zombieWorkers.length > 0) {
         const reaped = await reapZombieWorkerProcesses(zombieWorkers);
         const reapedPids = reaped.filter((result) => result.success).map((result) => result.pid);
@@ -607,7 +618,7 @@ export const doctorCommand = new Command("doctor")
 
     const policy = getLinearRequestPolicy();
     const doctorReport = {
-      ok: connectivityStatus === "ok",
+      ok: connectivityStatus === "ok" && invalidDependencyRows.length === 0,
       environment: {
         cli_version: getRuntimeCliVersion(),
         bun_version: typeof Bun !== "undefined" ? Bun.version : undefined,
@@ -697,6 +708,15 @@ export const doctorCommand = new Command("doctor")
           message: pause.message || null,
         })),
         likely_sync_blocker: likelySyncBlocker,
+      },
+      data_integrity: {
+        invalid_dependency_count: invalidDependencyRows.length,
+        invalid_dependencies: invalidDependencyRows.slice(0, 20).map((row) => ({
+          id: row.id,
+          issue_id: row.issue_id,
+          depends_on_id: row.depends_on_id,
+          type: row.type,
+        })),
       },
       workers: {
         repo_pid_file: {
@@ -861,6 +881,16 @@ export const doctorCommand = new Command("doctor")
         );
       }
       lines.push("");
+      lines.push("Data integrity");
+      lines.push(
+        `- invalid dependency rows: ${doctorReport.data_integrity.invalid_dependency_count}`
+      );
+      for (const row of doctorReport.data_integrity.invalid_dependencies) {
+        lines.push(
+          `- invalid dependency #${row.id}: ${row.issue_id} ${row.type} ${row.depends_on_id}`
+        );
+      }
+      lines.push("");
       lines.push("Outbox");
       lines.push(`- pending items: ${doctorReport.outbox.pending_count}`);
       if (doctorReport.outbox.latest_failed_item) {
@@ -943,7 +973,7 @@ export const doctorCommand = new Command("doctor")
       output(lines.join("\n"));
     }
 
-    if (connectivityStatus !== "ok") {
+    if (!doctorReport.ok) {
       process.exitCode = 1;
     }
   });
