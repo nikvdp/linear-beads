@@ -227,6 +227,72 @@ async function runDoctorWithFreeTierIssueLimit(
   return { stdout, stderr, exitCode };
 }
 
+async function runDoctorFixWithMalformedDependency(
+  cwd: string
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const script = `
+    import { cacheIssue, getDatabase } from ${JSON.stringify(DATABASE_UTILS_PATH)};
+
+    const now = new Date().toISOString();
+    cacheIssue({
+      id: "LOCAL-510",
+      title: "Issue with malformed blocker",
+      status: "open",
+      priority: 2,
+      sync_status: "pending",
+      created_at: now,
+      updated_at: now,
+    });
+    getDatabase().run(
+      "INSERT INTO dependencies (issue_id, depends_on_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)",
+      ["○", "LOCAL-510", "blocks", now, "test"]
+    );
+
+    globalThis.fetch = async (input) => {
+      const url = String(input);
+      if (url === "https://api.linear.app/graphql") {
+        return new Response(
+          JSON.stringify({
+            data: {
+              viewer: { id: "viewer-1", name: "Doctor User" },
+              teams: {
+                nodes: [{ id: "team-1", key: "DOC", name: "Doctor Team" }],
+              },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }
+        );
+      }
+      if (url === "https://uploads.linear.app/") {
+        return new Response("not found", { status: 404 });
+      }
+      throw new Error("Unexpected fetch target: " + url);
+    };
+
+    process.argv = ["bun", "doctor", "--fix", "--json"];
+    await import(${JSON.stringify(CLI_PATH)});
+  `;
+
+  const proc = Bun.spawn(["bun", "--eval", script], {
+    cwd,
+    env: {
+      ...process.env,
+      LINEAR_API_KEY: "linear-test-key-doctor-fix",
+      LB_TEAM_KEY: "",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+  return { stdout, stderr, exitCode };
+}
+
 describe("doctor command", () => {
   test("reports partial upload connectivity and the latest failed media-linked outbox row", async () => {
     const repoDir = createRepo();
@@ -311,5 +377,27 @@ describe("doctor command", () => {
     expect(report.remote_sync.likely_sync_blocker?.message).toContain("lb linear prune");
     expect(report.outbox.latest_failed_item?.subject).toBe("LOCAL-401");
     expect(report.outbox.latest_failed_item?.error).toContain("usage limit exceeded");
+  });
+
+  test("fix removes malformed dependency rows from the local cache", async () => {
+    const repoDir = createRepo();
+    const result = await runDoctorFixWithMalformedDependency(repoDir);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const report = JSON.parse(result.stdout) as {
+      ok: boolean;
+      data_integrity: {
+        invalid_dependency_count: number;
+      };
+      fixes_applied: string[];
+    };
+
+    expect(report.ok).toBe(true);
+    expect(report.data_integrity.invalid_dependency_count).toBe(0);
+    expect(report.fixes_applied).toContain(
+      "Removed 1 malformed dependency from the local cache."
+    );
   });
 });
