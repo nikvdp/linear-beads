@@ -86,6 +86,22 @@ describe("placeholder issue ref handling", () => {
     expect(result.stderr).toContain("--blocks requires a real issue ID");
   });
 
+  test("dependency commands reject status glyph targets", async () => {
+    const repoDir = createLocalRepo();
+    const created = await runLbJson<Array<{ id: string }>>(repoDir, "create", "Normal issue");
+
+    const createResult = await runLb(repoDir, "create", "Bad dependency", "--blocks", "○");
+    const updateResult = await runLb(repoDir, "update", created[0].id, "--blocked-by", "○");
+    const depResult = await runLb(repoDir, "dep", "add", created[0].id, "--blocked-by", "○");
+
+    expect(createResult.exitCode).toBe(1);
+    expect(createResult.stderr).toContain("--blocks must be a plausible issue ID");
+    expect(updateResult.exitCode).toBe(1);
+    expect(updateResult.stderr).toContain("--blocked-by must be a plausible issue ID");
+    expect(depResult.exitCode).toBe(1);
+    expect(depResult.stderr).toContain("--blocked-by must be a plausible issue ID");
+  });
+
   test("dep add rejects placeholder parent ids", async () => {
     const repoDir = createLocalRepo();
     const created = await runLbJson<Array<{ id: string }>>(repoDir, "create", "Parentless child");
@@ -93,5 +109,20 @@ describe("placeholder issue ref handling", () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("--parent requires a real issue ID");
+  });
+
+  test("ready treats valid uncached blocker refs as blocking", async () => {
+    const repoDir = createLocalRepo();
+    const blocked = await runLbJson<Array<{ id: string }>>(
+      repoDir,
+      "create",
+      "Blocked by another repo"
+    );
+    const dep = await runLb(repoDir, "dep", "add", blocked[0].id, "--blocked-by", "LIN-999999");
+
+    expect(dep.exitCode).toBe(0);
+
+    const ready = await runLbJson<Array<{ id: string }>>(repoDir, "ready", "--all");
+    expect(ready.map((issue) => issue.id)).not.toContain(blocked[0].id);
   });
 });
