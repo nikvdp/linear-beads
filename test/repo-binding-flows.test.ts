@@ -228,13 +228,13 @@ afterAll(async () => {
 });
 
 describeLinearSuite("repo binding flows", () => {
-  test("init defaults new repos to project scope", async () => {
-    const repoDir = createTempGitRepo("lb-init-project-default");
+  test("init defaults new repos to label scope", async () => {
+    const repoDir = createTempGitRepo("lb-init-label-default");
 
     await mustSucceed(repoDir, "init");
 
     const config = readRepoConfig(repoDir);
-    expect(config.repo_binding_version).toBe(2);
+    expect(config.repo_binding_version).toBe(1);
     expect(config.repo_scope).toBeUndefined();
     expect(typeof config.repo_name).toBe("string");
     expect(config.repo_name).toBe(basename(repoDir));
@@ -247,7 +247,7 @@ describeLinearSuite("repo binding flows", () => {
     await mustSucceed(repoDir, "init");
 
     const config = readRepoConfig(repoDir);
-    expect(config.repo_binding_version).toBe(2);
+    expect(config.repo_binding_version).toBe(1);
     expect(config.repo_scope).toBeUndefined();
   });
 

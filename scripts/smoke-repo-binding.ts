@@ -55,7 +55,11 @@ function writeRepoConfig(
   writeFileSync(join(lbDir, "config.jsonc"), `${JSON.stringify(config, null, 2)}\n`);
 }
 
-function readRepoConfig(repoDir: string): { repo_name?: string; repo_scope?: string } {
+function readRepoConfig(repoDir: string): {
+  repo_name?: string;
+  repo_scope?: string;
+  repo_binding_version?: number;
+} {
   const configPath = join(repoDir, ".lb", "config.jsonc");
   if (!existsSync(configPath)) {
     throw new Error(`Missing repo config at ${configPath}`);
@@ -185,12 +189,19 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 async function main(): Promise<void> {
-  console.log("Smoke 1/2: first init defaults to project scope...");
+  console.log("Smoke 1/2: first init defaults to label scope...");
   const initRepo = createTempGitRepo("lb-smoke-init-default");
   await mustSucceed(initRepo, "init");
 
   const initConfig = readRepoConfig(initRepo);
-  assert(initConfig.repo_scope === "project", `expected repo_scope=project, got ${initConfig.repo_scope}`);
+  assert(
+    initConfig.repo_binding_version === 1,
+    `expected repo_binding_version=1, got ${initConfig.repo_binding_version}`
+  );
+  assert(
+    initConfig.repo_scope === undefined,
+    `expected no explicit repo_scope, got ${initConfig.repo_scope}`
+  );
   assert(initConfig.repo_name === basename(initRepo), "expected init repo_name to match directory name");
 
   console.log("Smoke 2/2: migrate + rebind flow...");
