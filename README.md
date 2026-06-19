@@ -42,7 +42,7 @@ The packaged onboarding text and installable skills are authored as normal repo 
 
 The CLI still bundles those files into the app at build time, but the source of truth for editing is now the markdown and yaml on disk rather than large TypeScript string literals.
 
-## Repo Scoping (Label vs Project)
+## Repo Scoping (Label Default with Project Compatibility)
 
 `lb` supports three scoping modes:
 
@@ -54,11 +54,11 @@ Scope resolution is versioned:
 
 - If `repo_scope` is explicitly set, that value is used.
 - Otherwise `repo_binding_version` controls the implicit default:
-  - `1` => `label` (legacy default)
-  - `2` => `project` (new default)
+  - `1` => `label` (current default)
+  - `2` => `project` (compatibility for repos that already opted in)
 
-For new repos, first-time `lb init` writes `.lb/config.jsonc` with detected `repo_name` and `repo_binding_version: 2`.
-Legacy repos without config are inferred as `repo_binding_version: 1` to preserve label-default behavior.
+For new repos, first-time `lb init` writes `.lb/config.jsonc` with detected `repo_name` and `repo_binding_version: 1`.
+Existing repos with explicit `repo_scope: "project"` or `"both"` still keep that behavior.
 
 ### Configuration
 
@@ -67,7 +67,7 @@ Add to `.lb/config.jsonc`:
 ```jsonc
 {
   "repo_scope": "project", // optional explicit mode: "label", "project", or "both"
-  "repo_binding_version": 2, // implicit default policy when repo_scope is omitted (1 or 2)
+  "repo_binding_version": 1, // implicit default policy when repo_scope is omitted (1 or 2)
 }
 ```
 
