@@ -127,9 +127,29 @@ function parseLimitOption(value: unknown): number | undefined {
 }
 
 interface TreeRelationSection {
+  key: "parent" | "children" | "blockedBy" | "blocks" | "related";
   title: string;
   issueIds: string[];
   recursive: boolean;
+}
+
+interface TreeIssueJson {
+  id: string;
+  title: string;
+  status: string;
+  priority: number | null;
+  ready: boolean;
+  blocked: boolean;
+  circular?: boolean;
+  sections?: TreeSectionJson[];
+}
+
+interface TreeSectionJson {
+  key: TreeRelationSection["key"];
+  title: string;
+  count: number;
+  recursive: boolean;
+  issues: TreeIssueJson[];
 }
 
 function treeConnector(prefix: string, isLast: boolean): string {
@@ -298,31 +318,89 @@ function getTreeRelationSections(
 
   return [
     {
+      key: "parent",
       title: "Parent",
       issueIds: parent,
       recursive: false,
     },
     {
+      key: "children",
       title: "Children (execution order)",
       issueIds: children,
       recursive: false,
     },
     {
+      key: "blockedBy",
       title: "Blocked by",
       issueIds: blockedBy,
       recursive: true,
     },
     {
+      key: "blocks",
       title: "Blocks",
       issueIds: blocks,
       recursive: true,
     },
     {
+      key: "related",
       title: "Related",
       issueIds: related,
       recursive: false,
     },
   ].filter((section) => section.issueIds.length > 0);
+}
+
+function formatTreeIssueJson(
+  issueId: string,
+  blockedIds: Set<string>,
+  backlogDescendantIds: Set<string>,
+  circular: boolean = false
+): TreeIssueJson {
+  const issue = getCachedIssue(issueId);
+  const status = issue?.status || "unknown";
+  return {
+    id: getDisplayId(issueId),
+    title: issue?.title || "Unknown",
+    status,
+    priority: typeof issue?.priority === "number" ? issue.priority : null,
+    ready: Boolean(getReadyTag(issueId, status, backlogDescendantIds)),
+    blocked: blockedIds.has(issueId),
+    ...(circular ? { circular: true } : {}),
+  };
+}
+
+function buildTreeJson(
+  issueId: string,
+  blockedIds: Set<string>,
+  backlogDescendantIds: Set<string>,
+  includeParent: boolean = true,
+  visited: Set<string> = new Set()
+): TreeIssueJson {
+  if (visited.has(issueId)) {
+    return formatTreeIssueJson(issueId, blockedIds, backlogDescendantIds, true);
+  }
+
+  const nextVisited = new Set(visited);
+  nextVisited.add(issueId);
+  const node = formatTreeIssueJson(issueId, blockedIds, backlogDescendantIds);
+  const sections = getTreeRelationSections(issueId, backlogDescendantIds, includeParent).map(
+    (section): TreeSectionJson => ({
+      key: section.key,
+      title: section.title,
+      count: section.issueIds.length,
+      recursive: section.recursive,
+      issues: section.issueIds.map((relatedIssueId) =>
+        section.recursive
+          ? buildTreeJson(relatedIssueId, blockedIds, backlogDescendantIds, false, nextVisited)
+          : formatTreeIssueJson(relatedIssueId, blockedIds, backlogDescendantIds)
+      ),
+    })
+  );
+
+  if (sections.length > 0) {
+    node.sections = sections;
+  }
+  return node;
 }
 
 /**
@@ -1001,6 +1079,7 @@ const listCommand = new Command("list")
 const treeCommand = new Command("tree")
   .description("Show dependency tree for an issue")
   .argument("<issue>", "Issue ID")
+  .option("-j, --json", "Output as JSON")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .action(async (issueId: string, options) => {
     try {
@@ -1025,6 +1104,13 @@ const treeCommand = new Command("tree")
       const style = getHumanOutputStyle(requestedStyle);
       const blockedIds = getBlockedIssueIds();
       const backlogDescendantIds = getBacklogDescendantIssueIds();
+      if (options.json) {
+        output(
+          JSON.stringify(buildTreeJson(resolvedId, blockedIds, backlogDescendantIds), null, 2)
+        );
+        return;
+      }
+
       if (style === "classic") {
         output(`\n🌲 Dependency tree for ${getDisplayId(resolvedId)}:\n`);
       }
