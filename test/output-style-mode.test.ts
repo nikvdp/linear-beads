@@ -246,6 +246,49 @@ describe("human output style modes", () => {
     expect(depTree.stdout).toContain(`└── ● ${depLeaf.id} ● P2 Dependency leaf`);
   });
 
+  test("dep tree --json returns structured nested dependency data", async () => {
+    const repoDir = createLocalRepo();
+    const root = await createIssue(repoDir, "Dependency root");
+    const blocker = await createIssue(repoDir, "Primary blocker");
+    const blocked = await createIssue(repoDir, "Blocked item");
+
+    const rootBlocks = await runCli(repoDir, ["dep", "add", root.id, "--blocks", blocked.id]);
+    expect(rootBlocks.exitCode).toBe(0);
+
+    const blockedBy = await runCli(repoDir, ["dep", "add", root.id, "--blocked-by", blocker.id]);
+    expect(blockedBy.exitCode).toBe(0);
+
+    const tree = await runCli(repoDir, ["dep", "tree", root.id, "--json"]);
+    expect(tree.exitCode).toBe(0);
+
+    const payload = JSON.parse(tree.stdout) as {
+      id: string;
+      title: string;
+      sections?: Array<{
+        key: string;
+        count: number;
+        issues: Array<{ id: string; title: string }>;
+      }>;
+    };
+
+    expect(payload.id).toBe(root.id);
+    expect(payload.title).toBe("Dependency root");
+
+    const blockedBySection = payload.sections?.find((section) => section.key === "blockedBy");
+    expect(blockedBySection?.count).toBe(1);
+    expect(blockedBySection?.issues[0]).toMatchObject({
+      id: blocker.id,
+      title: "Primary blocker",
+    });
+
+    const blocksSection = payload.sections?.find((section) => section.key === "blocks");
+    expect(blocksSection?.count).toBe(1);
+    expect(blocksSection?.issues[0]).toMatchObject({
+      id: blocked.id,
+      title: "Blocked item",
+    });
+  });
+
   test("lb style --global persists a shared default that repos can inherit", async () => {
     const repoDir = createLocalRepo();
     const homeDir = createTempDir("lb-output-style-home-");
