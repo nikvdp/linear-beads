@@ -2,6 +2,8 @@ import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import lbBasicUsageSkillMd from "../content/skills/lb-basic-usage/SKILL.md" with { type: "text" };
 import lbBasicUsageOpenAiYaml from "../content/skills/lb-basic-usage/agents/openai.yaml" with { type: "text" };
+import lbAutoModeSkillMd from "../content/skills/lb-auto-mode/SKILL.md" with { type: "text" };
+import lbAutoModeOpenAiYaml from "../content/skills/lb-auto-mode/agents/openai.yaml" with { type: "text" };
 import lbExecutionLoopSkillMd from "../content/skills/lb-execution-loop/SKILL.md" with { type: "text" };
 import lbExecutionLoopOpenAiYaml from "../content/skills/lb-execution-loop/agents/openai.yaml" with { type: "text" };
 
@@ -28,6 +30,12 @@ function parseFrontmatterValue(markdown: string, key: string): string {
 }
 
 const PACKAGED_SKILLS: Record<string, PackagedSkill> = {
+  "lb-auto-mode": {
+    name: parseFrontmatterValue(lbAutoModeSkillMd, "name"),
+    description: parseFrontmatterValue(lbAutoModeSkillMd, "description"),
+    skillMd: lbAutoModeSkillMd,
+    openaiYaml: lbAutoModeOpenAiYaml,
+  },
   "lb-basic-usage": {
     name: parseFrontmatterValue(lbBasicUsageSkillMd, "name"),
     description: parseFrontmatterValue(lbBasicUsageSkillMd, "description"),
