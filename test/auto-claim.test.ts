@@ -16,12 +16,34 @@ const openIssue: Issue = {
 };
 
 mock.module("../src/utils/config.js", () => ({
+  getAutoLabel: () => "auto",
   getIssueBackendKind: () => "linear",
+  getRepoLabel: () => "repo:fixture",
+  getRepoName: () => "fixture",
+  getRepoScope: () => "label",
   isLocalOnly: () => false,
 }));
 
 mock.module("../src/utils/database.js", () => ({
+  getCachedIssue: () => null,
+  getChildIds: () => [],
   getCurrentAgentHandle: () => "AmberAster",
+  getInverseDependencies: () => [],
+  getParentId: () => null,
+}));
+
+mock.module("../src/utils/graphql.js", () => ({
+  getGraphQLClient: () => ({ request: async () => ({ team: { issues: { nodes: [] } } }) }),
+  ISSUE_FRAGMENT: "id",
+}));
+
+mock.module("../src/utils/linear.js", () => ({
+  ensureRepoLabel: async () => "label-1",
+  linearToBdIssue: (issue: Issue) => issue,
+}));
+
+mock.module("../src/utils/worker-identity.js", () => ({
+  workerLabelName: (worker: string) => `auto:${worker}`,
 }));
 
 mock.module("../src/utils/remote-sync-state.js", () => ({
