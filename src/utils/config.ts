@@ -201,6 +201,8 @@ export type RepoBindingVersion = 1 | 2;
 
 const LEGACY_REPO_BINDING_VERSION: RepoBindingVersion = 1;
 const PROJECT_DEFAULT_REPO_BINDING_VERSION: RepoBindingVersion = 2;
+const DEFAULT_AUTO_PROMPT_TEMPLATE =
+  "Use the lb-auto-mode skill to handle ticket {ticket_id}. Your working directory is {workdir}. Create a branch before making changes.";
 
 /**
  * Default config values
@@ -213,6 +215,9 @@ export const DEFAULT_CONFIG: LoadedConfig = {
   issue_backend: "linear",
   mail_backend: "local",
   human_output_style: "beads",
+  auto_label: "auto",
+  auto_poll_interval_seconds: 30,
+  auto_prompt_template: DEFAULT_AUTO_PROMPT_TEMPLATE,
 };
 
 function parseRepoScope(value: unknown): RepoScopeMode | undefined {
@@ -516,6 +521,39 @@ export function getMailRegistryWorkItem(): string | undefined {
 
 export function getHumanOutputStyle(cliValue?: HumanOutputStyle): HumanOutputStyle {
   return parseHumanOutputStyle(getOption("human_output_style", cliValue)) || "beads";
+}
+
+export function getAutoLabel(): string {
+  return getOption("auto_label") || "auto";
+}
+
+export function getAutoPollIntervalMs(): number {
+  const seconds = getOption("auto_poll_interval_seconds") as unknown;
+  if (
+    typeof seconds !== "number" ||
+    !Number.isFinite(seconds) ||
+    !Number.isInteger(seconds) ||
+    seconds <= 0
+  ) {
+    return 30000;
+  }
+  return Math.max(seconds, 5) * 1000;
+}
+
+export function getAutoAgentName(cliValue?: string): string {
+  const name = (cliValue ?? getOption("auto_agent"))?.trim();
+  if (!name) {
+    throw new Error("Auto agent name is required: set auto_agent in config or pass --agent-name.");
+  }
+  return name;
+}
+
+export function getAutoAgentTemplate(name: string): string | undefined {
+  return getOption("auto_agents")?.[name];
+}
+
+export function getAutoPromptTemplate(): string {
+  return getOption("auto_prompt_template") || DEFAULT_AUTO_PROMPT_TEMPLATE;
 }
 
 function normalizeCliVersionTag(rawVersion: string): string {

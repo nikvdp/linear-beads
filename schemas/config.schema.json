@@ -63,6 +63,31 @@
       "enum": ["classic", "beads"],
       "default": "beads",
       "description": "Default human-readable output style for issue commands. JSON output is unchanged."
+    },
+    "auto_label": {
+      "type": "string",
+      "default": "auto",
+      "description": "Linear label that marks issues as ready for auto mode."
+    },
+    "auto_poll_interval_seconds": {
+      "type": "integer",
+      "minimum": 5,
+      "default": 30,
+      "description": "How often auto mode polls for work, in seconds."
+    },
+    "auto_agent": {
+      "type": "string",
+      "description": "Default agent name, resolved as a key in auto_agents."
+    },
+    "auto_agents": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Shell command templates keyed by agent name. Templates receive {prompt}, {workdir}, {log_file}, and {ticket_id} placeholders, whose values are shell-quoted at render time."
+    },
+    "auto_prompt_template": {
+      "type": "string",
+      "default": "Use the lb-auto-mode skill to handle ticket {ticket_id}. Your working directory is {workdir}. Create a branch before making changes.",
+      "description": "Prompt passed to auto-mode agents. Supports {ticket_id} and {workdir} placeholders."
     }
   },
   "additionalProperties": false

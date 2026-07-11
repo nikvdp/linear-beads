@@ -54,4 +54,26 @@ export interface HttpsLbCliDevConfigSchemaJson {
    * Default human-readable output style for issue commands. JSON output is unchanged.
    */
   human_output_style?: "classic" | "beads";
+  /**
+   * Linear label that marks issues as ready for auto mode.
+   */
+  auto_label?: string;
+  /**
+   * How often auto mode polls for work, in seconds.
+   */
+  auto_poll_interval_seconds?: number;
+  /**
+   * Default agent name, resolved as a key in auto_agents.
+   */
+  auto_agent?: string;
+  /**
+   * Shell command templates keyed by agent name. Templates receive {prompt}, {workdir}, {log_file}, and {ticket_id} placeholders, whose values are shell-quoted at render time.
+   */
+  auto_agents?: {
+    [k: string]: string;
+  };
+  /**
+   * Prompt passed to auto-mode agents. Supports {ticket_id} and {workdir} placeholders.
+   */
+  auto_prompt_template?: string;
 }
