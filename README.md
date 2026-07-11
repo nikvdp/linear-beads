@@ -140,6 +140,14 @@ Run this end-to-end smoke script to validate init defaults plus migrate/rebind b
 bun run scripts/smoke-repo-binding.ts
 ```
 
+### Auto Mode Smoke Test
+
+Run this manual end-to-end check to validate discovery, blocker filtering, synchronous claims, detached worktrees, agent spawning, and flagged-run reaping against Linear:
+
+```bash
+bun run scripts/smoke-auto-mode.ts
+```
+
 ## Offline & Local-Only Modes
 
 `lb` works offline and can run entirely without Linear.
