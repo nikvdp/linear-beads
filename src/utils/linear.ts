@@ -1743,7 +1743,7 @@ function isUuid(value: string | undefined): value is string {
 /**
  * Convert Linear issue to bd-compatible issue
  */
-function linearToBdIssue(
+export function linearToBdIssue(
   linear: LinearIssue
 ): Issue & { linear_state_id: string; sync_key?: string } {
   const labels = linear.labels.nodes.map((l) => l.name);
