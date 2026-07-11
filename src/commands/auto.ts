@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { closeSync, existsSync, fstatSync, openSync, readSync, statSync } from "fs";
+import { closeSync, existsSync, fstatSync, openSync, readSync } from "fs";
 import { dirname, join } from "path";
 import type { AgentRun, Issue, IssueStatus } from "../types.js";
 import { isTerminalStatus } from "../types.js";
@@ -118,7 +118,10 @@ export function formatRelativeTime(isoDate: string, now = Date.now()): string {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-export function tailLogFile(path: string, lineCount: number): string {
+export function tailLogSnapshot(
+  path: string,
+  lineCount: number
+): { text: string; offset: number } {
   const fd = openSync(path, "r");
   try {
     const size = fstatSync(fd).size;
@@ -129,10 +132,14 @@ export function tailLogFile(path: string, lineCount: number): string {
     let lines = buffer.toString("utf-8").split(/\r?\n/);
     if (start > 0) lines = lines.slice(1);
     if (lines.at(-1) === "") lines.pop();
-    return lines.slice(-lineCount).join("\n");
+    return { text: lines.slice(-lineCount).join("\n"), offset: size };
   } finally {
     closeSync(fd);
   }
+}
+
+export function tailLogFile(path: string, lineCount: number): string {
+  return tailLogSnapshot(path, lineCount).text;
 }
 
 function parseLogLineCount(value: string): number {
@@ -406,11 +413,11 @@ autoCommand
         throw new Error(`Agent run log does not exist at ${path}.`);
       }
 
-      const tail = tailLogFile(run.log_path, lineCount);
-      if (tail) process.stdout.write(`${tail}\n`);
+      const tail = tailLogSnapshot(run.log_path, lineCount);
+      if (tail.text) process.stdout.write(`${tail.text}\n`);
       if (!options.follow) return;
 
-      let offset = statSync(run.log_path).size;
+      let offset = tail.offset;
       while (run.pid !== undefined && isProcessAlive(run.pid)) {
         await Bun.sleep(500);
         const appended = readAppendedLog(run.log_path, offset);
