@@ -5,7 +5,8 @@
 
 import { spawn } from "child_process";
 
-const DISABLED = process.argv.includes("--worker") || process.argv.includes("--export-worker");
+const DISABLED =
+  process.argv.at(-1) === "--worker" || process.argv.at(-1) === "--export-worker";
 
 let exportTimer: NodeJS.Timeout | null = null;
 let exportInFlight = false;

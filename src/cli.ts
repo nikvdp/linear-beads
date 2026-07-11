@@ -29,6 +29,7 @@ import { rebindCommand } from "./commands/rebind.js";
 import { exportCommand } from "./commands/export.js";
 import { selfUpdateCommand } from "./commands/self-update.js";
 import { agentCommand } from "./commands/agent.js";
+import { workerCommand } from "./commands/worker.js";
 import { mailCommand } from "./commands/mail.js";
 import { dedupeCommand } from "./commands/dedupe.js";
 import { skillCommand } from "./commands/skill.js";
@@ -117,7 +118,7 @@ if (!shouldSkipMinCliGate(process.argv)) {
   }
 }
 
-if (process.argv.includes("--worker")) {
+if (process.argv.at(-1) === "--worker") {
   processOutbox()
     .then(() => process.exit(0))
     .catch(() => process.exit(1));
@@ -161,6 +162,7 @@ if (process.argv.includes("--worker")) {
   program.addCommand(rebindCommand);
   program.addCommand(styleCommand);
   program.addCommand(agentCommand);
+  program.addCommand(workerCommand);
   program.addCommand(mailCommand);
   program.addCommand(dedupeCommand);
   program.addCommand(skillCommand);

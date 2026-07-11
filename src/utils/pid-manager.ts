@@ -114,7 +114,7 @@ export function parseElapsedSeconds(value: string): number {
 }
 
 function looksLikeWorkerCommand(command: string): boolean {
-  return command.includes("--worker") && !command.includes("--export-worker");
+  return /(?:^|\s)--worker\s*$/.test(command) && !command.includes("--export-worker");
 }
 
 function getProcessCwd(pid: number): string | null {
