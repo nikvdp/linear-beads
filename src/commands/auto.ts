@@ -1,6 +1,8 @@
 import { Command } from "commander";
 import { closeSync, existsSync, fstatSync, openSync, readSync, statSync } from "fs";
-import type { AgentRun, Issue } from "../types.js";
+import { dirname, join } from "path";
+import type { AgentRun, Issue, IssueStatus } from "../types.js";
+import { isTerminalStatus } from "../types.js";
 import {
   assertAutoModeAvailable,
   ClaimLostError,
@@ -8,18 +10,33 @@ import {
   ensureAutoLabel,
   fetchClaimableAutoIssues,
 } from "../utils/auto.js";
-import { getAutoLabel, getAutoPollIntervalMs } from "../utils/config.js";
+import {
+  getAutoAgentName,
+  getAutoAgentTemplate,
+  getAutoLabel,
+  getAutoPollIntervalMs,
+  getDbPath,
+} from "../utils/config.js";
 import {
   generateAgentRunId,
   getAgentRun,
+  getCachedIssue,
   getDisplayId,
+  getRunningAgentRuns,
   listAgentRuns,
   resolveIssueId,
   resolveIssueLocalId,
+  updateAgentRun,
 } from "../utils/database.js";
-import { getTeamId } from "../utils/issue-backend.js";
+import { fetchIssue, getTeamId } from "../utils/issue-backend.js";
 import { output, outputError } from "../utils/output.js";
 import { isProcessAlive } from "../utils/pid-manager.js";
+import {
+  formatRemoteSyncPauseNotice,
+  getBlockingAutomaticRemoteSyncPause,
+  recordRemoteSyncPause,
+} from "../utils/remote-sync-state.js";
+import { spawnAgentRun } from "../utils/agent-runner.js";
 import { resolveWorkerName, workerLabelName } from "../utils/worker-identity.js";
 import { createRunWorktree, getRepoRoot } from "../utils/worktree.js";
 
@@ -55,6 +72,15 @@ export function nextAutoPollDelayMs(deadline: number, pollMs: number, now = Date
   return Math.min(pollMs, Math.max(0, deadline - now));
 }
 
+export function resolveAutoRunPollMs(cliValue?: string): number {
+  if (!cliValue) return getAutoPollIntervalMs();
+  const seconds = Number(cliValue);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error("--poll-interval-seconds must be a positive number.");
+  }
+  return seconds * 1000;
+}
+
 export function claimedPayload(issue: Issue, workdir: string | null): AutoNextPayload {
   const id = issue.linear_identifier || issue.id;
   const location = workdir ? `cd to ${workdir}, ` : "";
@@ -73,6 +99,15 @@ export function observeAgentRun(run: AgentRun): ObservedAgentRun {
       ? "stale (pid dead — will be reaped by lb auto run)"
       : run.status;
   return { ...run, pid_alive: pidAlive, live_state: liveState };
+}
+
+export function decideReapedRunStatus(
+  pidAlive: boolean,
+  issueStatus?: IssueStatus
+): "running" | "done" | "flagged" | null {
+  if (pidAlive) return "running";
+  if (!issueStatus) return null;
+  return isTerminalStatus(issueStatus) ? "done" : "flagged";
 }
 
 export function formatRelativeTime(isoDate: string, now = Date.now()): string {
@@ -169,6 +204,38 @@ async function tryClaim(
   return null;
 }
 
+async function reapRunningAgentRuns(remotePaused: boolean): Promise<number> {
+  let liveRuns = 0;
+  for (const run of getRunningAgentRuns()) {
+    if (run.pid !== undefined && isProcessAlive(run.pid)) {
+      liveRuns++;
+      continue;
+    }
+
+    const ticketId = getDisplayId(run.issue_id);
+    const remoteIssue = remotePaused ? null : await fetchIssue(ticketId);
+    const issue = remoteIssue || getCachedIssue(run.issue_id);
+    const nextStatus = decideReapedRunStatus(false, issue?.status);
+    if (!nextStatus) {
+      console.warn(
+        `Run ${run.id} has exited, but ticket ${ticketId} could not be loaded; leaving the run pending for the next check.`
+      );
+      continue;
+    }
+
+    if (nextStatus === "done") {
+      updateAgentRun(run.id, { status: "done", ended_at: new Date().toISOString() });
+      continue;
+    }
+
+    updateAgentRun(run.id, { status: "flagged", ended_at: new Date().toISOString() });
+    console.error(
+      `Warning: ${ticketId} / run ${run.id} / log ${run.log_path || "(not recorded)"}: agent exited but the ticket is still open; review the log and either close the ticket or set it back to open.`
+    );
+  }
+  return liveRuns;
+}
+
 export const autoCommand = new Command("auto").description("Claim and run auto-labeled work");
 
 autoCommand
@@ -239,6 +306,83 @@ autoCommand
         output("No agent runs.");
       } else {
         output(formatRunTable(runs));
+      }
+    } catch (error) {
+      outputError(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+  });
+
+autoCommand
+  .command("run")
+  .description("Poll for auto-labeled work and run one agent at a time")
+  .option("--agent-name <name>", "Configured auto_agents template to launch")
+  .option("--worker <name>", "Serve only the targeted queue for this worker")
+  .option("--poll-interval-seconds <n>", "Polling interval override")
+  .option("--once", "Run one reap/claim iteration and exit")
+  .action(async (options) => {
+    try {
+      assertAutoModeAvailable();
+      const worker = resolveWorkerName(options.worker);
+      const queueLabel = worker ? workerLabelName(worker) : getAutoLabel();
+      const agentName = getAutoAgentName(options.agentName);
+      if (!getAutoAgentTemplate(agentName)) {
+        throw new Error(
+          `No auto_agents command template is configured for agent '${agentName}'.`
+        );
+      }
+      const pollMs = resolveAutoRunPollMs(options.pollIntervalSeconds);
+      const teamId = await getTeamId();
+      await ensureAutoLabel(teamId);
+      output(`Auto runner watching ${queueLabel} with agent ${agentName}.`);
+
+      let backoffMs = pollMs;
+      while (true) {
+        try {
+          const activePause = getBlockingAutomaticRemoteSyncPause();
+          const liveRuns = await reapRunningAgentRuns(Boolean(activePause));
+          if (liveRuns === 0) {
+            if (activePause) {
+              throw new Error(
+                formatRemoteSyncPauseNotice(activePause, { prefix: "Auto runner:" })
+              );
+            }
+
+            const claimed = await tryClaim(teamId, worker);
+            if (claimed) {
+              const repoRoot = getRepoRoot();
+              const workdir = createRunWorktree(repoRoot, claimed.runId);
+              const logPath = join(dirname(getDbPath()), "runs", `${claimed.runId}.log`);
+              spawnAgentRun({
+                issue: claimed.issue,
+                runId: claimed.runId,
+                workdir,
+                logPath,
+                agentName,
+                worker,
+              });
+              output(
+                `Claimed ${claimed.issue.linear_identifier || claimed.issue.id} → run ${claimed.runId}, log ${logPath}`
+              );
+            }
+          }
+          backoffMs = pollMs;
+        } catch (error) {
+          recordRemoteSyncPause(error);
+          backoffMs = Math.min(backoffMs * 2, 5 * 60 * 1000);
+          outputError(
+            `Auto runner tick failed; retrying in ${Math.ceil(backoffMs / 1000)}s: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+          if (options.once) {
+            process.exitCode = 1;
+            return;
+          }
+        }
+
+        if (options.once) return;
+        await Bun.sleep(backoffMs);
       }
     } catch (error) {
       outputError(error instanceof Error ? error.message : String(error));
