@@ -38,14 +38,14 @@ export class ClaimLostError extends Error {
   }
 }
 
-function ensureLinearAutoMode(): void {
+export function assertAutoModeAvailable(): void {
   if (isLocalOnly() || getIssueBackendKind() === "local") {
     throw new Error("Auto mode requires the Linear issue backend.");
   }
 }
 
 export async function ensureLabel(teamId: string, name: string): Promise<string> {
-  ensureLinearAutoMode();
+  assertAutoModeAvailable();
   return ensureRepoLabel(teamId, { repoLabel: name });
 }
 
@@ -133,7 +133,7 @@ export async function fetchClaimableAutoIssues(
   teamId: string,
   options: { worker?: string } = {}
 ): Promise<Issue[]> {
-  ensureLinearAutoMode();
+  assertAutoModeAvailable();
   const autoLabel = getAutoLabel();
   const labelName = options.worker ? workerLabelName(options.worker) : autoLabel;
   await ensureLabel(teamId, labelName);
@@ -173,7 +173,7 @@ export async function claimAutoIssue(
   issue: Issue,
   options: { runId: string; worker?: string }
 ): Promise<Issue> {
-  ensureLinearAutoMode();
+  assertAutoModeAvailable();
 
   const remotePause = await getCommandRemoteSyncPause();
   if (remotePause) {
