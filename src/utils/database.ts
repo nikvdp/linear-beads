@@ -11,6 +11,7 @@ import { ensureRepoMinCliVersion, getDbPath, getTeamKey } from "./config.js";
 import { requestJsonlExport } from "./jsonl-scheduler.js";
 import type {
   AgentIdentity,
+  AgentRun,
   Dependency,
   Issue,
   IssueComment,
@@ -446,6 +447,22 @@ function initSchema(db: Database, dbPath: string): void {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id TEXT PRIMARY KEY,
+      issue_id TEXT NOT NULL,
+      agent_name TEXT NOT NULL,
+      agent_handle TEXT,
+      pid INTEGER,
+      log_path TEXT,
+      workdir TEXT,
+      status TEXT NOT NULL DEFAULT 'running',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      ended_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
 
     CREATE TABLE IF NOT EXISTS media_items (
       media_id TEXT PRIMARY KEY,
@@ -3877,6 +3894,132 @@ export function getCurrentAgentHandle(): string | null {
       } | null
   );
   return row?.value || null;
+}
+
+type AgentRunRow = {
+  id: string;
+  issue_id: string;
+  agent_name: string;
+  agent_handle: string | null;
+  pid: number | null;
+  log_path: string | null;
+  workdir: string | null;
+  status: AgentRun["status"];
+  created_at: string;
+  updated_at: string;
+  ended_at: string | null;
+};
+
+function mapAgentRun(row: AgentRunRow): AgentRun {
+  return {
+    id: row.id,
+    issue_id: row.issue_id,
+    agent_name: row.agent_name,
+    agent_handle: row.agent_handle || undefined,
+    pid: row.pid ?? undefined,
+    log_path: row.log_path || undefined,
+    workdir: row.workdir || undefined,
+    status: row.status,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    ended_at: row.ended_at || undefined,
+  };
+}
+
+export function generateAgentRunId(): string {
+  const suffix = randomUUID().replaceAll("-", "").slice(0, 4);
+  return `run-${Date.now().toString(36)}-${suffix}`;
+}
+
+export function createAgentRun(input: {
+  id: string;
+  issue_id: string;
+  agent_name: string;
+  agent_handle?: string;
+  pid?: number;
+  log_path?: string;
+  workdir?: string;
+  status?: AgentRun["status"];
+}): AgentRun {
+  const db = getDatabase();
+  const now = nowIso();
+  runWithBusyRetry(() => {
+    db.run(
+      `
+      INSERT INTO agent_runs (
+        id, issue_id, agent_name, agent_handle, pid, log_path, workdir,
+        status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        input.id,
+        input.issue_id,
+        input.agent_name,
+        input.agent_handle || null,
+        input.pid ?? null,
+        input.log_path || null,
+        input.workdir || null,
+        input.status || "running",
+        now,
+        now,
+      ]
+    );
+  });
+
+  return getAgentRun(input.id)!;
+}
+
+export function updateAgentRun(
+  id: string,
+  updates: Partial<
+    Pick<AgentRun, "pid" | "status" | "ended_at" | "log_path" | "workdir">
+  >
+): void {
+  const entries = Object.entries(updates);
+  if (entries.length === 0) return;
+
+  const columns: Record<string, string> = {
+    pid: "pid",
+    status: "status",
+    ended_at: "ended_at",
+    log_path: "log_path",
+    workdir: "workdir",
+  };
+  const assignments = entries.map(([key]) => `${columns[key]} = ?`);
+  const values = entries.map(([, value]) => value ?? null);
+  const db = getDatabase();
+
+  runWithBusyRetry(() => {
+    db.run(
+      `UPDATE agent_runs SET ${assignments.join(", ")}, updated_at = ? WHERE id = ?`,
+      [...values, nowIso(), id]
+    );
+  });
+}
+
+export function getAgentRun(id: string): AgentRun | null {
+  const db = getDatabase();
+  const row = runWithBusyRetry(
+    () =>
+      db.query("SELECT * FROM agent_runs WHERE id = ? LIMIT 1").get(id) as AgentRunRow | null
+  );
+  return row ? mapAgentRun(row) : null;
+}
+
+export function listAgentRuns(options: { status?: AgentRun["status"] } = {}): AgentRun[] {
+  const db = getDatabase();
+  const rows = runWithBusyRetry(() =>
+    options.status
+      ? (db
+          .query("SELECT * FROM agent_runs WHERE status = ? ORDER BY created_at DESC")
+          .all(options.status) as AgentRunRow[])
+      : (db.query("SELECT * FROM agent_runs ORDER BY created_at DESC").all() as AgentRunRow[])
+  );
+  return rows.map(mapAgentRun);
+}
+
+export function getRunningAgentRuns(): AgentRun[] {
+  return listAgentRuns({ status: "running" });
 }
 
 export function createThreadIfNeeded(input: {

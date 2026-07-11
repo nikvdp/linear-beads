@@ -227,6 +227,20 @@ export interface AgentIdentity {
   updated_at: string;
 }
 
+export interface AgentRun {
+  id: string;
+  issue_id: string;
+  agent_name: string;
+  agent_handle?: string;
+  pid?: number;
+  log_path?: string;
+  workdir?: string;
+  status: "running" | "done" | "flagged";
+  created_at: string;
+  updated_at: string;
+  ended_at?: string;
+}
+
 export interface MailThread {
   id: string;
   work_item_ref?: string;
