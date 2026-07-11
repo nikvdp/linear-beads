@@ -50,6 +50,8 @@ describe("pid manager worker inspection", () => {
         "103 1 00:20:00 /opt/homebrew/bin/lb --export-worker",
         "104 1 00:45:00 /opt/homebrew/bin/lb --worker",
         "105 1 00:00:20 /opt/homebrew/bin/lb --worker",
+        "106 1 00:00:20 /opt/homebrew/bin/lb worker whoami --worker codex-a",
+        "107 1 00:00:20 /opt/homebrew/bin/lb auto next --worker codex-a",
       ].join("\n"),
       {
         currentRepoPath: currentRepo,
