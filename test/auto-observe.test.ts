@@ -9,6 +9,7 @@ import {
   observeAgentRun,
   resolveAutoRunPollMs,
   tailLogFile,
+  tailLogSnapshot,
 } from "../src/commands/auto.js";
 
 const tempDirs: string[] = [];
@@ -67,8 +68,12 @@ describe("auto run observation", () => {
     const dir = mkdtempSync(join(tmpdir(), "lb-auto-log-"));
     tempDirs.push(dir);
     const path = join(dir, "run.log");
-    writeFileSync(path, `${"padding\n".repeat(10000)}last-one\nlast-two\nlast-three\n`);
+    const content = `${"padding\n".repeat(10000)}last-one\nlast-two\nlast-three\n`;
+    writeFileSync(path, content);
 
     expect(tailLogFile(path, 2)).toBe("last-two\nlast-three");
+    const snapshot = tailLogSnapshot(path, 2);
+    expect(snapshot.text).toBe("last-two\nlast-three");
+    expect(snapshot.offset).toBe(Buffer.byteLength(content));
   });
 });
