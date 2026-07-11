@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import type { Issue } from "../types.js";
+import { closeSync, existsSync, fstatSync, openSync, readSync, statSync } from "fs";
+import type { AgentRun, Issue } from "../types.js";
 import {
   assertAutoModeAvailable,
   ClaimLostError,
@@ -8,9 +9,17 @@ import {
   fetchClaimableAutoIssues,
 } from "../utils/auto.js";
 import { getAutoLabel, getAutoPollIntervalMs } from "../utils/config.js";
-import { generateAgentRunId } from "../utils/database.js";
+import {
+  generateAgentRunId,
+  getAgentRun,
+  getDisplayId,
+  listAgentRuns,
+  resolveIssueId,
+  resolveIssueLocalId,
+} from "../utils/database.js";
 import { getTeamId } from "../utils/issue-backend.js";
 import { output, outputError } from "../utils/output.js";
+import { isProcessAlive } from "../utils/pid-manager.js";
 import { resolveWorkerName, workerLabelName } from "../utils/worker-identity.js";
 import { createRunWorktree, getRepoRoot } from "../utils/worktree.js";
 
@@ -19,6 +28,8 @@ const DEFAULT_WAIT_TIMEOUT_MS = 480000;
 export type AutoNextPayload =
   | { status: "no_work"; message: string }
   | { status: "claimed"; issue: Issue; workdir: string | null; instructions: string };
+
+export type ObservedAgentRun = AgentRun & { pid_alive: boolean; live_state: string };
 
 export function resolveAutoWaitTimeoutMs(
   cliValue?: string,
@@ -53,6 +64,93 @@ export function claimedPayload(issue: Issue, workdir: string | null): AutoNextPa
     workdir,
     instructions: `You have claimed this ticket. ${location}create a branch first, implement the ticket, commit, then \`lb close ${id} --reason ...\`.`,
   };
+}
+
+export function observeAgentRun(run: AgentRun): ObservedAgentRun {
+  const pidAlive = run.pid !== undefined && isProcessAlive(run.pid);
+  const liveState =
+    run.status === "running" && !pidAlive
+      ? "stale (pid dead — will be reaped by lb auto run)"
+      : run.status;
+  return { ...run, pid_alive: pidAlive, live_state: liveState };
+}
+
+export function formatRelativeTime(isoDate: string, now = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((now - new Date(isoDate).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+export function tailLogFile(path: string, lineCount: number): string {
+  const fd = openSync(path, "r");
+  try {
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, 64 * 1024);
+    const start = size - length;
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, start);
+    let lines = buffer.toString("utf-8").split(/\r?\n/);
+    if (start > 0) lines = lines.slice(1);
+    if (lines.at(-1) === "") lines.pop();
+    return lines.slice(-lineCount).join("\n");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function parseLogLineCount(value: string): number {
+  const count = Number(value);
+  if (!Number.isInteger(count) || count <= 0) {
+    throw new Error("--lines must be a positive integer.");
+  }
+  return count;
+}
+
+function resolveAgentRun(reference: string): AgentRun | null {
+  const exact = getAgentRun(reference);
+  if (exact) return exact;
+
+  const displayId = resolveIssueId(reference);
+  const localId = resolveIssueLocalId(displayId);
+  return (
+    listAgentRuns().find(
+      (run) => run.issue_id === localId || getDisplayId(run.issue_id) === displayId
+    ) || null
+  );
+}
+
+function formatRunTable(runs: ObservedAgentRun[]): string {
+  const rows = runs.map((run) => [
+    run.id,
+    getDisplayId(run.issue_id),
+    run.agent_name,
+    run.pid?.toString() || "-",
+    run.live_state,
+    formatRelativeTime(run.created_at),
+    run.log_path || "-",
+  ]);
+  const allRows = [["RUN", "TICKET", "AGENT", "PID", "STATE", "STARTED", "LOG"], ...rows];
+  const widths = allRows[0].map((_, index) =>
+    Math.max(...allRows.map((row) => row[index].length))
+  );
+  return allRows
+    .map((row) => row.map((cell, index) => cell.padEnd(widths[index])).join("  ").trimEnd())
+    .join("\n");
+}
+
+function readAppendedLog(path: string, offset: number): { text: string; offset: number } {
+  const fd = openSync(path, "r");
+  try {
+    const size = fstatSync(fd).size;
+    const start = size < offset ? 0 : offset;
+    const buffer = Buffer.alloc(size - start);
+    readSync(fd, buffer, 0, buffer.length, start);
+    return { text: buffer.toString("utf-8"), offset: size };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 async function tryClaim(
@@ -118,6 +216,64 @@ autoCommand
         }
         await Bun.sleep(nextAutoPollDelayMs(deadline, pollMs));
       }
+    } catch (error) {
+      outputError(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+  });
+
+autoCommand
+  .command("ps")
+  .description("Show daemon-spawned agent runs")
+  .option("--all", "Include completed runs")
+  .option("-j, --json", "Output as JSON")
+  .action((options) => {
+    try {
+      const stored = listAgentRuns().filter(
+        (run) => options.all || run.status === "running" || run.status === "flagged"
+      );
+      const runs = stored.map(observeAgentRun);
+      if (options.json) {
+        output(JSON.stringify(runs, null, 2));
+      } else if (runs.length === 0) {
+        output("No agent runs.");
+      } else {
+        output(formatRunTable(runs));
+      }
+    } catch (error) {
+      outputError(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+  });
+
+autoCommand
+  .command("logs")
+  .description("Show logs for an agent run or ticket")
+  .argument("<run-id-or-ticket-id>", "Run ID or ticket ID")
+  .option("-f, --follow", "Follow appended log output")
+  .option("-n, --lines <count>", "Number of trailing lines", "100")
+  .action(async (reference: string, options) => {
+    try {
+      const lineCount = parseLogLineCount(options.lines);
+      const run = resolveAgentRun(reference);
+      if (!run) throw new Error(`No agent run found for '${reference}'.`);
+      const path = run.log_path || "(no log path recorded)";
+      if (!run.log_path || !existsSync(run.log_path)) {
+        throw new Error(`Agent run log does not exist at ${path}.`);
+      }
+
+      const tail = tailLogFile(run.log_path, lineCount);
+      if (tail) process.stdout.write(`${tail}\n`);
+      if (!options.follow) return;
+
+      let offset = statSync(run.log_path).size;
+      while (run.pid !== undefined && isProcessAlive(run.pid)) {
+        await Bun.sleep(500);
+        const appended = readAppendedLog(run.log_path, offset);
+        offset = appended.offset;
+        if (appended.text) process.stdout.write(appended.text);
+      }
+      output(`Run ${run.id} is no longer active; stopped following its log.`);
     } catch (error) {
       outputError(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
