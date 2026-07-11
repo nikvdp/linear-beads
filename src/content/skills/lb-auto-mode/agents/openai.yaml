@@ -1,0 +1,3 @@
+display_name: LB Auto Mode
+short_description: Pull and complete auto-labeled lb work safely.
+default_prompt: Use $lb-auto-mode to claim and complete agent-ready lb work.

@@ -148,6 +148,46 @@ Run this manual end-to-end check to validate discovery, blocker filtering, synch
 bun run scripts/smoke-auto-mode.ts
 ```
 
+## Auto Mode
+
+Auto mode dispatches handoff-complete Linear tickets to local coding agents. A bare `auto` label enters the generic queue; `auto:<worker>` targets one named worker and removes that ticket from the generic pool.
+
+Configure it in `.lb/config.jsonc`:
+
+```jsonc
+{
+  "auto_label": "auto",
+  "auto_poll_interval_seconds": 30,
+  "auto_agent": "codex",
+  "auto_agents": {
+    "codex": "codex exec {prompt}",
+    "claude": "claude -p {prompt}"
+  },
+  "auto_prompt_template": "Use the lb-auto-mode skill for {ticket_id} in {workdir}. Create a branch first."
+}
+```
+
+Command templates may use `{prompt}`, `{workdir}`, `{log_file}`, and `{ticket_id}`. Prompt templates may use `{ticket_id}`, `{workdir}`, `{log_file}`, and `{run_id}`. Substituted values are shell-quoted.
+
+```bash
+# Agent-first: claim once, or wait and re-arm on a successful no_work response
+lb auto next
+lb auto next --wait --worker codex-a --worktree
+
+# Runner-first: poll and launch one detached agent at a time
+lb auto run --agent-name codex
+lb auto run --agent-name codex --worker codex-a
+
+# Observe daemon-spawned runs from another terminal
+lb auto ps
+lb auto ps --all --json
+lb auto logs <run-id-or-ticket-id> --follow --lines 100
+```
+
+Claims are confirmed synchronously in Linear: lb moves the ticket to in progress, assigns the current viewer, and posts a claim comment before reporting success. Ready filtering excludes blocked tickets, parents with open child work, and backlog descendants.
+
+Daemon runs work in `.worktrees/<run-id>` at a detached HEAD. The agent must create a branch first, commit its changes, and close the ticket itself. lb never deletes these worktrees because they hold branches for review.
+
 ## Offline & Local-Only Modes
 
 `lb` works offline and can run entirely without Linear.

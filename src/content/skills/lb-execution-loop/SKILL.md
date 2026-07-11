@@ -67,6 +67,8 @@ For each child issue, in order:
 
 Every actionable issue should be handoff-complete. Another agent should be able to start from the ticket without re-planning the whole change.
 
+Tickets destined for an `auto` or `auto:<worker>` label must meet this bar before labeling because no human may be available to answer follow-up questions. Apply auto labels only to executable children, never to parent or epic containers.
+
 ## Required structure
 
 Each implementation issue should include:
