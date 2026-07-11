@@ -283,7 +283,7 @@ function resolveRepoBindingVersionFromLayers(
  * Find git root directory
  * When in a worktree, returns the main repository root (not the worktree path)
  */
-function findGitRootDir(): string | null {
+export function findGitRootDir(): string | null {
   let dir = process.cwd();
   while (dir !== "/") {
     const gitPath = join(dir, ".git");
