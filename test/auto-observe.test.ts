@@ -4,8 +4,10 @@ import { tmpdir } from "os";
 import { join } from "path";
 import type { AgentRun } from "../src/types.js";
 import {
+  decideReapedRunStatus,
   formatRelativeTime,
   observeAgentRun,
+  resolveAutoRunPollMs,
   tailLogFile,
 } from "../src/commands/auto.js";
 
@@ -24,6 +26,22 @@ afterAll(() => {
 });
 
 describe("auto run observation", () => {
+  test("decides reap outcomes from liveness and ticket status", () => {
+    expect(decideReapedRunStatus(true, "in_progress")).toBe("running");
+    expect(decideReapedRunStatus(false, "closed")).toBe("done");
+    expect(decideReapedRunStatus(false, "cancelled")).toBe("done");
+    expect(decideReapedRunStatus(false, "open")).toBe("flagged");
+    expect(decideReapedRunStatus(false, "in_progress")).toBe("flagged");
+    expect(decideReapedRunStatus(false)).toBeNull();
+  });
+
+  test("parses daemon poll overrides", () => {
+    expect(resolveAutoRunPollMs("2.5")).toBe(2500);
+    expect(() => resolveAutoRunPollMs("0")).toThrow(
+      "--poll-interval-seconds must be a positive number."
+    );
+  });
+
   test("computes live and stale states without mutating stored rows", () => {
     const live = observeAgentRun({ ...baseRun, pid: process.pid });
     const stale = observeAgentRun({ ...baseRun, pid: 2147483647 });
