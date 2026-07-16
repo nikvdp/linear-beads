@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Recursive issue tree export**: `lb show <id> --tree` now emits the root issue, every recursive child, and complete descriptions in human or nested JSON output
+
 ## v9
 
 - **Claude Code support**: `lb onboard` now tells agents to use CLAUDE.md (Claude Code) or AGENTS.md (other tools)
