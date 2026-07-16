@@ -1143,6 +1143,72 @@ describe("Local-only Mode", () => {
       expect(result[0].children).toContain(child[0].id);
     });
 
+    test("should show recursive child trees with complete bodies", async () => {
+      type TreeNode = {
+        id: string;
+        title: string;
+        description?: string;
+        children: TreeNode[];
+      };
+
+      const root = await lbLocalJson<Array<{ id: string }>>(
+        "create",
+        "Show tree root",
+        "-d",
+        "Root body\n\n- root detail"
+      );
+      const child = await lbLocalJson<Array<{ id: string }>>(
+        "create",
+        "Show tree child",
+        "-d",
+        "Child body\n\n- child detail",
+        "--parent",
+        root[0].id
+      );
+      const grandchild = await lbLocalJson<Array<{ id: string }>>(
+        "create",
+        "Show tree grandchild",
+        "-d",
+        "Grandchild body",
+        "--parent",
+        child[0].id
+      );
+      const unrelated = await lbLocalJson<Array<{ id: string }>>(
+        "create",
+        "Show tree unrelated",
+        "-d",
+        "Unrelated body"
+      );
+
+      const human = await lbLocal("show", root[0].id, "--tree");
+      expect(human.exitCode).toBe(0);
+      expect(human.stdout).toContain(`└── ${child[0].id}: Show tree child`);
+      expect(human.stdout).toContain(`    └── ${grandchild[0].id}: Show tree grandchild`);
+      expect(human.stdout).toContain("Root body\n\n- root detail");
+      expect(human.stdout).toContain("Child body\n\n- child detail");
+      expect(human.stdout).toContain("Grandchild body");
+      expect(human.stdout).not.toContain(unrelated[0].id);
+      expect(human.stdout).not.toContain("Unrelated body");
+
+      const json = await lbLocalJson<TreeNode[]>("show", root[0].id, "--tree");
+      expect(json[0].id).toBe(root[0].id);
+      expect(json[0].description).toBe("Root body\n\n- root detail");
+      expect(json[0].children).toHaveLength(1);
+      expect(json[0].children[0].id).toBe(child[0].id);
+      expect(json[0].children[0].description).toBe("Child body\n\n- child detail");
+      expect(json[0].children[0].children).toHaveLength(1);
+      expect(json[0].children[0].children[0].id).toBe(grandchild[0].id);
+      expect(json[0].children[0].children[0].description).toBe("Grandchild body");
+    });
+
+    test("should reject tree output combined with body-only output", async () => {
+      const created = await lbLocalJson<Array<{ id: string }>>("create", "Show tree conflict");
+      const result = await lbLocal("show", created[0].id, "--tree", "--body");
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Cannot specify both --tree and --body");
+    });
+
     test("should resolve compact IDs without dash", async () => {
       seedCachedIssue("LIN-4321", "Compact ID test");
       const result = await lbLocalJson<Array<{ id: string; title: string }>>("show", "LIN4321");
