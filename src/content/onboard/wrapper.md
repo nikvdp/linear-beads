@@ -27,7 +27,7 @@ Install packaged skills instead of copy/paste:
 lb skill list
 lb skill install lb-basic-usage --codex
 lb skill install lb-execution-loop --claude
-lb skill install --all --pi
+lb skill install all --pi
 ```
 
 Persistence options:
