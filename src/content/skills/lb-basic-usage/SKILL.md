@@ -1,6 +1,6 @@
 ---
 name: lb-basic-usage
-description: Use lb as the primary task tracker in Linear-backed repos. Use when claiming work, creating dependencies/subissues, updating status, closing work, or avoiding ephemeral built-in todo tools.
+description: Use lb as the primary task tracker in Linear-backed repos. Use when claiming work, reading complete parent/child context, creating dependencies/subissues, updating status, closing work, or avoiding ephemeral built-in todo tools.
 ---
 
 # lb Basic Usage
@@ -23,6 +23,15 @@ Use `lb` as the source of truth for task tracking in this repo.
 - Link discovered work with `--discovered-from`.
 - Use `lb dep tree <id>` to verify order. On parent issues, check the
   `Children (execution order)` section.
+
+## Reading issue hierarchies
+
+- Run `lb show <parent> --tree` when parent-level planning, review, or handoff needs
+  the parent and every recursive child's full body.
+- Add `--json` for nested machine-readable output and `--sync` when the cache must
+  be refreshed first.
+- Use `lb dep tree <parent>` separately to inspect blockers and execution order.
+- Skip the full-tree read for ordinary leaf tickets.
 
 ## Multiline descriptions
 
@@ -51,4 +60,4 @@ Use the same pattern for other long body-like flags:
 
 ## Useful commands
 
-`lb list`, `lb ready`, `lb blocked`, `lb show <id>`, `lb create`, `lb update`, `lb close`, `lb dep add`.
+`lb list`, `lb ready`, `lb blocked`, `lb show <id>`, `lb show <id> --tree`, `lb create`, `lb update`, `lb close`, `lb dep add`, `lb dep tree`.

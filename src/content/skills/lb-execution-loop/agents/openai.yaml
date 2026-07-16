@@ -1,3 +1,3 @@
 display_name: LB Execution Loop
-short_description: Run claim-code-commit-close issue execution with blockers.
-default_prompt: Use this skill to structure and execute lb work through ordered parent/child issues.
+short_description: Run ordered lb execution with blockers and complete parent context.
+default_prompt: Use this skill to load complete parent trees, structure ordered child work, and execute each issue through claim, code, commit, and close.

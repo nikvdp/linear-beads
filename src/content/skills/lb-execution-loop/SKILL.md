@@ -1,6 +1,6 @@
 ---
 name: lb-execution-loop
-description: Plan and execute Linear/lb work with a strict claim-code-commit-close loop. Use when splitting work into parent/children with blockers and shipping each child in order.
+description: Plan and execute Linear/lb work with a strict claim-code-commit-close loop. Use when reading complete parent trees, splitting work into parent/children with blockers, or shipping each child in order.
 ---
 
 # LB Execution Loop
@@ -26,6 +26,17 @@ Before writing implementation tickets, do enough code reading to make the plan r
 - Use blockers to tell consuming agents what can run now and what must wait.
 
 Do not create vague implementation tickets that say only "investigate", "fix", or "wire this up" unless the ticket is explicitly a research task.
+
+## Read complete parent context
+
+Before planning, reviewing, or handing off work from a parent issue:
+
+1. Run `lb show <parent> --tree` to load the parent and every recursive child's
+   full body.
+2. Add `--json` when a nested machine-readable tree is needed.
+3. Run `lb dep tree <parent>` separately to verify blocker and execution order.
+
+Skip the full-tree read when executing an ordinary leaf ticket.
 
 ## Hierarchy and encapsulation
 
