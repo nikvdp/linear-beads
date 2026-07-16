@@ -6,6 +6,7 @@ import { Command } from "commander";
 import type { Issue } from "../types.js";
 import {
   getCachedIssue,
+  getChildIds,
   getIssueComments,
   getDependencies,
   getBlockedIssueIds,
@@ -36,6 +37,8 @@ import {
   getCommandRemoteSyncPause,
   recordRemoteSyncPause,
 } from "../utils/remote-sync-state.js";
+import { smartSync } from "../utils/sync.js";
+import { runWithSyncProgress } from "./sync.js";
 
 function isHiddenMailCommentBody(body: string): boolean {
   return body.includes("<!-- lb-mail-envelope:v1") || body.includes("<!-- lb-mail-directory:v1");
@@ -74,11 +77,132 @@ export function shouldUseCachedIssueImmediatelyForShow(options: {
   return !options.forceSync && options.hasCachedIssue && !isLocalId(options.resolvedId);
 }
 
+interface IssueTreeNode {
+  issue: Issue;
+  children: IssueTreeNode[];
+}
+
+interface IssueTreeJson extends Issue {
+  children: IssueTreeJson[];
+}
+
+function compareTreeIssues(a: Issue, b: Issue): number {
+  const createdOrder = a.created_at.localeCompare(b.created_at);
+  if (createdOrder !== 0) {
+    return createdOrder;
+  }
+  return getDisplayId(a.id).localeCompare(getDisplayId(b.id), undefined, { numeric: true });
+}
+
+function buildIssueTree(issueId: string, ancestors: Set<string> = new Set()): IssueTreeNode {
+  const localId = resolveIssueLocalId(issueId);
+  if (ancestors.has(localId)) {
+    throw new Error(
+      `Cannot show issue tree: circular parent-child relationship at ${getDisplayId(localId)}`
+    );
+  }
+
+  const issue = getCachedIssue(localId);
+  if (!issue) {
+    throw new Error(
+      `Issue tree is incomplete: ${getDisplayId(localId)} is referenced but not cached. Run \`lb sync\` and retry.`
+    );
+  }
+
+  const nextAncestors = new Set(ancestors);
+  nextAncestors.add(localId);
+  const childIssues = [...new Set(getChildIds(localId))]
+    .map((childId) => {
+      const child = getCachedIssue(childId);
+      if (!child) {
+        throw new Error(
+          `Issue tree is incomplete: ${getDisplayId(childId)} is referenced but not cached. Run \`lb sync\` and retry.`
+        );
+      }
+      return child;
+    })
+    .sort(compareTreeIssues);
+
+  return {
+    issue,
+    children: childIssues.map((child) => buildIssueTree(child.id, nextAncestors)),
+  };
+}
+
+function issueTreeToJson(node: IssueTreeNode): IssueTreeJson {
+  return {
+    ...node.issue,
+    description: normalizeIssueDescriptionForOutput(
+      node.issue.description,
+      node.issue.local_id || node.issue.id
+    ),
+    children: node.children.map(issueTreeToJson),
+  };
+}
+
+function formatIssueTreeOutline(
+  node: IssueTreeNode,
+  prefix: string = "",
+  isLast: boolean = true,
+  isRoot: boolean = true
+): string[] {
+  const connector = isRoot ? "" : isLast ? "└── " : "├── ";
+  const issue = node.issue;
+  const lines = [
+    `${prefix}${connector}${getDisplayId(issue.id)}: ${issue.title} [P${issue.priority}] (${issue.status})`,
+  ];
+  const childPrefix = isRoot ? "" : `${prefix}${isLast ? "    " : "│   "}`;
+
+  node.children.forEach((child, index) => {
+    lines.push(
+      ...formatIssueTreeOutline(child, childPrefix, index === node.children.length - 1, false)
+    );
+  });
+  return lines;
+}
+
+function formatIssueTreeHuman(
+  root: IssueTreeNode,
+  style: "classic" | "beads",
+  blockedIds: Set<string>
+): string {
+  const separator = "─".repeat(80);
+  const nodes: IssueTreeNode[] = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    nodes.push(node);
+    for (let index = node.children.length - 1; index >= 0; index -= 1) {
+      pending.push(node.children[index]);
+    }
+  }
+  const details = nodes.map(({ issue }) =>
+    style === "beads"
+      ? formatIssueHumanBeads(issue, getDisplayId(issue.id), {
+          isBlocked: blockedIds.has(issue.id),
+          includeMetadata: true,
+        })
+      : formatIssueHuman(issue, getDisplayId(issue.id))
+  );
+
+  return [
+    "Tree:",
+    ...formatIssueTreeOutline(root),
+    "",
+    separator,
+    "",
+    "Issue bodies:",
+    "",
+    details.join(`\n\n${separator}\n\n`),
+  ].join("\n");
+}
+
 export const showCommand = new Command("show")
   .description("Show issue details")
   .argument("<id>", "Issue ID (e.g., TEAM-123 or 123)")
   .option("-j, --json", "Output as JSON")
   .option("--body", "Output only the normalized issue description body")
+  .option("--tree", "Show this issue and all recursive children, including descriptions")
   .option("--sync", "Force sync before showing")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
@@ -86,6 +210,10 @@ export const showCommand = new Command("show")
     try {
       if (options.json && options.body) {
         outputError("Cannot specify both --json and --body");
+        process.exit(1);
+      }
+      if (options.tree && options.body) {
+        outputError("Cannot specify both --tree and --body");
         process.exit(1);
       }
 
@@ -97,9 +225,30 @@ export const showCommand = new Command("show")
         process.exit(1);
       }
 
-      const resolvedId = resolveIssueId(id);
-      let issue: Issue | null | undefined = getCachedIssue(resolvedId);
+      let resolvedId = resolveIssueId(id);
       const localOnly = isLocalOnly();
+      if (options.tree && options.sync && !localOnly) {
+        const activePause = await getCommandRemoteSyncPause();
+        if (activePause) {
+          if (!options.json) {
+            outputError(formatRemoteSyncPauseNotice(activePause));
+          }
+        } else {
+          try {
+            await runWithSyncProgress(() => smartSync(options.team), {
+              json: Boolean(options.json),
+            });
+          } catch (error) {
+            const pause = recordRemoteSyncPause(error);
+            if (pause && !options.json) {
+              outputError(formatRemoteSyncPauseNotice(pause));
+            }
+          }
+        }
+        resolvedId = resolveIssueId(id);
+      }
+
+      let issue: Issue | null | undefined = getCachedIssue(resolvedId);
       let remotePause = null;
       let remoteDisabled = false;
       let skipRemote = localOnly || isLocalId(resolvedId);
@@ -119,7 +268,7 @@ export const showCommand = new Command("show")
 
       if (
         shouldPreferRemoteIssueForShow({
-          forceSync: Boolean(options.sync),
+          forceSync: Boolean(options.sync && !options.tree),
           skipRemote,
           resolvedId,
           hasCachedIssue: Boolean(issue),
@@ -165,6 +314,7 @@ export const showCommand = new Command("show")
 
       if (
         (options.sync || fetchedRemoteIssue) &&
+        !options.tree &&
         !options.body &&
         !skipRemote &&
         !isLocalId(issue.id)
@@ -186,6 +336,17 @@ export const showCommand = new Command("show")
 
       if (options.body) {
         output(normalizedDescription ?? "");
+        return;
+      }
+
+      if (options.tree) {
+        const tree = buildIssueTree(issue.id);
+        if (options.json) {
+          output(JSON.stringify([issueTreeToJson(tree)], null, 2));
+        } else {
+          const style = getHumanOutputStyle(requestedStyle);
+          output(formatIssueTreeHuman(tree, style, getBlockedIssueIds()));
+        }
         return;
       }
 
