@@ -22,6 +22,11 @@ lb create "Step 2: ..." --parent LIN-XXX --blocked-by LIN-YYY
 
 Prefer one parent issue for the overall goal and child issues for independently executable implementation units. Use blockers to encode order so another agent can run `lb ready` and see the intended next step. Run `lb dep tree <parent>` and check `Children (execution order)` before claiming child work.
 
+For parent-level planning, review, or handoff, run `lb show <parent> --tree` to load
+the parent plus every recursive child's full body. Add `--json` for nested machine
+output. Keep `lb dep tree <parent>` for blocker and execution order; skip the
+full-tree read for ordinary leaf tickets.
+
 Write implementation tickets with enough detail for handoff:
 - exact behavior change and non-goals
 - likely files, functions, or commands to edit

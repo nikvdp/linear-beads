@@ -142,6 +142,19 @@ Use blockers to encode execution order:
 - another agent should be able to run `lb ready` and see the intended next step
 - run `lb dep tree <parent>` and check `Children (execution order)` before claiming child work
 
+Read complete hierarchy context for parent-level planning, review, or handoff:
+
+```bash
+lb show LIN-PARENT --tree          # Parent + every recursive child with full bodies
+lb show LIN-PARENT --tree --json   # Nested machine-readable tree
+lb show LIN-PARENT --tree > handoff.txt
+```
+
+`lb show --tree` is the content view: it follows only parent-child links and includes
+complete descriptions. `lb dep tree` is the execution view: it shows blocker and
+dependency order. Use both when working from a parent; skip the full-tree read for
+ordinary leaf tickets.
+
 Write implementation tickets so another agent can execute them without re-planning the whole change. Good tickets should include:
 - why the work exists and the exact behavior change
 - non-goals so scope stays bounded
@@ -171,6 +184,7 @@ lb list --status open      # Filter by status
 lb ready                   # Unblocked issues ready to work
 lb blocked                 # Blocked issues (shows what's blocking them)
 lb show LIN-XXX            # Full details with all relationships
+lb show LIN-XXX --tree     # Parent + recursive children with full bodies
 ```
 
 ### One-Off Scope Overrides (Non-Repo Work)
@@ -197,6 +211,7 @@ Precedence: CLI temp flags > env temp vars > config > git heuristic.
 | `lb ready` | Show unblocked issues |
 | `lb blocked` | Show blocked issues with blockers |
 | `lb show ID` | Full issue details + relationships |
+| `lb show ID --tree` | Full parent/child tree with bodies |
 | `lb create "Title" -d "..."` | Create issue |
 | `lb create "Title" --parent ID` | Create subtask |
 | `lb create "Title" --blocked-by ID` | Create blocked issue |
@@ -213,7 +228,7 @@ Precedence: CLI temp flags > env temp vars > config > git heuristic.
    - If you need subtasks: `lb create "..." --parent LIN-XXX`
    - There is NO exception to this rule
 2. **Always `lb sync` then `lb ready`** before asking what to work on
-3. **Always `lb show`** to read the full description before starting
+3. **Always `lb show`** to read the full description before starting; use `lb show <parent> --tree` for parent-level work, review, or handoff
 4. **Link discovered work** with `--discovered-from` to maintain context graph
 5. **Write handoff-ready tickets** with concrete files, edit points, and validation, not vague summaries
 6. **Close with reasons** explaining what was done

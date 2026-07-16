@@ -24,6 +24,12 @@ lb create "Step 1: Do X" --parent LIN-XXX -d "Details..."
 lb create "Step 2: Do Y" --parent LIN-XXX -d "Details..."
 ```
 
+When working from a parent or umbrella issue, run `lb show <parent> --tree` to load
+the parent plus every recursive child's full body. Use `lb dep tree <parent>`
+separately to inspect blocker and execution order. Add `--json` for nested machine
+output, or redirect the human output for a handoff. Skip the full-tree read for
+ordinary leaf tickets.
+
 ### During Work
 
 ```bash
@@ -48,6 +54,7 @@ lb close LIN-XXX --reason "Brief summary of what was done"
 | `lb ready`                                    | Show unblocked issues you can work on |
 | `lb list`                                     | Show all issues                       |
 | `lb show LIN-XXX`                             | Full issue details                    |
+| `lb show LIN-XXX --tree`                      | Full parent/child tree with bodies    |
 | `lb update LIN-XXX --status in_progress`      | Claim work                            |
 | `lb close LIN-XXX --reason "why"`             | Complete work                         |
 | `lb create "Title" --parent LIN-XXX -d "..."` | Create subtask                        |
@@ -56,7 +63,7 @@ lb close LIN-XXX --reason "Brief summary of what was done"
 
 1. **NEVER use TodoWrite** - use `lb create` for subtasks instead
 2. **Always `lb sync` and `lb ready`** before asking what to work on
-3. **Always `lb show`** to read the full description before starting
+3. **Always `lb show`** to read the full description before starting; use `lb show <parent> --tree` for parent-level work or handoff
 4. **Always `lb update --status in_progress`** before starting work
 5. **Always include descriptions** with context for handoff
 6. **Close issues with reasons** explaining what was done
