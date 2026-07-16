@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Recursive issue tree export**: `lb show <id> --tree` now emits the root issue, every recursive child, and complete descriptions in human or nested JSON output
+- **Recursive tree guidance**: Onboarding and packaged skills now distinguish full `lb show --tree` context from `lb dep tree` ordering, with a working install-all example
 
 ## v9
 
