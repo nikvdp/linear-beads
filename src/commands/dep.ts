@@ -294,7 +294,7 @@ function filterTreeIssueIds(issueIds: string[], includeClosed: boolean): string[
   }
   return resolvedIds.filter((issueId) => {
     const issue = getCachedIssue(issueId);
-    return !issue || !isTerminalStatus(issue.status);
+    return issue !== null && !isTerminalStatus(issue.status);
   });
 }
 
