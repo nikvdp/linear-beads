@@ -39,7 +39,7 @@ import {
   isLocalOnly,
   parseHumanOutputStyle,
 } from "../utils/config.js";
-import { isReadyStatus, isTerminalStatus, type Dependency } from "../types.js";
+import { isReadyStatus, isTerminalStatus, type Dependency, type Issue } from "../types.js";
 import {
   formatRemoteSyncPauseNotice,
   getCommandRemoteSyncPause,
@@ -133,6 +133,13 @@ interface TreeRelationSection {
   recursive: boolean;
 }
 
+const CLOSED_HISTORY_LIMIT = 10;
+const CLOSED_HISTORY_HINT = "Use --include-closed to see all closed and cancelled issues.";
+
+interface TreeBuildContext {
+  closedIssueIds: Set<string>;
+}
+
 interface TreeIssueJson {
   id: string;
   title: string;
@@ -141,6 +148,7 @@ interface TreeIssueJson {
   ready: boolean;
   blocked: boolean;
   circular?: boolean;
+  closedHistory?: TreeClosedHistoryJson;
   sections?: TreeSectionJson[];
 }
 
@@ -149,6 +157,14 @@ interface TreeSectionJson {
   title: string;
   count: number;
   recursive: boolean;
+  issues: TreeIssueJson[];
+}
+
+interface TreeClosedHistoryJson {
+  total: number;
+  shown: number;
+  truncated: boolean;
+  hint: string;
   issues: TreeIssueJson[];
 }
 
@@ -287,48 +303,95 @@ function uniqueIssueIds(ids: string[]): string[] {
   return [...new Set(ids.map((id) => resolveIssueLocalId(id)))];
 }
 
-function filterTreeIssueIds(issueIds: string[], includeClosed: boolean): string[] {
+function filterTreeIssueIds(
+  issueIds: string[],
+  includeClosed: boolean,
+  context: TreeBuildContext
+): string[] {
   const resolvedIds = uniqueIssueIds(issueIds);
   if (includeClosed) {
     return resolvedIds;
   }
   return resolvedIds.filter((issueId) => {
     const issue = getCachedIssue(issueId);
-    return issue !== null && !isTerminalStatus(issue.status);
+    if (!issue) {
+      return false;
+    }
+    if (isTerminalStatus(issue.status)) {
+      context.closedIssueIds.add(issueId);
+      return false;
+    }
+    return true;
   });
+}
+
+interface ClosedHistoryResult {
+  total: number;
+  issueIds: string[];
+}
+
+function getClosedHistory(context: TreeBuildContext): ClosedHistoryResult {
+  const entries: Array<{ issueId: string; issue: Issue }> = [];
+  for (const issueId of context.closedIssueIds) {
+    const issue = getCachedIssue(issueId);
+    if (issue && isTerminalStatus(issue.status)) {
+      entries.push({ issueId, issue });
+    }
+  }
+
+  entries.sort((a, b) => {
+    const updatedA = Date.parse(a.issue.updated_at) || 0;
+    const updatedB = Date.parse(b.issue.updated_at) || 0;
+    if (updatedA !== updatedB) {
+      return updatedB - updatedA;
+    }
+    return getDisplayId(b.issueId).localeCompare(getDisplayId(a.issueId), undefined, {
+      numeric: true,
+    });
+  });
+
+  return {
+    total: entries.length,
+    issueIds: entries.slice(0, CLOSED_HISTORY_LIMIT).map((entry) => entry.issueId),
+  };
 }
 
 function getTreeRelationSections(
   issueId: string,
   backlogDescendantIds: Set<string>,
   includeParent: boolean,
+  context: TreeBuildContext,
   includeClosed: boolean = false
 ): TreeRelationSection[] {
   const { outgoing, incoming } = getAllDependencies(issueId);
   const parent = includeParent
     ? filterTreeIssueIds(
         outgoing.filter((dep) => dep.type === "parent-child").map((dep) => dep.depends_on_id),
-        includeClosed
+        includeClosed,
+        context
       )
     : [];
   const children = sortIssueIdsForExecution(
     filterTreeIssueIds(
       incoming.filter((dep) => dep.type === "parent-child").map((dep) => dep.issue_id),
-      includeClosed
+      includeClosed,
+      context
     ),
     backlogDescendantIds
   );
   const blockedBy = sortIssueIdsForExecution(
     filterTreeIssueIds(
       incoming.filter((dep) => dep.type === "blocks").map((dep) => dep.issue_id),
-      includeClosed
+      includeClosed,
+      context
     ),
     backlogDescendantIds
   );
   const blocks = sortIssueIdsForExecution(
     filterTreeIssueIds(
       outgoing.filter((dep) => dep.type === "blocks").map((dep) => dep.depends_on_id),
-      includeClosed
+      includeClosed,
+      context
     ),
     backlogDescendantIds
   );
@@ -336,7 +399,8 @@ function getTreeRelationSections(
     [...outgoing, ...incoming]
       .filter((dep) => dep.type === "related")
       .map((dep) => getRelatedCounterpartId(dep, issueId)),
-    includeClosed
+    includeClosed,
+    context
   ).sort((a, b) => compareTreeIssueIds(a, b, backlogDescendantIds));
 
   return [
@@ -396,6 +460,7 @@ function buildTreeJson(
   issueId: string,
   blockedIds: Set<string>,
   backlogDescendantIds: Set<string>,
+  context: TreeBuildContext,
   includeParent: boolean = true,
   includeClosed: boolean = false,
   visited: Set<string> = new Set()
@@ -411,6 +476,7 @@ function buildTreeJson(
     issueId,
     backlogDescendantIds,
     includeParent,
+    context,
     includeClosed
   ).map(
     (section): TreeSectionJson => ({
@@ -424,6 +490,7 @@ function buildTreeJson(
               relatedIssueId,
               blockedIds,
               backlogDescendantIds,
+              context,
               false,
               includeClosed,
               nextVisited
@@ -447,6 +514,7 @@ function printTree(
   style: "classic" | "beads",
   blockedIds: Set<string>,
   backlogDescendantIds: Set<string>,
+  context: TreeBuildContext,
   includeClosed: boolean = false,
   prefix: string = "",
   isLast: boolean = true,
@@ -474,6 +542,7 @@ function printTree(
     issueId,
     backlogDescendantIds,
     prefix === "",
+    context,
     includeClosed
   );
   const sectionPrefix = treeChildPrefix(prefix, isLast);
@@ -493,6 +562,7 @@ function printTree(
           style,
           blockedIds,
           backlogDescendantIds,
+          context,
           includeClosed,
           relationPrefix,
           isLastIssue,
@@ -512,6 +582,67 @@ function printTree(
       }
     });
   });
+}
+
+function formatClosedHistoryIssueLine(
+  issueId: string,
+  style: "classic" | "beads",
+  isLast: boolean
+): string {
+  const issue = getCachedIssue(issueId);
+  const connector = isLast ? "└── " : "├── ";
+  const displayId = getDisplayId(issueId);
+  if (!issue) {
+    return `${connector}${displayId}: Unknown`;
+  }
+
+  if (style === "beads") {
+    return formatIssueSummaryBeads(
+      {
+        id: issueId,
+        display_id: displayId,
+        title: issue.title,
+        status: issue.status,
+        priority: typeof issue.priority === "number" ? issue.priority : 2,
+        is_blocked: false,
+        sync_status: issue.sync_status,
+      },
+      connector
+    );
+  }
+
+  return `${connector}${displayId}: ${issue.title} [P${issue.priority ?? "?"}] (${issue.status})`;
+}
+
+function printClosedHistory(history: ClosedHistoryResult, style: "classic" | "beads"): void {
+  if (history.issueIds.length === 0) {
+    return;
+  }
+
+  const count =
+    history.total > history.issueIds.length
+      ? `${history.issueIds.length} of ${history.total}`
+      : String(history.issueIds.length);
+  output(`Closed history (${count}; use --include-closed to see all):`);
+  history.issueIds.forEach((issueId, index) => {
+    output(formatClosedHistoryIssueLine(issueId, style, index === history.issueIds.length - 1));
+  });
+}
+
+function formatClosedHistoryJson(
+  history: ClosedHistoryResult,
+  blockedIds: Set<string>,
+  backlogDescendantIds: Set<string>
+): TreeClosedHistoryJson {
+  return {
+    total: history.total,
+    shown: history.issueIds.length,
+    truncated: history.total > history.issueIds.length,
+    hint: CLOSED_HISTORY_HINT,
+    issues: history.issueIds.map((issueId) =>
+      formatTreeIssueJson(issueId, blockedIds, backlogDescendantIds)
+    ),
+  };
 }
 
 // Main dep command
@@ -1124,7 +1255,7 @@ const treeCommand = new Command("tree")
   .argument("<issue>", "Issue ID")
   .option("-j, --json", "Output as JSON")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
-  .option("--include-closed", "Include closed and cancelled blockers")
+  .option("--include-closed", "Include closed and cancelled issues")
   .action(async (issueId: string, options) => {
     try {
       const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
@@ -1148,27 +1279,44 @@ const treeCommand = new Command("tree")
       const style = getHumanOutputStyle(requestedStyle);
       const blockedIds = getBlockedIssueIds();
       const backlogDescendantIds = getBacklogDescendantIssueIds();
+      const treeContext: TreeBuildContext = { closedIssueIds: new Set() };
       if (options.json) {
-        output(
-          JSON.stringify(
-            buildTreeJson(
-              resolvedId,
-              blockedIds,
-              backlogDescendantIds,
-              true,
-              options.includeClosed
-            ),
-            null,
-            2
-          )
+        const tree = buildTreeJson(
+          resolvedId,
+          blockedIds,
+          backlogDescendantIds,
+          treeContext,
+          true,
+          options.includeClosed
         );
+        const closedHistory = getClosedHistory(treeContext);
+        if (closedHistory.issueIds.length > 0) {
+          tree.closedHistory = formatClosedHistoryJson(
+            closedHistory,
+            blockedIds,
+            backlogDescendantIds
+          );
+        }
+        output(JSON.stringify(tree, null, 2));
         return;
       }
 
       if (style === "classic") {
         output(`\n🌲 Dependency tree for ${getDisplayId(resolvedId)}:\n`);
       }
-      printTree(resolvedId, style, blockedIds, backlogDescendantIds, options.includeClosed);
+      printTree(
+        resolvedId,
+        style,
+        blockedIds,
+        backlogDescendantIds,
+        treeContext,
+        options.includeClosed
+      );
+      const closedHistory = getClosedHistory(treeContext);
+      if (closedHistory.issueIds.length > 0) {
+        output("");
+        printClosedHistory(closedHistory, style);
+      }
       output("");
     } catch (error) {
       outputError(error instanceof Error ? error.message : String(error));
