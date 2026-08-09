@@ -287,6 +287,17 @@ function uniqueIssueIds(ids: string[]): string[] {
   return [...new Set(ids.map((id) => resolveIssueLocalId(id)))];
 }
 
+function filterTreeIssueIds(issueIds: string[], includeClosed: boolean): string[] {
+  const resolvedIds = uniqueIssueIds(issueIds);
+  if (includeClosed) {
+    return resolvedIds;
+  }
+  return resolvedIds.filter((issueId) => {
+    const issue = getCachedIssue(issueId);
+    return !issue || !isTerminalStatus(issue.status);
+  });
+}
+
 function getTreeRelationSections(
   issueId: string,
   backlogDescendantIds: Set<string>,
@@ -295,32 +306,37 @@ function getTreeRelationSections(
 ): TreeRelationSection[] {
   const { outgoing, incoming } = getAllDependencies(issueId);
   const parent = includeParent
-    ? uniqueIssueIds(
-        outgoing.filter((dep) => dep.type === "parent-child").map((dep) => dep.depends_on_id)
+    ? filterTreeIssueIds(
+        outgoing.filter((dep) => dep.type === "parent-child").map((dep) => dep.depends_on_id),
+        includeClosed
       )
     : [];
   const children = sortIssueIdsForExecution(
-    incoming.filter((dep) => dep.type === "parent-child").map((dep) => dep.issue_id),
+    filterTreeIssueIds(
+      incoming.filter((dep) => dep.type === "parent-child").map((dep) => dep.issue_id),
+      includeClosed
+    ),
     backlogDescendantIds
   );
-  const allBlockedBy = incoming.filter((dep) => dep.type === "blocks").map((dep) => dep.issue_id);
   const blockedBy = sortIssueIdsForExecution(
-    includeClosed
-      ? allBlockedBy
-      : allBlockedBy.filter((blockerId) => {
-          const blockerIssue = getCachedIssue(blockerId);
-          return !blockerIssue || !isTerminalStatus(blockerIssue.status);
-        }),
+    filterTreeIssueIds(
+      incoming.filter((dep) => dep.type === "blocks").map((dep) => dep.issue_id),
+      includeClosed
+    ),
     backlogDescendantIds
   );
   const blocks = sortIssueIdsForExecution(
-    outgoing.filter((dep) => dep.type === "blocks").map((dep) => dep.depends_on_id),
+    filterTreeIssueIds(
+      outgoing.filter((dep) => dep.type === "blocks").map((dep) => dep.depends_on_id),
+      includeClosed
+    ),
     backlogDescendantIds
   );
-  const related = uniqueIssueIds(
+  const related = filterTreeIssueIds(
     [...outgoing, ...incoming]
       .filter((dep) => dep.type === "related")
-      .map((dep) => getRelatedCounterpartId(dep, issueId))
+      .map((dep) => getRelatedCounterpartId(dep, issueId)),
+    includeClosed
   ).sort((a, b) => compareTreeIssueIds(a, b, backlogDescendantIds));
 
   return [
