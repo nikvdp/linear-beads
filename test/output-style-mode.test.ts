@@ -295,16 +295,40 @@ describe("human output style modes", () => {
     const closedBlocker = await createIssue(repoDir, "Closed blocker");
     const cancelledBlocker = await createIssue(repoDir, "Cancelled blocker");
     const openBlocker = await createIssue(repoDir, "Open blocker");
+    const closedChild = await createIssue(repoDir, "Closed child", ["--parent", root.id]);
+    const cancelledTarget = await createIssue(repoDir, "Cancelled target");
+    const closedRelated = await createIssue(repoDir, "Closed related");
 
     for (const blocker of [closedBlocker, cancelledBlocker, openBlocker]) {
       const dependency = await runCli(repoDir, ["dep", "add", root.id, "--blocked-by", blocker.id]);
       expect(dependency.exitCode).toBe(0);
     }
 
+    const blocks = await runCli(repoDir, ["dep", "add", root.id, "--blocks", cancelledTarget.id]);
+    expect(blocks.exitCode).toBe(0);
+    const related = await runCli(repoDir, ["dep", "add", root.id, "--related", closedRelated.id]);
+    expect(related.exitCode).toBe(0);
+
     const closed = await runCli(repoDir, ["update", closedBlocker.id, "--status", "closed"]);
     expect(closed.exitCode).toBe(0);
     const cancelled = await runCli(repoDir, ["cancel", cancelledBlocker.id]);
     expect(cancelled.exitCode).toBe(0);
+    const closedChildResult = await runCli(repoDir, [
+      "update",
+      closedChild.id,
+      "--status",
+      "closed",
+    ]);
+    expect(closedChildResult.exitCode).toBe(0);
+    const cancelledTargetResult = await runCli(repoDir, ["cancel", cancelledTarget.id]);
+    expect(cancelledTargetResult.exitCode).toBe(0);
+    const closedRelatedResult = await runCli(repoDir, [
+      "update",
+      closedRelated.id,
+      "--status",
+      "closed",
+    ]);
+    expect(closedRelatedResult.exitCode).toBe(0);
 
     const defaultTree = await runCli(repoDir, ["dep", "tree", root.id, "--style", "beads"]);
     expect(defaultTree.exitCode).toBe(0);
@@ -312,6 +336,9 @@ describe("human output style modes", () => {
     expect(defaultTree.stdout).toContain(openBlocker.id);
     expect(defaultTree.stdout).not.toContain(closedBlocker.id);
     expect(defaultTree.stdout).not.toContain(cancelledBlocker.id);
+    expect(defaultTree.stdout).not.toContain(closedChild.id);
+    expect(defaultTree.stdout).not.toContain(cancelledTarget.id);
+    expect(defaultTree.stdout).not.toContain(closedRelated.id);
 
     const defaultJson = await runCli(repoDir, ["dep", "tree", root.id, "--json"]);
     expect(defaultJson.exitCode).toBe(0);
@@ -323,6 +350,7 @@ describe("human output style modes", () => {
     );
     expect(defaultBlockedBy?.count).toBe(1);
     expect(defaultBlockedBy?.issues.map((issue) => issue.id)).toEqual([openBlocker.id]);
+    expect(defaultPayload.sections?.map((section) => section.key)).toEqual(["blockedBy"]);
 
     const fullTree = await runCli(repoDir, [
       "dep",
@@ -337,6 +365,9 @@ describe("human output style modes", () => {
     expect(fullTree.stdout).toContain(closedBlocker.id);
     expect(fullTree.stdout).toContain(cancelledBlocker.id);
     expect(fullTree.stdout).toContain(openBlocker.id);
+    expect(fullTree.stdout).toContain(closedChild.id);
+    expect(fullTree.stdout).toContain(cancelledTarget.id);
+    expect(fullTree.stdout).toContain(closedRelated.id);
   });
 
   test("lb style --global persists a shared default that repos can inherit", async () => {
