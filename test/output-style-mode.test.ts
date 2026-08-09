@@ -344,17 +344,33 @@ describe("human output style modes", () => {
     expect(defaultTree.exitCode).toBe(0);
     expect(defaultTree.stdout).toContain("Blocked by (1)");
     expect(defaultTree.stdout).toContain(openBlocker.id);
-    expect(defaultTree.stdout).not.toContain(closedBlocker.id);
-    expect(defaultTree.stdout).not.toContain(cancelledBlocker.id);
-    expect(defaultTree.stdout).not.toContain(closedChild.id);
-    expect(defaultTree.stdout).not.toContain(cancelledTarget.id);
-    expect(defaultTree.stdout).not.toContain(closedRelated.id);
+    const historyStart = defaultTree.stdout.indexOf("Closed history");
+    expect(historyStart).toBeGreaterThan(-1);
+    const visibleTree = defaultTree.stdout.slice(0, historyStart);
+    expect(visibleTree).not.toContain(closedBlocker.id);
+    expect(visibleTree).not.toContain(cancelledBlocker.id);
+    expect(visibleTree).not.toContain(closedChild.id);
+    expect(visibleTree).not.toContain(cancelledTarget.id);
+    expect(visibleTree).not.toContain(closedRelated.id);
+    expect(defaultTree.stdout).toContain("Closed history (5; use --include-closed to see all):");
+    expect(defaultTree.stdout).toContain(closedBlocker.id);
+    expect(defaultTree.stdout).toContain(cancelledBlocker.id);
+    expect(defaultTree.stdout).toContain(closedChild.id);
+    expect(defaultTree.stdout).toContain(cancelledTarget.id);
+    expect(defaultTree.stdout).toContain(closedRelated.id);
     expect(defaultTree.stdout).not.toContain(unknownBlockerId);
 
     const defaultJson = await runCli(repoDir, ["dep", "tree", root.id, "--json"]);
     expect(defaultJson.exitCode).toBe(0);
     const defaultPayload = JSON.parse(defaultJson.stdout) as {
       sections?: Array<{ key: string; count: number; issues: Array<{ id: string }> }>;
+      closedHistory?: {
+        total: number;
+        shown: number;
+        truncated: boolean;
+        hint: string;
+        issues: Array<{ id: string; status: string }>;
+      };
     };
     const defaultBlockedBy = defaultPayload.sections?.find(
       (section) => section.key === "blockedBy"
@@ -362,6 +378,21 @@ describe("human output style modes", () => {
     expect(defaultBlockedBy?.count).toBe(1);
     expect(defaultBlockedBy?.issues.map((issue) => issue.id)).toEqual([openBlocker.id]);
     expect(defaultPayload.sections?.map((section) => section.key)).toEqual(["blockedBy"]);
+    expect(defaultPayload.closedHistory).toMatchObject({
+      total: 5,
+      shown: 5,
+      truncated: false,
+      hint: "Use --include-closed to see all closed and cancelled issues.",
+    });
+    expect(defaultPayload.closedHistory?.issues.map((issue) => issue.id)).toEqual(
+      expect.arrayContaining([
+        closedBlocker.id,
+        cancelledBlocker.id,
+        closedChild.id,
+        cancelledTarget.id,
+        closedRelated.id,
+      ])
+    );
 
     const fullTree = await runCli(repoDir, [
       "dep",
@@ -380,6 +411,48 @@ describe("human output style modes", () => {
     expect(fullTree.stdout).toContain(cancelledTarget.id);
     expect(fullTree.stdout).toContain(closedRelated.id);
     expect(fullTree.stdout).toContain(unknownBlockerId);
+  });
+
+  test("dep tree caps closed history at the ten most recently updated issues", async () => {
+    const repoDir = createLocalRepo();
+    const root = await createIssue(repoDir, "History root");
+    const children: Array<{ id: string }> = [];
+
+    for (let index = 0; index < 11; index += 1) {
+      const child = await createIssue(repoDir, `Closed child ${index}`, ["--parent", root.id]);
+      const closed = await runCli(repoDir, ["update", child.id, "--status", "closed"]);
+      expect(closed.exitCode).toBe(0);
+      children.push(child);
+    }
+
+    const treeJson = await runCli(repoDir, ["dep", "tree", root.id, "--json"]);
+    expect(treeJson.exitCode).toBe(0);
+    const payload = JSON.parse(treeJson.stdout) as {
+      closedHistory?: {
+        total: number;
+        shown: number;
+        truncated: boolean;
+        hint: string;
+        issues: Array<{ id: string }>;
+      };
+    };
+    expect(payload.closedHistory).toMatchObject({
+      total: 11,
+      shown: 10,
+      truncated: true,
+      hint: "Use --include-closed to see all closed and cancelled issues.",
+    });
+    expect(payload.closedHistory?.issues).toHaveLength(10);
+    expect(payload.closedHistory?.issues[0]?.id).toBe(children[10].id);
+    expect(payload.closedHistory?.issues.map((issue) => issue.id)).not.toContain(children[0].id);
+
+    const treeHuman = await runCli(repoDir, ["dep", "tree", root.id, "--style", "classic"]);
+    expect(treeHuman.exitCode).toBe(0);
+    expect(treeHuman.stdout).toContain(
+      "Closed history (10 of 11; use --include-closed to see all):"
+    );
+    expect(treeHuman.stdout).toContain(children[10].id);
+    expect(treeHuman.stdout).not.toContain(children[0].id);
   });
 
   test("lb style --global persists a shared default that repos can inherit", async () => {
