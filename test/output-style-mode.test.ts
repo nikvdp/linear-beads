@@ -289,6 +289,56 @@ describe("human output style modes", () => {
     });
   });
 
+  test("dep tree hides terminal blockers unless requested", async () => {
+    const repoDir = createLocalRepo();
+    const root = await createIssue(repoDir, "Dependency root");
+    const closedBlocker = await createIssue(repoDir, "Closed blocker");
+    const cancelledBlocker = await createIssue(repoDir, "Cancelled blocker");
+    const openBlocker = await createIssue(repoDir, "Open blocker");
+
+    for (const blocker of [closedBlocker, cancelledBlocker, openBlocker]) {
+      const dependency = await runCli(repoDir, ["dep", "add", root.id, "--blocked-by", blocker.id]);
+      expect(dependency.exitCode).toBe(0);
+    }
+
+    const closed = await runCli(repoDir, ["update", closedBlocker.id, "--status", "closed"]);
+    expect(closed.exitCode).toBe(0);
+    const cancelled = await runCli(repoDir, ["cancel", cancelledBlocker.id]);
+    expect(cancelled.exitCode).toBe(0);
+
+    const defaultTree = await runCli(repoDir, ["dep", "tree", root.id, "--style", "beads"]);
+    expect(defaultTree.exitCode).toBe(0);
+    expect(defaultTree.stdout).toContain("Blocked by (1)");
+    expect(defaultTree.stdout).toContain(openBlocker.id);
+    expect(defaultTree.stdout).not.toContain(closedBlocker.id);
+    expect(defaultTree.stdout).not.toContain(cancelledBlocker.id);
+
+    const defaultJson = await runCli(repoDir, ["dep", "tree", root.id, "--json"]);
+    expect(defaultJson.exitCode).toBe(0);
+    const defaultPayload = JSON.parse(defaultJson.stdout) as {
+      sections?: Array<{ key: string; count: number; issues: Array<{ id: string }> }>;
+    };
+    const defaultBlockedBy = defaultPayload.sections?.find(
+      (section) => section.key === "blockedBy"
+    );
+    expect(defaultBlockedBy?.count).toBe(1);
+    expect(defaultBlockedBy?.issues.map((issue) => issue.id)).toEqual([openBlocker.id]);
+
+    const fullTree = await runCli(repoDir, [
+      "dep",
+      "tree",
+      root.id,
+      "--style",
+      "beads",
+      "--include-closed",
+    ]);
+    expect(fullTree.exitCode).toBe(0);
+    expect(fullTree.stdout).toContain("Blocked by (3)");
+    expect(fullTree.stdout).toContain(closedBlocker.id);
+    expect(fullTree.stdout).toContain(cancelledBlocker.id);
+    expect(fullTree.stdout).toContain(openBlocker.id);
+  });
+
   test("lb style --global persists a shared default that repos can inherit", async () => {
     const repoDir = createLocalRepo();
     const homeDir = createTempDir("lb-output-style-home-");

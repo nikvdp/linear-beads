@@ -108,26 +108,42 @@ describe("cancelled status support", () => {
     expect(shown[0]?.status).toBe("cancelled");
   });
 
-  test("ready excludes cancelled issues and cancelled blockers stop blocking work", async () => {
+  test("ready excludes terminal issues and terminal blockers stop blocking work", async () => {
     const repoDir = createRepo();
-    const blocker = await runJson<Array<{ id: string }>>(repoDir, ["create", "Blocker"]);
+    const cancelledBlocker = await runJson<Array<{ id: string }>>(repoDir, [
+      "create",
+      "Cancelled blocker",
+    ]);
+    const closedBlocker = await runJson<Array<{ id: string }>>(repoDir, [
+      "create",
+      "Closed blocker",
+    ]);
     const blocked = await runJson<Array<{ id: string }>>(repoDir, ["create", "Blocked"]);
 
-    const dep = await runCli(repoDir, ["dep", "add", blocked[0].id, "--blocked-by", blocker[0].id]);
-    expect(dep.exitCode).toBe(0);
+    for (const blocker of [cancelledBlocker[0], closedBlocker[0]]) {
+      const dep = await runCli(repoDir, ["dep", "add", blocked[0].id, "--blocked-by", blocker.id]);
+      expect(dep.exitCode).toBe(0);
+    }
 
     const initiallyReady = await runJson<Array<{ id: string }>>(repoDir, ["ready"]);
-    expect(initiallyReady.map((issue) => issue.id)).toContain(blocker[0].id);
+    expect(initiallyReady.map((issue) => issue.id)).toContain(cancelledBlocker[0].id);
+    expect(initiallyReady.map((issue) => issue.id)).toContain(closedBlocker[0].id);
     expect(initiallyReady.map((issue) => issue.id)).not.toContain(blocked[0].id);
 
-    const cancelled = await runCli(repoDir, ["cancel", blocker[0].id]);
+    const cancelled = await runCli(repoDir, ["cancel", cancelledBlocker[0].id]);
     expect(cancelled.exitCode).toBe(0);
+    const closed = await runCli(repoDir, ["update", closedBlocker[0].id, "--status", "closed"]);
+    expect(closed.exitCode).toBe(0);
 
-    const readyAfterCancel = await runJson<Array<{ id: string; status: string }>>(repoDir, [
-      "ready",
-    ]);
-    expect(readyAfterCancel.map((issue) => issue.id)).toContain(blocked[0].id);
-    expect(readyAfterCancel.map((issue) => issue.id)).not.toContain(blocker[0].id);
-    expect(readyAfterCancel.every((issue) => issue.status !== "cancelled")).toBe(true);
+    const readyAfterTerminalBlockers = await runJson<Array<{ id: string; status: string }>>(
+      repoDir,
+      ["ready"]
+    );
+    expect(readyAfterTerminalBlockers.map((issue) => issue.id)).toContain(blocked[0].id);
+    expect(readyAfterTerminalBlockers.map((issue) => issue.id)).not.toContain(
+      cancelledBlocker[0].id
+    );
+    expect(readyAfterTerminalBlockers.map((issue) => issue.id)).not.toContain(closedBlocker[0].id);
+    expect(readyAfterTerminalBlockers.every((issue) => issue.status === "open")).toBe(true);
   });
 });
