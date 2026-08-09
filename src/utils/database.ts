@@ -24,6 +24,7 @@ import type {
   MailThread,
   OutboxItem,
 } from "../types.js";
+import { isTerminalStatus } from "../types.js";
 
 let db: Database | null = null;
 const LOCAL_ID_PREFIX = "LOCAL-";
@@ -2356,28 +2357,24 @@ export function getBlockedIssueIds(): Set<string> {
           `
     SELECT DISTINCT
       d.issue_id as blocker_id,
-      d.depends_on_id as blocked_id,
-      i.status as blocker_status
+      d.depends_on_id as blocked_id
     FROM dependencies d
-    LEFT JOIN issues i
-      ON d.issue_id = i.local_id
-      OR d.issue_id = i.linear_identifier
-      OR d.issue_id = i.linear_id
     WHERE d.type = 'blocks'
   `
         )
-        .all() as Array<{ blocker_id: string; blocked_id: string; blocker_status: string | null }>
+        .all() as Array<{ blocker_id: string; blocked_id: string }>
   );
 
   const blocked = new Set(
     directlyBlocked
-      .filter(
-        (row) =>
-          isPlausibleIssueInput(row.blocker_id) &&
-          row.blocker_status !== "closed" &&
-          row.blocker_status !== "cancelled"
-      )
-      .map((r) => r.blocked_id)
+      .filter((row) => {
+        if (!isPlausibleIssueInput(row.blocker_id)) {
+          return false;
+        }
+        const blocker = getCachedIssue(row.blocker_id);
+        return !blocker || !isTerminalStatus(blocker.status);
+      })
+      .map((row) => row.blocked_id)
   );
 
   // Recursively add children of blocked issues

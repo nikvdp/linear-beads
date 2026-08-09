@@ -205,7 +205,7 @@ function getReadyTag(issueId: string, status: string, backlogDescendantIds: Set<
       return false;
     }
     const blockerIssue = getCachedIssue(dep.issue_id);
-    return blockerIssue && !isTerminalStatus(blockerIssue.status);
+    return !blockerIssue || !isTerminalStatus(blockerIssue.status);
   });
   const isReady =
     openBlockers.length === 0 && isReadyStatus(status) && !backlogDescendantIds.has(issueId);
@@ -290,7 +290,8 @@ function uniqueIssueIds(ids: string[]): string[] {
 function getTreeRelationSections(
   issueId: string,
   backlogDescendantIds: Set<string>,
-  includeParent: boolean
+  includeParent: boolean,
+  includeClosed: boolean = false
 ): TreeRelationSection[] {
   const { outgoing, incoming } = getAllDependencies(issueId);
   const parent = includeParent
@@ -302,8 +303,14 @@ function getTreeRelationSections(
     incoming.filter((dep) => dep.type === "parent-child").map((dep) => dep.issue_id),
     backlogDescendantIds
   );
+  const allBlockedBy = incoming.filter((dep) => dep.type === "blocks").map((dep) => dep.issue_id);
   const blockedBy = sortIssueIdsForExecution(
-    incoming.filter((dep) => dep.type === "blocks").map((dep) => dep.issue_id),
+    includeClosed
+      ? allBlockedBy
+      : allBlockedBy.filter((blockerId) => {
+          const blockerIssue = getCachedIssue(blockerId);
+          return !blockerIssue || !isTerminalStatus(blockerIssue.status);
+        }),
     backlogDescendantIds
   );
   const blocks = sortIssueIdsForExecution(
@@ -347,7 +354,7 @@ function getTreeRelationSections(
       issueIds: related,
       recursive: false,
     },
-  ].filter((section) => section.issueIds.length > 0);
+  ].filter((section): section is TreeRelationSection => section.issueIds.length > 0);
 }
 
 function formatTreeIssueJson(
@@ -374,6 +381,7 @@ function buildTreeJson(
   blockedIds: Set<string>,
   backlogDescendantIds: Set<string>,
   includeParent: boolean = true,
+  includeClosed: boolean = false,
   visited: Set<string> = new Set()
 ): TreeIssueJson {
   if (visited.has(issueId)) {
@@ -383,7 +391,12 @@ function buildTreeJson(
   const nextVisited = new Set(visited);
   nextVisited.add(issueId);
   const node = formatTreeIssueJson(issueId, blockedIds, backlogDescendantIds);
-  const sections = getTreeRelationSections(issueId, backlogDescendantIds, includeParent).map(
+  const sections = getTreeRelationSections(
+    issueId,
+    backlogDescendantIds,
+    includeParent,
+    includeClosed
+  ).map(
     (section): TreeSectionJson => ({
       key: section.key,
       title: section.title,
@@ -391,7 +404,14 @@ function buildTreeJson(
       recursive: section.recursive,
       issues: section.issueIds.map((relatedIssueId) =>
         section.recursive
-          ? buildTreeJson(relatedIssueId, blockedIds, backlogDescendantIds, false, nextVisited)
+          ? buildTreeJson(
+              relatedIssueId,
+              blockedIds,
+              backlogDescendantIds,
+              false,
+              includeClosed,
+              nextVisited
+            )
           : formatTreeIssueJson(relatedIssueId, blockedIds, backlogDescendantIds)
       ),
     })
@@ -411,6 +431,7 @@ function printTree(
   style: "classic" | "beads",
   blockedIds: Set<string>,
   backlogDescendantIds: Set<string>,
+  includeClosed: boolean = false,
   prefix: string = "",
   isLast: boolean = true,
   visited: Set<string> = new Set()
@@ -433,7 +454,12 @@ function printTree(
 
   output(formatTreeIssueLine(issueId, style, blockedIds, backlogDescendantIds, prefix, isLast));
 
-  const sections = getTreeRelationSections(issueId, backlogDescendantIds, prefix === "");
+  const sections = getTreeRelationSections(
+    issueId,
+    backlogDescendantIds,
+    prefix === "",
+    includeClosed
+  );
   const sectionPrefix = treeChildPrefix(prefix, isLast);
 
   sections.forEach((section, sectionIndex) => {
@@ -451,6 +477,7 @@ function printTree(
           style,
           blockedIds,
           backlogDescendantIds,
+          includeClosed,
           relationPrefix,
           isLastIssue,
           new Set(visited)
@@ -1081,6 +1108,7 @@ const treeCommand = new Command("tree")
   .argument("<issue>", "Issue ID")
   .option("-j, --json", "Output as JSON")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
+  .option("--include-closed", "Include closed and cancelled blockers")
   .action(async (issueId: string, options) => {
     try {
       const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
@@ -1106,7 +1134,17 @@ const treeCommand = new Command("tree")
       const backlogDescendantIds = getBacklogDescendantIssueIds();
       if (options.json) {
         output(
-          JSON.stringify(buildTreeJson(resolvedId, blockedIds, backlogDescendantIds), null, 2)
+          JSON.stringify(
+            buildTreeJson(
+              resolvedId,
+              blockedIds,
+              backlogDescendantIds,
+              true,
+              options.includeClosed
+            ),
+            null,
+            2
+          )
         );
         return;
       }
@@ -1114,7 +1152,7 @@ const treeCommand = new Command("tree")
       if (style === "classic") {
         output(`\n🌲 Dependency tree for ${getDisplayId(resolvedId)}:\n`);
       }
-      printTree(resolvedId, style, blockedIds, backlogDescendantIds);
+      printTree(resolvedId, style, blockedIds, backlogDescendantIds, options.includeClosed);
       output("");
     } catch (error) {
       outputError(error instanceof Error ? error.message : String(error));
