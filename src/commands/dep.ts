@@ -420,13 +420,13 @@ function getTreeRelationSections(
       key: "blockedBy",
       title: "Blocked by",
       issueIds: blockedBy,
-      recursive: true,
+      recursive: includeClosed,
     },
     {
       key: "blocks",
       title: "Blocks",
       issueIds: blocks,
-      recursive: true,
+      recursive: includeClosed,
     },
     {
       key: "related",
