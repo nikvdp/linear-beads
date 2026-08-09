@@ -289,7 +289,7 @@ describe("human output style modes", () => {
     });
   });
 
-  test("dep tree hides terminal blockers unless requested", async () => {
+  test("dep tree hides terminal and uncached issues unless requested", async () => {
     const repoDir = createLocalRepo();
     const root = await createIssue(repoDir, "Dependency root");
     const closedBlocker = await createIssue(repoDir, "Closed blocker");
@@ -303,6 +303,16 @@ describe("human output style modes", () => {
       const dependency = await runCli(repoDir, ["dep", "add", root.id, "--blocked-by", blocker.id]);
       expect(dependency.exitCode).toBe(0);
     }
+
+    const unknownBlockerId = "LIN-999999";
+    const unknownDependency = await runCli(repoDir, [
+      "dep",
+      "add",
+      root.id,
+      "--blocked-by",
+      unknownBlockerId,
+    ]);
+    expect(unknownDependency.exitCode).toBe(0);
 
     const blocks = await runCli(repoDir, ["dep", "add", root.id, "--blocks", cancelledTarget.id]);
     expect(blocks.exitCode).toBe(0);
@@ -339,6 +349,7 @@ describe("human output style modes", () => {
     expect(defaultTree.stdout).not.toContain(closedChild.id);
     expect(defaultTree.stdout).not.toContain(cancelledTarget.id);
     expect(defaultTree.stdout).not.toContain(closedRelated.id);
+    expect(defaultTree.stdout).not.toContain(unknownBlockerId);
 
     const defaultJson = await runCli(repoDir, ["dep", "tree", root.id, "--json"]);
     expect(defaultJson.exitCode).toBe(0);
@@ -361,13 +372,14 @@ describe("human output style modes", () => {
       "--include-closed",
     ]);
     expect(fullTree.exitCode).toBe(0);
-    expect(fullTree.stdout).toContain("Blocked by (3)");
+    expect(fullTree.stdout).toContain("Blocked by (4)");
     expect(fullTree.stdout).toContain(closedBlocker.id);
     expect(fullTree.stdout).toContain(cancelledBlocker.id);
     expect(fullTree.stdout).toContain(openBlocker.id);
     expect(fullTree.stdout).toContain(closedChild.id);
     expect(fullTree.stdout).toContain(cancelledTarget.id);
     expect(fullTree.stdout).toContain(closedRelated.id);
+    expect(fullTree.stdout).toContain(unknownBlockerId);
   });
 
   test("lb style --global persists a shared default that repos can inherit", async () => {
