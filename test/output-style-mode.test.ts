@@ -295,6 +295,10 @@ describe("human output style modes", () => {
     const closedBlocker = await createIssue(repoDir, "Closed blocker");
     const cancelledBlocker = await createIssue(repoDir, "Cancelled blocker");
     const openBlocker = await createIssue(repoDir, "Open blocker");
+    const openBlockerChild = await createIssue(repoDir, "Open blocker child", [
+      "--parent",
+      openBlocker.id,
+    ]);
     const closedChild = await createIssue(repoDir, "Closed child", ["--parent", root.id]);
     const cancelledTarget = await createIssue(repoDir, "Cancelled target");
     const closedRelated = await createIssue(repoDir, "Closed related");
@@ -344,6 +348,7 @@ describe("human output style modes", () => {
     expect(defaultTree.exitCode).toBe(0);
     expect(defaultTree.stdout).toContain("Blocked by (1)");
     expect(defaultTree.stdout).toContain(openBlocker.id);
+    expect(defaultTree.stdout).not.toContain(openBlockerChild.id);
     const historyStart = defaultTree.stdout.indexOf("Closed history");
     expect(historyStart).toBeGreaterThan(-1);
     const visibleTree = defaultTree.stdout.slice(0, historyStart);
@@ -375,6 +380,7 @@ describe("human output style modes", () => {
     const defaultBlockedBy = defaultPayload.sections?.find(
       (section) => section.key === "blockedBy"
     );
+    expect(defaultBlockedBy?.issues[0]).not.toHaveProperty("sections");
     expect(defaultBlockedBy?.count).toBe(1);
     expect(defaultBlockedBy?.issues.map((issue) => issue.id)).toEqual([openBlocker.id]);
     expect(defaultPayload.sections?.map((section) => section.key)).toEqual(["blockedBy"]);
@@ -407,6 +413,7 @@ describe("human output style modes", () => {
     expect(fullTree.stdout).toContain(closedBlocker.id);
     expect(fullTree.stdout).toContain(cancelledBlocker.id);
     expect(fullTree.stdout).toContain(openBlocker.id);
+    expect(fullTree.stdout).toContain(openBlockerChild.id);
     expect(fullTree.stdout).toContain(closedChild.id);
     expect(fullTree.stdout).toContain(cancelledTarget.id);
     expect(fullTree.stdout).toContain(closedRelated.id);
