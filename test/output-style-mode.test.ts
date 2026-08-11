@@ -289,6 +289,68 @@ describe("human output style modes", () => {
     });
   });
 
+  test("dep tree --depth bounds human and JSON expansion", async () => {
+    const repoDir = createLocalRepo();
+    const root = await createIssue(repoDir, "Depth root");
+    const direct = await createIssue(repoDir, "Direct blocker");
+    const nested = await createIssue(repoDir, "Nested blocker");
+
+    const rootDependency = await runCli(repoDir, [
+      "dep",
+      "add",
+      root.id,
+      "--blocked-by",
+      direct.id,
+    ]);
+    expect(rootDependency.exitCode).toBe(0);
+    const nestedDependency = await runCli(repoDir, [
+      "dep",
+      "add",
+      direct.id,
+      "--blocked-by",
+      nested.id,
+    ]);
+    expect(nestedDependency.exitCode).toBe(0);
+
+    const depthZero = await runCli(repoDir, ["dep", "tree", root.id, "--depth", "0"]);
+    expect(depthZero.exitCode).toBe(0);
+    expect(depthZero.stdout).toContain(root.id);
+    expect(depthZero.stdout).not.toContain(direct.id);
+
+    const depthOne = await runCli(repoDir, [
+      "dep",
+      "tree",
+      root.id,
+      "--style",
+      "classic",
+      "--depth",
+      "1",
+    ]);
+    expect(depthOne.exitCode).toBe(0);
+    expect(depthOne.stdout).toContain(direct.id);
+    expect(depthOne.stdout).not.toContain(nested.id);
+
+    const depthTwo = await runCli(repoDir, ["dep", "tree", root.id, "--json", "--depth", "2"]);
+    expect(depthTwo.exitCode).toBe(0);
+    const payload = JSON.parse(depthTwo.stdout) as {
+      sections?: Array<{
+        key: string;
+        issues: Array<{
+          id: string;
+          sections?: Array<{ key: string; issues: Array<{ id: string }> }>;
+        }>;
+      }>;
+    };
+    const blockedBy = payload.sections?.find((section) => section.key === "blockedBy");
+    const directNode = blockedBy?.issues.find((issue) => issue.id === direct.id);
+    const nestedSection = directNode?.sections?.find((section) => section.key === "blockedBy");
+    expect(nestedSection?.issues.map((issue) => issue.id)).toEqual([nested.id]);
+
+    const invalidDepth = await runCli(repoDir, ["dep", "tree", root.id, "--depth", "-1"]);
+    expect(invalidDepth.exitCode).not.toBe(0);
+    expect(invalidDepth.stderr).toContain("Invalid depth '-1'. Must be a non-negative integer.");
+  });
+
   test("dep tree hides terminal and uncached issues unless requested", async () => {
     const repoDir = createLocalRepo();
     const root = await createIssue(repoDir, "Dependency root");
