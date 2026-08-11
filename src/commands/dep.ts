@@ -125,6 +125,17 @@ function parseLimitOption(value: unknown): number | undefined {
   }
   return parsed;
 }
+function parseDepthOption(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const raw = String(value);
+  const parsed = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(parsed)) {
+    throw new Error(`Invalid depth '${value}'. Must be a non-negative integer.`);
+  }
+  return parsed;
+}
 
 interface TreeRelationSection {
   key: "parent" | "children" | "blockedBy" | "blocks" | "related";
@@ -361,8 +372,11 @@ function getTreeRelationSections(
   backlogDescendantIds: Set<string>,
   includeParent: boolean,
   context: TreeBuildContext,
-  includeClosed: boolean = false
+  includeClosed: boolean = false,
+  depth: number | undefined = undefined
 ): TreeRelationSection[] {
+  const recursiveDependencySections = includeClosed || depth !== undefined;
+
   const { outgoing, incoming } = getAllDependencies(issueId);
   const parent = includeParent
     ? filterTreeIssueIds(
@@ -420,13 +434,13 @@ function getTreeRelationSections(
       key: "blockedBy",
       title: "Blocked by",
       issueIds: blockedBy,
-      recursive: includeClosed,
+      recursive: recursiveDependencySections,
     },
     {
       key: "blocks",
       title: "Blocks",
       issueIds: blocks,
-      recursive: includeClosed,
+      recursive: recursiveDependencySections,
     },
     {
       key: "related",
@@ -463,6 +477,7 @@ function buildTreeJson(
   context: TreeBuildContext,
   includeParent: boolean = true,
   includeClosed: boolean = false,
+  depth: number | undefined = undefined,
   visited: Set<string> = new Set()
 ): TreeIssueJson {
   if (visited.has(issueId)) {
@@ -472,12 +487,17 @@ function buildTreeJson(
   const nextVisited = new Set(visited);
   nextVisited.add(issueId);
   const node = formatTreeIssueJson(issueId, blockedIds, backlogDescendantIds);
+  if (depth === 0) {
+    return node;
+  }
+
   const sections = getTreeRelationSections(
     issueId,
     backlogDescendantIds,
     includeParent,
     context,
-    includeClosed
+    includeClosed,
+    depth
   ).map(
     (section): TreeSectionJson => ({
       key: section.key,
@@ -493,6 +513,7 @@ function buildTreeJson(
               context,
               false,
               includeClosed,
+              depth === undefined ? undefined : depth - 1,
               nextVisited
             )
           : formatTreeIssueJson(relatedIssueId, blockedIds, backlogDescendantIds)
@@ -516,6 +537,7 @@ function printTree(
   backlogDescendantIds: Set<string>,
   context: TreeBuildContext,
   includeClosed: boolean = false,
+  depth: number | undefined = undefined,
   prefix: string = "",
   isLast: boolean = true,
   visited: Set<string> = new Set()
@@ -537,13 +559,17 @@ function printTree(
   visited.add(issueId);
 
   output(formatTreeIssueLine(issueId, style, blockedIds, backlogDescendantIds, prefix, isLast));
+  if (depth === 0) {
+    return;
+  }
 
   const sections = getTreeRelationSections(
     issueId,
     backlogDescendantIds,
     prefix === "",
     context,
-    includeClosed
+    includeClosed,
+    depth
   );
   const sectionPrefix = treeChildPrefix(prefix, isLast);
 
@@ -564,6 +590,7 @@ function printTree(
           backlogDescendantIds,
           context,
           includeClosed,
+          depth === undefined ? undefined : depth - 1,
           relationPrefix,
           isLastIssue,
           new Set(visited)
@@ -1256,9 +1283,11 @@ const treeCommand = new Command("tree")
   .option("-j, --json", "Output as JSON")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--include-closed", "Include closed and cancelled issues")
+  .option("--depth <levels>", "Limit tree expansion to this many descendant levels")
   .action(async (issueId: string, options) => {
     try {
       const requestedStyle = options.style ? parseHumanOutputStyle(options.style) : undefined;
+      const depth = parseDepthOption(options.depth);
       if (options.style && !requestedStyle) {
         console.error(
           `Invalid style '${options.style}'. Must be one of: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`
@@ -1287,7 +1316,8 @@ const treeCommand = new Command("tree")
           backlogDescendantIds,
           treeContext,
           true,
-          options.includeClosed
+          options.includeClosed,
+          depth
         );
         const closedHistory = getClosedHistory(treeContext);
         if (closedHistory.issueIds.length > 0) {
@@ -1310,7 +1340,8 @@ const treeCommand = new Command("tree")
         blockedIds,
         backlogDescendantIds,
         treeContext,
-        options.includeClosed
+        options.includeClosed,
+        depth
       );
       const closedHistory = getClosedHistory(treeContext);
       if (closedHistory.issueIds.length > 0) {
