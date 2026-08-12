@@ -165,6 +165,24 @@ describe("human output style modes", () => {
     expect(readyBeads.stdout).not.toContain(`● ${secondChild.id} ● P2 Second executable child`);
   });
 
+  test("ready scopes recursively beneath --under and --epic", async () => {
+    const repoDir = createLocalRepo();
+    const epic = await createIssue(repoDir, "Epic");
+    const branch = await createIssue(repoDir, "Branch", ["--parent", epic.id]);
+    const nestedReady = await createIssue(repoDir, "Nested ready issue", ["--parent", branch.id]);
+    await createIssue(repoDir, "Unrelated ready issue");
+
+    const under = await runCli(repoDir, ["ready", "--all", "--json", "--under", epic.id]);
+    const epicAlias = await runCli(repoDir, ["ready", "--all", "--json", "--epic", epic.id]);
+
+    expect(under.exitCode).toBe(0);
+    expect(epicAlias.exitCode).toBe(0);
+    expect(JSON.parse(under.stdout)).toEqual(JSON.parse(epicAlias.stdout));
+    expect((JSON.parse(under.stdout) as Array<{ id: string }>).map((issue) => issue.id)).toEqual([
+      nestedReady.id,
+    ]);
+  });
+
   test("lb style persists the repo default and command flags still override it", async () => {
     const repoDir = createLocalRepo();
     const issue = await createIssue(repoDir, "Styled issue");
