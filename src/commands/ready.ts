@@ -13,6 +13,7 @@ import {
   getBlockedIssueIds,
   getCacheInfo,
   getDisplayId,
+  resolveIssueLocalId,
 } from "../utils/database.js";
 import { isReadyStatus, isTerminalStatus } from "../types.js";
 import {
@@ -57,11 +58,31 @@ function hasOpenChildWork(issueId: string): boolean {
   });
 }
 
+function getDescendantIssueIds(issueId: string): Set<string> {
+  const visited = new Set([issueId]);
+  const frontier = [issueId];
+
+  while (frontier.length > 0) {
+    const parentId = frontier.pop()!;
+    for (const childId of getChildIds(parentId)) {
+      if (!visited.has(childId)) {
+        visited.add(childId);
+        frontier.push(childId);
+      }
+    }
+  }
+
+  visited.delete(issueId);
+  return visited;
+}
+
 export const readyCommand = new Command("ready")
   .description("List unblocked issues ready to work on")
   .option("-j, --json", "Output as JSON")
   .option("-a, --all", "Show all ready issues (not just mine)")
   .option("-l, --limit <count>", "Show at most this many issues")
+  .option("--under <issue>", "Show only ready descendants of an issue")
+  .option("--epic <issue>", "Alias for --under")
   .option("--sync", "Force sync before listing")
   .option("--style <style>", `Human output style: ${HUMAN_OUTPUT_STYLE_CHOICES.join(", ")}`)
   .option("--team <team>", "Team key (overrides config)")
@@ -96,12 +117,28 @@ export const readyCommand = new Command("ready")
       }
 
       // Get issues from cache
+      const underId = options.under ? resolveIssueLocalId(options.under) : undefined;
+      const epicId = options.epic ? resolveIssueLocalId(options.epic) : undefined;
+      if (underId && epicId && underId !== epicId) {
+        throw new Error("--under and --epic must refer to the same issue when used together");
+      }
+      const hierarchyRootId = underId || epicId;
+      if (hierarchyRootId && !getCachedIssue(hierarchyRootId)) {
+        throw new Error(`Issue not found: ${options.under || options.epic}`);
+      }
+
+      const hierarchyIssueIds = hierarchyRootId
+        ? getDescendantIssueIds(hierarchyRootId)
+        : undefined;
+
       const allIssues = getCachedIssues();
 
       // Filter to open issues that are not blocked
       const blockedIds = getBlockedIssueIds();
       const backlogDescendantIds = getBacklogDescendantIssueIds();
-      let scopedIssues = allIssues;
+      let scopedIssues = hierarchyIssueIds
+        ? allIssues.filter((issue) => hierarchyIssueIds.has(issue.id))
+        : allIssues;
 
       // Filter by assignee unless --all (skip in local-only mode)
       if (!options.all && !localOnly && !remoteDisabled) {
