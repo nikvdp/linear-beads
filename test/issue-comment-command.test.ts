@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -32,6 +33,31 @@ function createLocalOnlyRepo(): string {
     `${JSON.stringify({ local_only: true, repo_name: "comment-command" }, null, 2)}\n`
   );
   return repoDir;
+}
+
+function seedComments(repoDir: string, issueId: string, count: number): void {
+  const db = new Database(join(repoDir, ".lb", "cache.db"));
+  const insert = db.prepare(`
+    INSERT INTO issue_comments (
+      id, issue_local_id, issue_id, body, sync_status, created_at, updated_at, cached_at
+    )
+    VALUES (?, ?, ?, ?, 'synced', ?, ?, datetime('now'))
+  `);
+  const seed = db.transaction(() => {
+    for (let index = 1; index <= count; index += 1) {
+      const timestamp = new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
+      insert.run(
+        `comment-${String(index).padStart(3, "0")}`,
+        issueId,
+        issueId,
+        `Comment ${String(index).padStart(3, "0")}`,
+        timestamp,
+        timestamp
+      );
+    }
+  });
+  seed();
+  db.close();
 }
 
 async function lb(
@@ -99,5 +125,45 @@ describe("issue comment commands", () => {
       "First comment",
       "Reply body",
     ]);
+  });
+
+  test("lists the newest 100 comments by default and pages toward older comments", async () => {
+    const repoDir = createLocalOnlyRepo();
+    const created = await lbJson<Array<{ id: string }>>(repoDir, ["create", "Pagination target"]);
+    const issueId = created[0].id;
+    seedComments(repoDir, issueId, 105);
+
+    const latest = await lbJson<Array<{ body: string }>>(repoDir, ["comment", "list", issueId]);
+    expect(latest).toHaveLength(100);
+    expect(latest[0].body).toBe("Comment 006");
+    expect(latest[99].body).toBe("Comment 105");
+
+    const older = await lbJson<Array<{ body: string }>>(repoDir, [
+      "comment",
+      "list",
+      issueId,
+      "--page",
+      "2",
+    ]);
+    expect(older.map((comment) => comment.body)).toEqual([
+      "Comment 001",
+      "Comment 002",
+      "Comment 003",
+      "Comment 004",
+      "Comment 005",
+    ]);
+
+    const customPage = await lbJson<Array<{ body: string }>>(repoDir, [
+      "comment",
+      "list",
+      issueId,
+      "--limit",
+      "10",
+      "--page",
+      "2",
+    ]);
+    expect(customPage.map((comment) => comment.body)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `Comment ${String(index + 86).padStart(3, "0")}`)
+    );
   });
 });
