@@ -1641,10 +1641,14 @@ export function getIssueComments(issueId: string, limit?: number): IssueComment[
         .query(
           `
           SELECT *
-          FROM issue_comments
-          WHERE issue_local_id = ? OR issue_id = ?
+          FROM (
+            SELECT *
+            FROM issue_comments
+            WHERE issue_local_id = ? OR issue_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+          )
           ORDER BY created_at ASC, id ASC
-          LIMIT ?
         `
         )
         .all(issueLocalId, normalizedId, queryLimit) as Array<Record<string, unknown>>

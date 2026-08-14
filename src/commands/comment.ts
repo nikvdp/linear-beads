@@ -33,6 +33,13 @@ type CommentWriteOptions = {
   json?: boolean;
 };
 
+type CommentListOptions = {
+  json?: boolean;
+  sync?: boolean;
+  limit?: string;
+  page?: string;
+};
+
 function isHiddenMailComment(comment: IssueComment): boolean {
   return (
     comment.body.includes("<!-- lb-mail-envelope:v1") ||
@@ -40,8 +47,20 @@ function isHiddenMailComment(comment: IssueComment): boolean {
   );
 }
 
-function visibleComments(issueId: string): IssueComment[] {
-  return getIssueComments(issueId).filter((comment) => !isHiddenMailComment(comment));
+function parsePositiveInteger(value: string | undefined, option: string, fallback: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${option} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function paginateComments(comments: IssueComment[], page: number, limit: number): IssueComment[] {
+  const end = comments.length - (page - 1) * limit;
+  return end > 0 ? comments.slice(Math.max(0, end - limit), end) : [];
 }
 
 function formatCommentLine(comment: IssueComment): string {
@@ -50,10 +69,6 @@ function formatCommentLine(comment: IssueComment): string {
     comment.sync_status && comment.sync_status !== "synced" ? ` [${comment.sync_status}]` : "";
   const body = comment.body.replace(/\s+/g, " ").trim();
   return `${comment.created_at}${status} ${author}${body}`;
-}
-
-function formatCommentJson(comment: IssueComment): IssueComment {
-  return comment;
 }
 
 function findMatchingComment(
@@ -187,24 +202,42 @@ export const commentCommand = new Command("comment")
       .description("List comments for an issue")
       .argument("<id>", "Issue ID")
       .option("-j, --json", "Output as JSON")
+      .option("-l, --limit <count>", "Comments per page", "100")
+      .option("-p, --page <number>", "Page number, newest page first", "1")
       .option("--sync", "Fetch comments from Linear before listing")
-      .action(async (id: string, options) => {
+      .action(async (id: string, options: CommentListOptions) => {
         try {
           const resolvedId = resolveIssueId(id);
+          const limit = parsePositiveInteger(options.limit, "--limit", 100);
+          const page = parsePositiveInteger(options.page, "--page", 1);
           if (options.sync && !isLocalOnly() && !isLocalId(resolvedId)) {
             await fetchIssueComments(resolvedId);
           }
-          const comments = visibleComments(resolvedId);
+          const comments = getIssueComments(resolvedId, Number.MAX_SAFE_INTEGER).filter(
+            (comment) => !isHiddenMailComment(comment)
+          );
+          const pageComments = paginateComments(comments, page, limit);
           if (options.json) {
-            output(JSON.stringify(comments.map(formatCommentJson), null, 2));
+            output(JSON.stringify(pageComments, null, 2));
             return;
           }
           if (comments.length === 0) {
             output(`No comments for ${getDisplayId(resolvedId)}.`);
             return;
           }
-          output(`Comments for ${getDisplayId(resolvedId)} (${comments.length}):`);
-          for (const comment of comments) {
+          const pageCount = Math.ceil(comments.length / limit);
+          if (pageComments.length === 0) {
+            output(
+              `No comments for ${getDisplayId(resolvedId)} on page ${page}; ${pageCount} pages available.`
+            );
+            return;
+          }
+          const first = Math.max(1, comments.length - page * limit + 1);
+          const last = comments.length - (page - 1) * limit;
+          output(
+            `Comments for ${getDisplayId(resolvedId)} (${first}-${last} of ${comments.length}; page ${page}/${pageCount}, newest page first):`
+          );
+          for (const comment of pageComments) {
             output(`- ${formatCommentLine(comment)}`);
           }
         } catch (error) {
@@ -231,7 +264,7 @@ export const commentCommand = new Command("comment")
             options,
           });
           if (options.json) {
-            output(JSON.stringify([formatCommentJson(comment)], null, 2));
+            output(JSON.stringify([comment], null, 2));
           } else {
             output(`Commented on ${getDisplayId(resolveIssueId(id))}: ${comment.id}`);
           }
@@ -267,7 +300,7 @@ export const commentCommand = new Command("comment")
               options,
             });
             if (options.json) {
-              output(JSON.stringify([formatCommentJson(comment)], null, 2));
+              output(JSON.stringify([comment], null, 2));
             } else {
               output(`Replied on ${getDisplayId(resolveIssueId(id))}: ${comment.id}`);
             }
