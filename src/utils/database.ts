@@ -261,15 +261,20 @@ export function getDatabase(): Database {
  * next workflow state lookup.
  */
 function healWorkflowStatesSchema(db: Database): void {
-  const hasTable = db
-    .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workflow_states'")
-    .get();
-  if (!hasTable) return;
+  const tableRow = db
+    .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'workflow_states'")
+    .get() as { sql: string } | null;
+  if (!tableRow) return;
+
   const columns = db.query("PRAGMA table_info(workflow_states)").all() as Array<{
     name: string;
   }>;
-  if (columns.some((c) => c.name === "id")) return;
-  db.exec("DROP TABLE workflow_states");
+  const hasId = columns.some((c) => c.name === "id");
+  const hasUniqueConstraint = tableRow.sql.includes("UNIQUE(team_id, name)");
+
+  if (!hasId || !hasUniqueConstraint) {
+    db.exec("DROP TABLE workflow_states");
+  }
 }
 
 /**

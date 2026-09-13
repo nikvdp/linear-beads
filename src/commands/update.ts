@@ -26,7 +26,7 @@ import {
   getUserByEmail,
   createRelation,
 } from "../utils/issue-backend.js";
-import { toCanonicalLocalDescription } from "../utils/linear.js";
+import { resolveWorkflowState, toCanonicalLocalDescription } from "../utils/linear.js";
 import {
   formatIssueJson,
   formatIssueHuman,
@@ -385,7 +385,20 @@ export const updateCommand = new Command("update")
       if (canonicalDescription !== undefined) updates.description = canonicalDescription;
       if (options.status) {
         const canonicalStatus = parseIssueStatus(options.status);
-        updates.status = canonicalStatus || options.status;
+        if (canonicalStatus) {
+          updates.status = canonicalStatus;
+        } else if (!isLocalOnly()) {
+          try {
+            const teamId = await getTeamId(options.team);
+            await resolveWorkflowState(teamId, options.status);
+            updates.status = options.status;
+          } catch (error) {
+            outputError(error instanceof Error ? error.message : String(error));
+            process.exit(1);
+          }
+        } else {
+          updates.status = options.status;
+        }
       }
 
       if (options.priority !== undefined) {
