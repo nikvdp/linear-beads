@@ -429,7 +429,8 @@ function initSchema(db: Database, dbPath: string): void {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       type TEXT NOT NULL,
-      team_id TEXT NOT NULL
+      team_id TEXT NOT NULL,
+      UNIQUE(team_id, name)
     );
 
     CREATE INDEX IF NOT EXISTS idx_workflow_states_team_name ON workflow_states(team_id, name);
@@ -3113,7 +3114,14 @@ export function cacheWorkflowStates(
     const insert = db.prepare(
       "INSERT INTO workflow_states (id, name, type, team_id) VALUES (?, ?, ?, ?)"
     );
+    // Linear teams can have multiple workflows (e.g. main + triage), each with
+    // their own "Backlog" state. Dedup by name so the resolver sees one match
+    // per name; we keep the first occurrence's id.
+    const seen = new Set<string>();
     for (const state of states) {
+      const key = state.name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
       insert.run(state.id, state.name, state.type, teamId);
     }
   });
