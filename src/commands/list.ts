@@ -22,7 +22,6 @@ import { getViewer } from "../utils/issue-backend.js";
 import {
   parseIssueStatus,
   parsePriority,
-  VALID_ISSUE_STATUSES,
   VALID_ISSUE_TYPES,
 } from "../types.js";
 import {
@@ -60,7 +59,7 @@ export const listCommand = new Command("list")
   .option("-l, --limit <count>", "Show at most this many issues")
   .option(
     "-s, --status <status>",
-    "Filter by status: backlog, open, in_progress, closed, cancelled"
+    "Filter by status: canonical (backlog, open, in_progress, closed, cancelled) or custom workflow state name"
   )
   .option(
     "-p, --priority <priority>",
@@ -118,14 +117,14 @@ export const listCommand = new Command("list")
 
       // Apply filters with validation
       if (options.status) {
-        const parsedStatus = parseIssueStatus(options.status);
-        if (!parsedStatus) {
-          console.error(
-            `Invalid status '${options.status}'. Must be one of: ${VALID_ISSUE_STATUSES.join(", ")}`
-          );
-          process.exit(1);
-        }
-        issues = issues.filter((i) => i.status === parsedStatus);
+        const canonicalStatus = parseIssueStatus(options.status);
+        const filterValue = canonicalStatus || options.status;
+        const normalizedFilter = filterValue.toLowerCase();
+        issues = issues.filter(
+          (i) =>
+            i.status === filterValue ||
+            i.linear_state_name?.toLowerCase() === normalizedFilter
+        );
       }
       if (options.priority !== undefined) {
         const { priority, error: priorityError } = parsePriority(options.priority);

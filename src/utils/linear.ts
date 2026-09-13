@@ -69,9 +69,10 @@ import type {
   MediaKind,
 } from "../types.js";
 import {
+  labelToIssueType,
   linearStateToStatus,
   linearToPriority,
-  labelToIssueType,
+  parseIssueStatus,
   priorityToLinear,
   statusToLinearState,
 } from "../types.js";
@@ -1762,6 +1763,7 @@ export function linearToBdIssue(
     title: linear.title,
     description: renderedDescription,
     status: linearStateToStatus(linear.state.type),
+    linear_state_name: linear.state.name,
     priority: linearToPriority(linear.priority),
     created_at: linear.createdAt,
     updated_at: linear.updatedAt,
@@ -2259,6 +2261,80 @@ export async function getWorkflowStateId(
   }
 
   return state.id;
+}
+
+/**
+ * Fetch all workflow states for a team
+ */
+export async function fetchWorkflowStates(
+  teamId: string,
+  options: { client?: GraphqlRequestClient } = {}
+): Promise<Array<{ id: string; name: string; type: string }>> {
+  const client: GraphqlRequestClient =
+    options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
+
+  const query = `
+    query GetWorkflowStates($teamId: String!) {
+      team(id: $teamId) {
+        states {
+          nodes {
+            id
+            name
+            type
+          }
+        }
+      }
+    }
+  `;
+
+  const result = await client.request<{
+    team: { states: { nodes: Array<{ id: string; name: string; type: string }> } };
+  }>(query, { teamId });
+
+  return result.team.states.nodes;
+}
+
+/**
+ * Resolve a status input to a workflow state ID.
+ * First tries to match as a canonical IssueStatus (by type), then tries to match by name.
+ * Returns the state ID or throws an error with available states.
+ */
+export async function resolveWorkflowState(
+  teamId: string,
+  statusInput: string,
+  options: { client?: GraphqlRequestClient } = {}
+): Promise<string> {
+  const client: GraphqlRequestClient =
+    options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
+  
+  const states = await fetchWorkflowStates(teamId, { client });
+  
+  // First, try to parse as a canonical IssueStatus
+  const canonicalStatus = parseIssueStatus(statusInput);
+  if (canonicalStatus) {
+    const stateType = statusToLinearState(canonicalStatus);
+    const state = states.find((s) => s.type === stateType);
+    if (state) {
+      return state.id;
+    }
+  }
+  
+  // If not canonical, try to match by name (case-insensitive, normalized)
+  const normalizedInput = statusInput.toLowerCase().trim();
+  const state = states.find((s) => {
+    const normalizedStateName = s.name.toLowerCase().trim();
+    return normalizedStateName === normalizedInput;
+  });
+  
+  if (state) {
+    return state.id;
+  }
+  
+  // No match found - throw helpful error
+  const availableStates = states.map((s) => s.name).join(", ");
+  throw new Error(
+    `Invalid status '${statusInput}'. Available states: ${availableStates}`
+  );
 }
 
 /**
@@ -2993,7 +3069,7 @@ export async function createIssue(params: {
   teamId: string;
   parentId?: string;
   assigneeId?: string;
-  status?: IssueStatus;
+  status?: string;
   syncKey?: string;
   skipCache?: boolean;
   autoFormatEscapedNewlines?: boolean;
@@ -3002,7 +3078,7 @@ export async function createIssue(params: {
   const client: GraphqlRequestClient =
     params.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
 
-  const stateId = await getWorkflowStateId(params.teamId, params.status || "open", { client });
+  const stateId = await resolveWorkflowState(params.teamId, params.status || "open", { client });
 
   // Resolve parentId if provided (identifier -> UUID)
   let parentUuid: string | undefined;
@@ -3134,7 +3210,7 @@ export async function updateIssue(
   updates: {
     title?: string;
     description?: string;
-    status?: Issue["status"];
+    status?: string;
     priority?: Priority;
     assigneeId?: string | null;
   },
@@ -3161,7 +3237,7 @@ export async function updateIssue(
   }
   if (updates.priority !== undefined) input.priority = priorityToLinear(updates.priority);
   if (updates.status) {
-    input.stateId = await getWorkflowStateId(teamId, updates.status, { client });
+    input.stateId = await resolveWorkflowState(teamId, updates.status, { client });
   }
   if (updates.assigneeId !== undefined) {
     input.assigneeId = updates.assigneeId;

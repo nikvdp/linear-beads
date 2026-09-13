@@ -41,7 +41,6 @@ import {
   isTerminalStatus,
   parseIssueStatus,
   parsePriority,
-  VALID_ISSUE_STATUSES,
 } from "../types.js";
 import {
   getHumanOutputStyle,
@@ -304,7 +303,7 @@ export const updateCommand = new Command("update")
     "--no-auto-format-escaped-newlines",
     "Preserve literal \\\\n sequences instead of auto-correcting them"
   )
-  .option("-s, --status <status>", "Status: backlog, open, in_progress, closed, cancelled")
+  .option("-s, --status <status>", "Status: canonical (backlog, open, in_progress, closed, cancelled) or custom workflow state name")
   .option("-p, --priority <priority>", "Priority: urgent, high, medium, low, backlog (or 0-4)")
   .option("--assign <email>", "Assign to user (email or 'me')")
   .option("--unassign", "Remove assignee")
@@ -384,16 +383,9 @@ export const updateCommand = new Command("update")
 
       if (options.title) updates.title = options.title;
       if (canonicalDescription !== undefined) updates.description = canonicalDescription;
-
       if (options.status) {
-        const parsedStatus = parseIssueStatus(options.status);
-        if (!parsedStatus) {
-          outputError(
-            `Invalid status '${options.status}'. Must be one of: ${VALID_ISSUE_STATUSES.join(", ")}`
-          );
-          process.exit(1);
-        }
-        updates.status = parsedStatus;
+        const canonicalStatus = parseIssueStatus(options.status);
+        updates.status = canonicalStatus || options.status;
       }
 
       if (options.priority !== undefined) {
