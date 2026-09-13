@@ -246,10 +246,33 @@ export function getDatabase(): Database {
           db!.exec("PRAGMA journal_mode = WAL");
         }
         db!.exec("PRAGMA synchronous = NORMAL");
+        healWorkflowStatesSchema(db!);
         initSchema(db!, dbPath);
       });
     });
   }
+  return db;
+}
+
+/**
+ * Heal workflow_states table if it exists with the broken schema (missing
+ * `id` PRIMARY KEY column) from an earlier commit. The table is only a cache,
+ * so dropping and recreating it is safe — any cached rows are rebuilt on the
+ * next workflow state lookup.
+ */
+function healWorkflowStatesSchema(db: Database): void {
+  const hasTable = db
+    .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workflow_states'")
+    .get();
+  if (!hasTable) return;
+  const columns = db.query("PRAGMA table_info(workflow_states)").all() as Array<{
+    name: string;
+  }>;
+  if (columns.some((c) => c.name === "id")) return;
+  db.exec("DROP TABLE workflow_states");
+}
+
+/**
   return db;
 }
 
