@@ -401,6 +401,15 @@ function initSchema(db: Database, dbPath: string): void {
 
     CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
 
+    -- Workflow states cache (for status resolution)
+    CREATE TABLE IF NOT EXISTS workflow_states (
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      team_id TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_states_team_name ON workflow_states(team_id, name);
+
     -- Issue comments cache
     CREATE TABLE IF NOT EXISTS issue_comments (
       id TEXT PRIMARY KEY,
@@ -3065,6 +3074,59 @@ export function getProjectIdByName(name: string, teamId?: string): string | null
     return null;
   }
   return row?.id || null;
+}
+
+/**
+ * Bulk-cache workflow states for a team. Replaces any cached rows for the team.
+ */
+export function cacheWorkflowStates(
+  teamId: string,
+  states: Array<{ id: string; name: string; type: string }>
+): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM workflow_states WHERE team_id = ?", [teamId]);
+    const insert = db.prepare(
+      "INSERT INTO workflow_states (id, name, type, team_id) VALUES (?, ?, ?, ?)"
+    );
+    for (const state of states) {
+      insert.run(state.id, state.name, state.type, teamId);
+    }
+  });
+}
+
+/**
+ * Get cached workflow states for a team. Returns empty array if none cached.
+ */
+export function getCachedWorkflowStates(
+  teamId: string
+): Array<{ id: string; name: string; type: string }> {
+  const db = getDatabase();
+  const rows = db
+    .query("SELECT id, name, type FROM workflow_states WHERE team_id = ?")
+    .all(teamId) as Array<{ id: string; name: string; type: string }>;
+  return rows;
+}
+
+/**
+ * Drop a single cached workflow state by ID. Used for stale-while-invalidate
+ * recovery when Linear rejects a state ID we have cached.
+ */
+export function invalidateCachedWorkflowState(stateId: string): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM workflow_states WHERE id = ?", [stateId]);
+  });
+}
+
+/**
+ * Invalidate all cached workflow states for a team.
+ */
+export function invalidateCachedWorkflowStatesForTeam(teamId: string): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM workflow_states WHERE team_id = ?", [teamId]);
+  });
 }
 
 /**

@@ -22,15 +22,18 @@ import {
   cacheIssue,
   cacheIssues,
   cacheDependency,
+  cacheWorkflowStates,
   clearChildDependenciesForParent,
   clearIssueDependencies,
   clearIssuesCache,
   deleteDependencyByType,
   deleteRelatedDependency,
   cacheLabel,
+  getCachedWorkflowStates,
   getLabelIdByName,
   cacheProject,
   getProjectIdByName,
+  invalidateCachedWorkflowState,
   updateLastSync,
   updateLastFullSync,
   pruneStaleIssues,
@@ -2296,20 +2299,30 @@ export async function fetchWorkflowStates(
 
 /**
  * Resolve a status input to a workflow state ID.
- * First tries to match as a canonical IssueStatus (by type), then tries to match by name.
- * Returns the state ID or throws an error with available states.
+ *
+ * Cache strategy:
+ *   1. Try the SQLite cache for the team's workflow states.
+ *   2. On miss, fetch from Linear and bulk-populate the cache.
+ *   3. Match canonical IssueStatus by type, then fall back to case-insensitive
+ *      name match for custom states.
+ *   4. Pass `forceRefresh: true` to bypass the cache (used for stale-while-invalidate
+ *      recovery when Linear rejects a cached state ID).
  */
 export async function resolveWorkflowState(
   teamId: string,
   statusInput: string,
-  options: { client?: GraphqlRequestClient } = {}
+  options: { client?: GraphqlRequestClient; forceRefresh?: boolean } = {}
 ): Promise<string> {
   const client: GraphqlRequestClient =
     options.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
-  
-  const states = await fetchWorkflowStates(teamId, { client });
-  
-  // First, try to parse as a canonical IssueStatus
+
+  let states =
+    options.forceRefresh ? [] : getCachedWorkflowStates(teamId);
+  if (states.length === 0) {
+    states = await fetchWorkflowStates(teamId, { client });
+    cacheWorkflowStates(teamId, states);
+  }
+
   const canonicalStatus = parseIssueStatus(statusInput);
   if (canonicalStatus) {
     const stateType = statusToLinearState(canonicalStatus);
@@ -2318,19 +2331,40 @@ export async function resolveWorkflowState(
       return state.id;
     }
   }
-  
-  // If not canonical, try to match by name (case-insensitive, normalized)
+
   const normalizedInput = statusInput.toLowerCase().trim();
-  const state = states.find((s) => {
-    const normalizedStateName = s.name.toLowerCase().trim();
-    return normalizedStateName === normalizedInput;
-  });
-  
+  const state = states.find((s) => s.name.toLowerCase().trim() === normalizedInput);
   if (state) {
     return state.id;
   }
-  
-  // No match found - throw helpful error
+
+  // No match found in cached states. Force-refresh once in case the workflow
+  // changed since we cached it, then retry.
+  if (!options.forceRefresh) {
+    const freshStates = await fetchWorkflowStates(teamId, { client });
+    cacheWorkflowStates(teamId, freshStates);
+
+    const refreshedCanonical = parseIssueStatus(statusInput);
+    if (refreshedCanonical) {
+      const refreshedType = statusToLinearState(refreshedCanonical);
+      const refreshedState = freshStates.find((s) => s.type === refreshedType);
+      if (refreshedState) {
+        return refreshedState.id;
+      }
+    }
+    const refreshedByName = freshStates.find(
+      (s) => s.name.toLowerCase().trim() === normalizedInput
+    );
+    if (refreshedByName) {
+      return refreshedByName.id;
+    }
+
+    const availableStates = freshStates.map((s) => s.name).join(", ");
+    throw new Error(
+      `Invalid status '${statusInput}'. Available states: ${availableStates}`
+    );
+  }
+
   const availableStates = states.map((s) => s.name).join(", ");
   throw new Error(
     `Invalid status '${statusInput}'. Available states: ${availableStates}`
@@ -3203,6 +3237,27 @@ export async function createIssue(params: {
 }
 
 /**
+ * Detect whether a GraphQL ClientError indicates a stale workflow state ID.
+ * Linear returns EntityNotFound with a path containing "stateId" when the
+ * cached state has been deleted/renamed in the team's workflow.
+ */
+function isStaleWorkflowStateError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const clientError = error as { response?: { errors?: Array<{ extensions?: Record<string, unknown>; path?: Array<string | number> }> } };
+  const errors = clientError.response?.errors;
+  if (!errors || !Array.isArray(errors)) return false;
+  return errors.some((err) => {
+    const code = String(err.extensions?.code || "").toUpperCase();
+    const type = String(err.extensions?.type || "").toUpperCase();
+    const isEntityNotFound =
+      code === "ENTITY_NOT_FOUND" || type === "ENTITY_NOT_FOUND" || type === "NOT_FOUND";
+    if (!isEntityNotFound) return false;
+    const path = err.path || [];
+    return path.includes("stateId");
+  });
+}
+
+/**
  * Update issue in Linear
  */
 export async function updateIssue(
@@ -3254,23 +3309,56 @@ export async function updateIssue(
     }
   `;
 
-  const result = await client.request<{
-    issueUpdate: { success: boolean; issue: LinearIssue | null };
-  }>(mutation, { id: issueId, input });
+  try {
+    const result = await client.request<{
+      issueUpdate: { success: boolean; issue: LinearIssue | null };
+    }>(mutation, { id: issueId, input });
 
-  if (!result.issueUpdate.success || !result.issueUpdate.issue) {
-    throw new Error("Failed to update issue");
-  }
+    if (!result.issueUpdate.success || !result.issueUpdate.issue) {
+      throw new Error("Failed to update issue");
+    }
 
-  reconcileIssueMediaCacheWithRemote(result.issueUpdate.issue.identifier, {
-    description: result.issueUpdate.issue.description,
-  });
-  if (deferredHeal.staleMediaIds.length > 0) {
-    deleteMediaItems(deferredHeal.staleMediaIds);
+    reconcileIssueMediaCacheWithRemote(result.issueUpdate.issue.identifier, {
+      description: result.issueUpdate.issue.description,
+    });
+    if (deferredHeal.staleMediaIds.length > 0) {
+      deleteMediaItems(deferredHeal.staleMediaIds);
+    }
+    const issue = linearToBdIssue(result.issueUpdate.issue);
+    cacheIssue(issue);
+    return issue;
+  } catch (error) {
+    const staleStateId = typeof input.stateId === "string" ? input.stateId : null;
+    if (!isStaleWorkflowStateError(error) || !staleStateId || !updates.status) {
+      throw error;
+    }
+
+    // Stale cached state ID — invalidate the specific row and force-refresh
+    // the team's workflow states, then retry the mutation once.
+    invalidateCachedWorkflowState(staleStateId);
+    input.stateId = await resolveWorkflowState(teamId, updates.status, {
+      client,
+      forceRefresh: true,
+    });
+
+    const retryResult = await client.request<{
+      issueUpdate: { success: boolean; issue: LinearIssue | null };
+    }>(mutation, { id: issueId, input });
+
+    if (!retryResult.issueUpdate.success || !retryResult.issueUpdate.issue) {
+      throw new Error("Failed to update issue");
+    }
+
+    reconcileIssueMediaCacheWithRemote(retryResult.issueUpdate.issue.identifier, {
+      description: retryResult.issueUpdate.issue.description,
+    });
+    if (deferredHeal.staleMediaIds.length > 0) {
+      deleteMediaItems(deferredHeal.staleMediaIds);
+    }
+    const issue = linearToBdIssue(retryResult.issueUpdate.issue);
+    cacheIssue(issue);
+    return issue;
   }
-  const issue = linearToBdIssue(result.issueUpdate.issue);
-  cacheIssue(issue);
-  return issue;
 }
 
 async function applyDeferredDescriptionAutoHeal(
