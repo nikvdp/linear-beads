@@ -403,6 +403,7 @@ function initSchema(db: Database, dbPath: string): void {
 
     -- Workflow states cache (for status resolution)
     CREATE TABLE IF NOT EXISTS workflow_states (
+      id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       type TEXT NOT NULL,
       team_id TEXT NOT NULL
