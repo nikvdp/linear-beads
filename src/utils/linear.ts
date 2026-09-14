@@ -3116,7 +3116,7 @@ export async function createIssue(params: {
   const client: GraphqlRequestClient =
     params.client || (getGraphQLClient() as unknown as GraphqlRequestClient);
 
-  const stateId = await resolveWorkflowState(params.teamId, params.status || "open", { client });
+  let stateId = await resolveWorkflowState(params.teamId, params.status || "open", { client });
 
   // Resolve parentId if provided (identifier -> UUID)
   let parentUuid: string | undefined;
@@ -3216,11 +3216,18 @@ export async function createIssue(params: {
       issueCreate: { success: boolean; issue: LinearIssue | null };
     }>(mutation, { input });
   } catch (error) {
-    if (!shouldRetryWithRefreshedBindings(error)) {
+    const refreshBindings = shouldRetryWithRefreshedBindings(error);
+    if (isStaleWorkflowStateError(error)) {
+      invalidateCachedWorkflowState(stateId);
+      stateId = await resolveWorkflowState(params.teamId, params.status || "open", {
+        client,
+        forceRefresh: true,
+      });
+    } else if (!refreshBindings) {
       throw error;
     }
 
-    const input = await buildInput(true);
+    const input = await buildInput(refreshBindings);
     result = await client.request<{
       issueCreate: { success: boolean; issue: LinearIssue | null };
     }>(mutation, { input });
@@ -3241,23 +3248,18 @@ export async function createIssue(params: {
 }
 
 /**
- * Detect whether a GraphQL ClientError indicates a stale workflow state ID.
- * Linear returns EntityNotFound with a path containing "stateId" when the
- * cached state has been deleted/renamed in the team's workflow.
+ * Missing-entity errors may identify only the mutation, not its stateId input.
+ * Callers with a state input refresh once; unrelated missing entities still fail.
  */
 function isStaleWorkflowStateError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const clientError = error as { response?: { errors?: Array<{ extensions?: Record<string, unknown>; path?: Array<string | number> }> } };
+  const clientError = error as { response?: { errors?: Array<{ extensions?: Record<string, unknown> }> } };
   const errors = clientError.response?.errors;
   if (!errors || !Array.isArray(errors)) return false;
   return errors.some((err) => {
-    const code = String(err.extensions?.code || "").toUpperCase();
-    const type = String(err.extensions?.type || "").toUpperCase();
-    const isEntityNotFound =
-      code === "ENTITY_NOT_FOUND" || type === "ENTITY_NOT_FOUND" || type === "NOT_FOUND";
-    if (!isEntityNotFound) return false;
-    const path = err.path || [];
-    return path.includes("stateId");
+    const code = String(err.extensions?.code || "").replace(/_/g, "").toUpperCase();
+    const type = String(err.extensions?.type || "").replace(/_/g, "").toUpperCase();
+    return code === "ENTITYNOTFOUND" || type === "ENTITYNOTFOUND" || type === "NOTFOUND";
   });
 }
 
