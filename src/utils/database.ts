@@ -831,7 +831,7 @@ function initSchema(db: Database, dbPath: string): void {
     db.exec("PRAGMA user_version = 13");
   }
 
-  if (currentVersion < 14) {
+  if (currentVersion < 15) {
     addColumnIfMissing(
       db,
       "issues",
@@ -839,7 +839,7 @@ function initSchema(db: Database, dbPath: string): void {
       "ALTER TABLE issues ADD COLUMN linear_state_name TEXT"
     );
 
-    db.exec("PRAGMA user_version = 14");
+    db.exec("PRAGMA user_version = 15");
   }
 
   ensureDependencyAliasIntegrity(db);
