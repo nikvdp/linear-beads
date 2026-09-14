@@ -831,6 +831,17 @@ function initSchema(db: Database, dbPath: string): void {
     db.exec("PRAGMA user_version = 13");
   }
 
+  if (currentVersion < 14) {
+    addColumnIfMissing(
+      db,
+      "issues",
+      "linear_state_name",
+      "ALTER TABLE issues ADD COLUMN linear_state_name TEXT"
+    );
+
+    db.exec("PRAGMA user_version = 14");
+  }
+
   ensureDependencyAliasIntegrity(db);
   ensureRelatedDependencyIntegrity(db);
 }
@@ -1368,9 +1379,10 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
         assignee,
         creator,
         linear_state_id,
+        linear_state_name,
         cached_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(local_id) DO UPDATE SET
         linear_id = COALESCE(excluded.linear_id, issues.linear_id),
         linear_identifier = COALESCE(excluded.linear_identifier, issues.linear_identifier),
@@ -1388,6 +1400,7 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
         assignee = excluded.assignee,
         creator = excluded.creator,
         linear_state_id = excluded.linear_state_id,
+        linear_state_name = excluded.linear_state_name,
         cached_at = datetime('now')
     `,
     [
@@ -1408,6 +1421,7 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
       issue.assignee || null,
       issue.creator || null,
       issue.linear_state_id || null,
+      issue.linear_state_name || null,
     ]
   );
 }
@@ -1425,6 +1439,7 @@ function rowToIssue(row: Record<string, unknown>): Issue {
     title: row.title as string,
     description: row.description as string | undefined,
     status: row.status as Issue["status"],
+    linear_state_name: (row.linear_state_name as string | null) || undefined,
     priority: row.priority as Issue["priority"],
     sync_status: (row.sync_status as Issue["sync_status"]) || "synced",
     created_at: row.created_at as string,
