@@ -3121,6 +3121,23 @@ export function getProjectIdByName(name: string, teamId?: string): string | null
   return row?.id || null;
 }
 
+export function cacheTeamId(teamKey: string, teamId: string): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [
+      `team_id:${teamKey.toUpperCase()}`,
+      teamId,
+    ]);
+  });
+}
+
+export function getCachedTeamId(teamKey: string): string | undefined {
+  const row = getDatabase()
+    .query("SELECT value FROM metadata WHERE key = ?")
+    .get(`team_id:${teamKey.toUpperCase()}`) as { value: string } | null;
+  return row?.value;
+}
+
 /**
  * Bulk-cache workflow states for a team. Replaces any cached rows for the team.
  */

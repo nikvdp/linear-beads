@@ -22,6 +22,7 @@ import {
   cacheIssue,
   cacheIssues,
   cacheDependency,
+  cacheTeamId,
   cacheWorkflowStates,
   clearChildDependenciesForParent,
   clearIssueDependencies,
@@ -2193,6 +2194,7 @@ export async function getTeamId(teamKey?: string): Promise<string> {
       throw new Error(`Team not found: ${key}`);
     }
 
+    cacheTeamId(key, result.teams.nodes[0].id);
     return result.teams.nodes[0].id;
   }
 
@@ -2220,6 +2222,8 @@ export async function getTeamId(teamKey?: string): Promise<string> {
   if (result.teams.nodes.length === 1) {
     // Auto-select single team
     const team = result.teams.nodes[0];
+    cacheTeamId(team.key, team.id);
+    cacheTeamId("", team.id);
     return team.id;
   }
 

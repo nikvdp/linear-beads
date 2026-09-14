@@ -6,6 +6,8 @@ import { Command } from "commander";
 import {
   queueOutboxItem,
   getCachedIssue,
+  getCachedTeamId,
+  getCachedWorkflowStates,
   cacheIssue,
   cacheDependency,
   deleteDependency,
@@ -36,14 +38,18 @@ import {
   outputError,
 } from "../utils/output.js";
 import { ensureOutboxProcessed } from "../utils/spawn-worker.js";
-import type { Issue, Priority, IssueStatus } from "../types.js";
+import type { Issue, Priority } from "../types.js";
 import {
   isTerminalStatus,
+  linearStateToStatus,
   parseIssueStatus,
   parsePriority,
+  VALID_ISSUE_STATUSES,
 } from "../types.js";
 import {
   getHumanOutputStyle,
+  getOption,
+  getTeamKey,
   HUMAN_OUTPUT_STYLE_CHOICES,
   isLocalOnly,
   parseHumanOutputStyle,
@@ -249,18 +255,26 @@ function assertNotSelfReferentialRelation(
 function applyLocalStatusMetadata(
   issue: Issue,
   updates: {
-    status?: IssueStatus;
+    status?: string;
   },
-  now: string
+  now: string,
+  workflowState?: { name: string; type: string }
 ): Issue {
-  if (!updates.status) {
-    return { ...issue, ...updates };
+  const { status: statusInput, ...fields } = updates;
+  const status = statusInput
+    ? parseIssueStatus(statusInput) ??
+      (workflowState ? linearStateToStatus(workflowState.type) : null)
+    : null;
+  if (!status) {
+    return { ...issue, ...fields };
   }
 
   return {
     ...issue,
-    ...updates,
-    closed_at: isTerminalStatus(updates.status) ? now : undefined,
+    ...fields,
+    status,
+    linear_state_name: workflowState?.name,
+    closed_at: isTerminalStatus(status) ? now : undefined,
   };
 }
 
@@ -376,10 +390,11 @@ export const updateCommand = new Command("update")
       const updates: {
         title?: string;
         description?: string;
-        status?: IssueStatus;
+        status?: string;
         priority?: Priority;
         assigneeId?: string | null;
       } = {};
+      let workflowState: { name: string; type: string } | undefined;
 
       if (options.title) updates.title = options.title;
       if (canonicalDescription !== undefined) updates.description = canonicalDescription;
@@ -387,17 +402,30 @@ export const updateCommand = new Command("update")
         const canonicalStatus = parseIssueStatus(options.status);
         if (canonicalStatus) {
           updates.status = canonicalStatus;
-        } else if (!isLocalOnly()) {
-          try {
-            const teamId = await getTeamId(options.team);
-            await resolveWorkflowState(teamId, options.status);
-            updates.status = options.status;
-          } catch (error) {
-            outputError(error instanceof Error ? error.message : String(error));
-            process.exit(1);
-          }
+        } else if (isLocalOnly()) {
+          throw new Error(
+            `Invalid status '${options.status}'. Must be one of: ${VALID_ISSUE_STATUSES.join(", ")}`
+          );
         } else {
-          updates.status = options.status;
+          const requestedStatus = String(options.status).trim();
+          updates.status = requestedStatus;
+          let teamId =
+            getCachedTeamId(options.team || getTeamKey() || "") ||
+            (!options.team ? getOption("team_id") : undefined);
+          workflowState = teamId
+            ? getCachedWorkflowStates(teamId).find(
+                (state) => state.name.trim().toLowerCase() === requestedStatus.toLowerCase()
+              )
+            : undefined;
+          if (!workflowState && !getAutomaticRemoteSyncPause() && !getActiveRemoteSyncPause()) {
+            try {
+              teamId ||= await getTeamId(options.team);
+              const stateId = await resolveWorkflowState(teamId, updates.status);
+              workflowState = getCachedWorkflowStates(teamId).find((state) => state.id === stateId);
+            } catch (error) {
+              if (!recordRemoteSyncPause(error)) throw error;
+            }
+          }
         }
       }
 
@@ -485,7 +513,7 @@ export const updateCommand = new Command("update")
         }
 
         const now = new Date().toISOString();
-        const updated = { ...applyLocalStatusMetadata(issue, updates, now), updated_at: now };
+        const updated = { ...applyLocalStatusMetadata(issue, updates, now, workflowState), updated_at: now };
         cacheIssue(updated);
         cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);
 
@@ -710,7 +738,7 @@ export const updateCommand = new Command("update")
       const now = new Date().toISOString();
 
       if (issue) {
-        const updated = { ...applyLocalStatusMetadata(issue, updates, now), updated_at: now };
+        const updated = { ...applyLocalStatusMetadata(issue, updates, now, workflowState), updated_at: now };
         cacheIssue(updated);
 
         if (normalizedParentInput) {

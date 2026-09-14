@@ -131,6 +131,7 @@ export const cancelCommand = new Command("cancel")
         const cancelled = {
           ...issue,
           status: "cancelled" as const,
+          linear_state_name: undefined,
           closed_at: now,
           updated_at: now,
         };
@@ -207,6 +208,7 @@ export const cancelCommand = new Command("cancel")
         const cancelled = {
           ...issue,
           status: "cancelled" as const,
+          linear_state_name: undefined,
           closed_at: now,
           updated_at: now,
         };
