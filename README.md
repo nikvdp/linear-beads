@@ -200,6 +200,12 @@ When you lose internet connectivity, `lb` continues working:
 - Writes queue in an outbox and sync when you're back online
 - `lb sync` shows a friendly message instead of failing
 
+For Linear-backed repos, `lb update <id> --status "In Review"` accepts custom
+workflow names, and `lb list --status "In Review"` filters cached issues by name.
+Canonical statuses such as `in_progress` and `closed` remain separate from workflow
+names. If you're offline and the requested workflow isn't cached, the update
+queues while the issue keeps its last known status until sync validates the request.
+
 ### Local-Only Mode
 
 For pure local usage (no Linear backend), add to `.lb/config.jsonc`:
@@ -215,6 +221,7 @@ In local-only mode:
 - `lb sync` is disabled (shows a message)
 - `lb create` generates LOCAL-001, LOCAL-002, etc. IDs
 - All commands work from local SQLite only
+- Status updates accept canonical statuses: `backlog`, `open`, `in_progress`, `closed`, and `cancelled`
 - Great for AI-only workflows or trying out lb without Linear
 
 ### Remote ID waiting

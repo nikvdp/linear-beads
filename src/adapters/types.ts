@@ -25,7 +25,7 @@ export interface IssueBackendAdapter {
     teamId: string;
     parentId?: string;
     assigneeId?: string;
-    status?: IssueStatus;
+    status?: string;
     syncKey?: string;
     skipCache?: boolean;
     autoFormatEscapedNewlines?: boolean;
@@ -35,7 +35,7 @@ export interface IssueBackendAdapter {
     updates: {
       title?: string;
       description?: string;
-      status?: IssueStatus;
+      status?: string;
       priority?: Priority;
       assigneeId?: string | null;
     },

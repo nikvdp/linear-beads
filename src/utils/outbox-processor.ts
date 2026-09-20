@@ -580,15 +580,15 @@ async function processResolvedItem(
         issueId: string;
         title?: string;
         description?: string;
-        status?: Issue["status"];
+        status?: string;
         priority?: Priority;
         deps?: string;
         parentId?: string | null;
       };
-      await updateIssue(updatePayload.issueId, updatePayload, teamId);
+      const updatedIssue = await updateIssue(updatePayload.issueId, updatePayload, teamId);
 
       if (propagateParent && updatePayload.status) {
-        await propagateStatusToParent(updatePayload.issueId, updatePayload.status, teamId);
+        await propagateStatusToParent(updatePayload.issueId, updatedIssue.status, teamId);
       }
 
       // Handle parent update - check for key existence, not truthiness (null means remove parent)

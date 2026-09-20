@@ -42,6 +42,7 @@ export interface Issue {
   title: string;
   description?: string;
   status: IssueStatus;
+  linear_state_name?: string;
   priority: Priority;
   issue_type?: IssueType; // Optional - only set when use_types is enabled
   // Sync status for local-first mode

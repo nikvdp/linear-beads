@@ -4,6 +4,8 @@
 
 - **Recursive issue tree export**: `lb show <id> --tree` now emits the root issue, every recursive child, and complete descriptions in human or nested JSON output
 - **Recursive tree guidance**: Onboarding and packaged skills now distinguish full `lb show --tree` context from `lb dep tree` ordering, with a working install-all example
+- **Custom workflow statuses**: Preserve workflow names in the issue cache for filtering, keep local statuses canonical, and allow custom updates to queue during network outages or sync pauses
+- **Workflow cache recovery**: Refresh rejected workflow IDs and retry issue creation once, without losing the existing label and project recovery behavior
 
 ## v9
 

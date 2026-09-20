@@ -145,6 +145,7 @@ export const closeCommand = new Command("close")
         const closed = {
           ...issue,
           status: "closed" as const,
+          linear_state_name: undefined,
           closed_at: now,
           updated_at: now,
         };
@@ -240,6 +241,7 @@ export const closeCommand = new Command("close")
         const closed = {
           ...issue,
           status: "closed" as const,
+          linear_state_name: undefined,
           closed_at: now,
           updated_at: now,
         };

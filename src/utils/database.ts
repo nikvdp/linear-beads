@@ -246,10 +246,38 @@ export function getDatabase(): Database {
           db!.exec("PRAGMA journal_mode = WAL");
         }
         db!.exec("PRAGMA synchronous = NORMAL");
+        healWorkflowStatesSchema(db!);
         initSchema(db!, dbPath);
       });
     });
   }
+  return db;
+}
+
+/**
+ * Heal workflow_states table if it exists with the broken schema (missing
+ * `id` PRIMARY KEY column) from an earlier commit. The table is only a cache,
+ * so dropping and recreating it is safe — any cached rows are rebuilt on the
+ * next workflow state lookup.
+ */
+function healWorkflowStatesSchema(db: Database): void {
+  const tableRow = db
+    .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'workflow_states'")
+    .get() as { sql: string } | null;
+  if (!tableRow) return;
+
+  const columns = db.query("PRAGMA table_info(workflow_states)").all() as Array<{
+    name: string;
+  }>;
+  const hasId = columns.some((c) => c.name === "id");
+  const hasUniqueConstraint = tableRow.sql.includes("UNIQUE(team_id, name)");
+
+  if (!hasId || !hasUniqueConstraint) {
+    db.exec("DROP TABLE workflow_states");
+  }
+}
+
+/**
   return db;
 }
 
@@ -400,6 +428,17 @@ function initSchema(db: Database, dbPath: string): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
+
+    -- Workflow states cache (for status resolution)
+    CREATE TABLE IF NOT EXISTS workflow_states (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      team_id TEXT NOT NULL,
+      UNIQUE(team_id, name)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_states_team_name ON workflow_states(team_id, name);
 
     -- Issue comments cache
     CREATE TABLE IF NOT EXISTS issue_comments (
@@ -790,6 +829,17 @@ function initSchema(db: Database, dbPath: string): void {
     addColumnIfMissing(db, "issues", "creator", "ALTER TABLE issues ADD COLUMN creator TEXT");
 
     db.exec("PRAGMA user_version = 13");
+  }
+
+  if (currentVersion < 15) {
+    addColumnIfMissing(
+      db,
+      "issues",
+      "linear_state_name",
+      "ALTER TABLE issues ADD COLUMN linear_state_name TEXT"
+    );
+
+    db.exec("PRAGMA user_version = 15");
   }
 
   ensureDependencyAliasIntegrity(db);
@@ -1329,9 +1379,10 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
         assignee,
         creator,
         linear_state_id,
+        linear_state_name,
         cached_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(local_id) DO UPDATE SET
         linear_id = COALESCE(excluded.linear_id, issues.linear_id),
         linear_identifier = COALESCE(excluded.linear_identifier, issues.linear_identifier),
@@ -1349,6 +1400,7 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
         assignee = excluded.assignee,
         creator = excluded.creator,
         linear_state_id = excluded.linear_state_id,
+        linear_state_name = excluded.linear_state_name,
         cached_at = datetime('now')
     `,
     [
@@ -1369,6 +1421,7 @@ function upsertIssueRow(db: Database, issue: CachedIssueInput): void {
       issue.assignee || null,
       issue.creator || null,
       issue.linear_state_id || null,
+      issue.linear_state_name || null,
     ]
   );
 }
@@ -1386,6 +1439,7 @@ function rowToIssue(row: Record<string, unknown>): Issue {
     title: row.title as string,
     description: row.description as string | undefined,
     status: row.status as Issue["status"],
+    linear_state_name: (row.linear_state_name as string | null) || undefined,
     priority: row.priority as Issue["priority"],
     sync_status: (row.sync_status as Issue["sync_status"]) || "synced",
     created_at: row.created_at as string,
@@ -3065,6 +3119,83 @@ export function getProjectIdByName(name: string, teamId?: string): string | null
     return null;
   }
   return row?.id || null;
+}
+
+export function cacheTeamId(teamKey: string, teamId: string): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [
+      `team_id:${teamKey.toUpperCase()}`,
+      teamId,
+    ]);
+  });
+}
+
+export function getCachedTeamId(teamKey: string): string | undefined {
+  const row = getDatabase()
+    .query("SELECT value FROM metadata WHERE key = ?")
+    .get(`team_id:${teamKey.toUpperCase()}`) as { value: string } | null;
+  return row?.value;
+}
+
+/**
+ * Bulk-cache workflow states for a team. Replaces any cached rows for the team.
+ */
+export function cacheWorkflowStates(
+  teamId: string,
+  states: Array<{ id: string; name: string; type: string }>
+): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM workflow_states WHERE team_id = ?", [teamId]);
+    const insert = db.prepare(
+      "INSERT INTO workflow_states (id, name, type, team_id) VALUES (?, ?, ?, ?)"
+    );
+    // Linear teams can have multiple workflows (e.g. main + triage), each with
+    // their own "Backlog" state. Dedup by name so the resolver sees one match
+    // per name; we keep the first occurrence's id.
+    const seen = new Set<string>();
+    for (const state of states) {
+      const key = state.name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      insert.run(state.id, state.name, state.type, teamId);
+    }
+  });
+}
+
+/**
+ * Get cached workflow states for a team. Returns empty array if none cached.
+ */
+export function getCachedWorkflowStates(
+  teamId: string
+): Array<{ id: string; name: string; type: string }> {
+  const db = getDatabase();
+  const rows = db
+    .query("SELECT id, name, type FROM workflow_states WHERE team_id = ?")
+    .all(teamId) as Array<{ id: string; name: string; type: string }>;
+  return rows;
+}
+
+/**
+ * Drop a single cached workflow state by ID. Used for stale-while-invalidate
+ * recovery when Linear rejects a state ID we have cached.
+ */
+export function invalidateCachedWorkflowState(stateId: string): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM workflow_states WHERE id = ?", [stateId]);
+  });
+}
+
+/**
+ * Invalidate all cached workflow states for a team.
+ */
+export function invalidateCachedWorkflowStatesForTeam(teamId: string): void {
+  const db = getDatabase();
+  runWithBusyRetry(() => {
+    db.run("DELETE FROM workflow_states WHERE team_id = ?", [teamId]);
+  });
 }
 
 /**
