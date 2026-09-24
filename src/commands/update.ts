@@ -8,6 +8,7 @@ import {
   getCachedIssue,
   getCachedTeamId,
   getCachedWorkflowStates,
+  getCachedViewer,
   cacheIssue,
   cacheDependency,
   deleteDependency,
@@ -438,12 +439,15 @@ export const updateCommand = new Command("update")
         updates.priority = priority;
       }
 
-      // Handle assignee
       if (options.unassign) {
         updates.assigneeId = null;
       }
 
-      // Build deps array from explicit flags + legacy --deps
+      const requestedAssignee = options.assign as string | undefined;
+      const localAssigneeEmail = requestedAssignee === "me"
+        ? getCachedViewer()?.email
+        : requestedAssignee;
+
       const allDeps: Array<{ type: string; targetId: string }> = [];
 
       for (const tid of options.blocks || []) {
@@ -483,6 +487,7 @@ export const updateCommand = new Command("update")
 
       if (
         Object.keys(updates).length === 0 &&
+        !requestedAssignee &&
         allDeps.length === 0 &&
         !normalizedParentInput &&
         !options.unparent
@@ -511,11 +516,15 @@ export const updateCommand = new Command("update")
           outputError(`Issue not found: ${id}`);
           process.exit(1);
         }
+        if (requestedAssignee === "me" && !localAssigneeEmail && !options.unassign) {
+          throw new Error("Cannot assign to 'me' in local-only mode without a cached viewer");
+        }
 
         const now = new Date().toISOString();
         const updated = { ...applyLocalStatusMetadata(issue, updates, now, workflowState), updated_at: now };
+        if (options.unassign) delete updated.assignee;
+        else if (localAssigneeEmail) updated.assignee = localAssigneeEmail;
         cacheIssue(updated);
-        cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);
 
         // Handle parent
         if (normalizedParentInput) {
@@ -736,9 +745,10 @@ export const updateCommand = new Command("update")
       }
 
       const now = new Date().toISOString();
-
       if (issue) {
         const updated = { ...applyLocalStatusMetadata(issue, updates, now, workflowState), updated_at: now };
+        // Assignment remains pending until the worker confirms it with the backend.
+        if (options.unassign) updated.assignee = issue.assignee;
         cacheIssue(updated);
 
         if (normalizedParentInput) {

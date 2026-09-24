@@ -43,6 +43,8 @@ import {
   closeIssue,
   deleteIssue,
   createRelation,
+  getViewer,
+  getUserByEmail,
   deleteRelation,
   addComment,
   findIssueBySyncKey,
@@ -582,9 +584,23 @@ async function processResolvedItem(
         description?: string;
         status?: string;
         priority?: Priority;
+        assigneeId?: string | null;
+        assign?: string;
+        unassign?: boolean;
         deps?: string;
         parentId?: string | null;
       };
+      if (updatePayload.unassign) {
+        updatePayload.assigneeId = null;
+      } else if (updatePayload.assign) {
+        if (updatePayload.assign === "me") {
+          updatePayload.assigneeId = (await getViewer()).id;
+        } else {
+          const user = await getUserByEmail(updatePayload.assign);
+          if (!user) throw new Error(`User not found: ${updatePayload.assign}`);
+          updatePayload.assigneeId = user.id;
+        }
+      }
       const updatedIssue = await updateIssue(updatePayload.issueId, updatePayload, teamId);
 
       if (propagateParent && updatePayload.status) {
