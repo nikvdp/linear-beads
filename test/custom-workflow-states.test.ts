@@ -95,6 +95,73 @@ test("custom workflow filters survive cache writes and schema upgrades", async (
 });
 
 const remoteConfig = { local_only: false, api_key: "test-key", team_key: "LIN" };
+test("local-only assignment updates cache without remote sync", async () => {
+  await runScenario(`
+    db.cacheIssue(issue);
+    db.cacheViewer({ id: "viewer-1", email: "me@example.com", name: "Me" });
+    globalThis.fetch = () => { throw new Error("Unexpected network request"); };
+    for (const [flags, email] of [
+      [["--assign", "other@example.com"], "other@example.com"],
+      [["--assign", "me"], "me@example.com"],
+      [["--unassign"], null]
+    ]) {
+      const log = console.log;
+      console.log = () => {};
+      try { await updateCommand.parseAsync([issue.id, ...flags, "--json"], { from: "user" }); }
+      finally { console.log = log; }
+      assert.equal(db.getCachedIssue(issue.id).assignee, email);
+    }
+    assert.equal(db.getPendingOutboxItems().length, 0);
+  `);
+});
+
+test("queued assignment updates resolve users and unassignment on replay", async () => {
+  await runScenario(`
+    db.cacheIssue(issue);
+    db.cacheViewer({ id: "viewer-1", email: "me@example.com", name: "Me" });
+    let previousEmail = null;
+    let expectedRemoteId = null;
+    globalThis.fetch = async (_url, init) => {
+      const { query, variables } = JSON.parse(init.body);
+      if (query.includes("GetUser")) {
+        assert.equal(variables.email, "other@example.com");
+        return Response.json({ data: { users: { nodes: [{ id: "user-2", email: variables.email, name: "Other" }] } } });
+      }
+      if (query.includes("GetIssueDescriptionForHeal")) {
+        return Response.json({ data: { issue: { description: null } } });
+      }
+      assert.ok(query.includes("mutation UpdateIssue"), query);
+      const assigneeId = variables.input.assigneeId;
+      assert.equal(assigneeId, expectedRemoteId);
+      return Response.json({ data: { issueUpdate: { success: true, issue: {
+        id: variables.id, identifier: variables.id, title: issue.title,
+        state: { id: "todo", name: "Todo", type: "unstarted" }, priority: 2,
+        createdAt: now, updatedAt: now, labels: { nodes: [] },
+        assignee: assigneeId ? { id: assigneeId, email: assigneeId === "viewer-1" ? "me@example.com" : "other@example.com" } : null,
+        parent: null
+      } } } });
+    };
+    for (const [flags, expectedId, expectedEmail] of [
+      [["--assign", "other@example.com"], "user-2", "other@example.com"],
+      [["--assign", "me"], "viewer-1", "me@example.com"],
+      [["--unassign"], null, null]
+    ]) {
+      expectedRemoteId = expectedId;
+      const log = console.log;
+      console.log = () => {};
+      try { await updateCommand.parseAsync([issue.id, ...flags, "--json"], { from: "user" }); }
+      finally { console.log = log; }
+      const queued = db.getPendingOutboxItems();
+      assert.equal(queued.length, 1);
+      assert.equal(db.getCachedIssue(issue.id).assignee, previousEmail);
+      assert.equal((await processOutboxQueue("team-1")).failed, 0);
+      assert.equal(db.getPendingOutboxItems().length, 0);
+      assert.equal(db.getCachedIssue(issue.id).assignee, expectedEmail);
+      previousEmail = expectedEmail;
+    }
+  `, remoteConfig);
+});
+
 
 test("cached custom updates keep canonical status and terminal metadata without network access", async () => {
   await runScenario(
