@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## v64
 
+- **Assignment updates**: `lb update --assign` works without `--sync`; queued assignment and unassignment reach Linear when the outbox replays, while pending changes do not claim a confirmed assignee
 - **Recursive issue tree export**: `lb show <id> --tree` now emits the root issue, every recursive child, and complete descriptions in human or nested JSON output
 - **Recursive tree guidance**: Onboarding and packaged skills now distinguish full `lb show --tree` context from `lb dep tree` ordering, with a working install-all example
 - **Custom workflow statuses**: Preserve workflow names in the issue cache for filtering, keep local statuses canonical, and allow custom updates to queue during network outages or sync pauses
