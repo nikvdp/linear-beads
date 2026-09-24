@@ -148,11 +148,25 @@ test("queued assignment updates resolve users and unassignment on replay", async
     ]) {
       expectedRemoteId = expectedId;
       const log = console.log;
-      console.log = () => {};
+      const printed = [];
+      console.log = (...args) => printed.push(args.join(" "));
       try { await updateCommand.parseAsync([issue.id, ...flags, "--json"], { from: "user" }); }
       finally { console.log = log; }
+      const response = JSON.parse(printed.join("\\n"))[0];
+      assert.equal(response.assignee, previousEmail);
+      assert.equal(Object.hasOwn(response, "assigneeId"), false);
+      const human = [];
+      console.log = (...args) => human.push(args.join(" "));
+      updateCommand.setOptionValue("json", false);
+      try { await updateCommand.parseAsync([issue.id, ...flags, "--style", "beads"], { from: "user" }); }
+      finally { console.log = log; }
+      assert.equal(human.length, 1);
+      assert.ok(human[0].includes("Assignment change queued; current assignee shown until sync."));
+      assert.equal(human[0].includes("assigneeId"), false);
+      if (previousEmail) assert.ok(human[0].includes("Assignee: " + previousEmail));
+      else assert.equal(human[0].includes("Assignee:"), false);
       const queued = db.getPendingOutboxItems();
-      assert.equal(queued.length, 1);
+      assert.equal(queued.length, 2);
       assert.equal(db.getCachedIssue(issue.id).assignee, previousEmail);
       assert.equal((await processOutboxQueue("team-1")).failed, 0);
       assert.equal(db.getPendingOutboxItems().length, 0);
