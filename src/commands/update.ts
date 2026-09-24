@@ -257,11 +257,12 @@ function applyLocalStatusMetadata(
   issue: Issue,
   updates: {
     status?: string;
+    assigneeId?: string | null;
   },
   now: string,
   workflowState?: { name: string; type: string }
 ): Issue {
-  const { status: statusInput, ...fields } = updates;
+  const { status: statusInput, assigneeId: _assigneeId, ...fields } = updates;
   const status = statusInput
     ? parseIssueStatus(statusInput) ??
       (workflowState ? linearStateToStatus(workflowState.type) : null)
@@ -747,8 +748,6 @@ export const updateCommand = new Command("update")
       const now = new Date().toISOString();
       if (issue) {
         const updated = { ...applyLocalStatusMetadata(issue, updates, now, workflowState), updated_at: now };
-        // Assignment remains pending until the worker confirms it with the backend.
-        if (options.unassign) updated.assignee = issue.assignee;
         cacheIssue(updated);
 
         if (normalizedParentInput) {
@@ -796,9 +795,12 @@ export const updateCommand = new Command("update")
           output(formatIssueJson(updated));
         } else {
           output(
-            style === "beads"
+            (style === "beads"
               ? formatIssueHumanBeads(updated, getDisplayId(updated.id))
-              : formatIssueHuman(updated, getDisplayId(updated.id))
+              : formatIssueHuman(updated, getDisplayId(updated.id))) +
+              (requestedAssignee || options.unassign
+                ? "\n  Assignment change queued; current assignee shown until sync."
+                : "")
           );
         }
       } else {
