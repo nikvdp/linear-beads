@@ -2520,6 +2520,31 @@ export function getBacklogDescendantIssueIds(): Set<string> {
 }
 
 /**
+ * Issues carrying delivery evidence (MG-1207).
+ *
+ * Delivered-via-marker comments (`<!-- lb-delivered:v1 -->`, written by
+ * `lb deliver`) mark beads whose work shipped but whose status was never
+ * advanced. Ready views exclude these; `lb ready --delivered` surfaces
+ * them for curation. Same id space as `getBlockedIssueIds` (issue_id).
+ */
+export function getDeliveredIssueIds(): Set<string> {
+  const db = getDatabase();
+  const rows = runWithBusyRetry(
+    () =>
+      db
+        .query(
+          `
+    SELECT DISTINCT c.issue_id as issue_id
+    FROM issue_comments c
+    WHERE c.body LIKE '%lb-delivered:v1%'
+  `
+        )
+        .all() as Array<{ issue_id: string }>
+  );
+  return new Set(rows.map((row) => row.issue_id));
+}
+
+/**
  * Add item to outbox queue
  */
 export function queueOutboxItem(
@@ -4103,9 +4128,7 @@ export function createAgentRun(input: {
 
 export function updateAgentRun(
   id: string,
-  updates: Partial<
-    Pick<AgentRun, "pid" | "status" | "ended_at" | "log_path" | "workdir">
-  >
+  updates: Partial<Pick<AgentRun, "pid" | "status" | "ended_at" | "log_path" | "workdir">>
 ): void {
   const entries = Object.entries(updates);
   if (entries.length === 0) return;
@@ -4122,18 +4145,18 @@ export function updateAgentRun(
   const db = getDatabase();
 
   runWithBusyRetry(() => {
-    db.run(
-      `UPDATE agent_runs SET ${assignments.join(", ")}, updated_at = ? WHERE id = ?`,
-      [...values, nowIso(), id]
-    );
+    db.run(`UPDATE agent_runs SET ${assignments.join(", ")}, updated_at = ? WHERE id = ?`, [
+      ...values,
+      nowIso(),
+      id,
+    ]);
   });
 }
 
 export function getAgentRun(id: string): AgentRun | null {
   const db = getDatabase();
   const row = runWithBusyRetry(
-    () =>
-      db.query("SELECT * FROM agent_runs WHERE id = ? LIMIT 1").get(id) as AgentRunRow | null
+    () => db.query("SELECT * FROM agent_runs WHERE id = ? LIMIT 1").get(id) as AgentRunRow | null
   );
   return row ? mapAgentRun(row) : null;
 }
