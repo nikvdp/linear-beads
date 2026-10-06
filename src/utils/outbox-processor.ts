@@ -498,7 +498,26 @@ async function processResolvedItem(
         parentId?: string;
         deps?: string;
         syncKey?: string;
+        assigneeId?: string;
       };
+      // Queue-mode creates carry raw assign values; resolve them now so the
+      // created issue is actually assigned. Unresolvable values are skipped
+      // (never dropped — a create row holds the only copy of the issue).
+      const rawAssign = payload.assign;
+      if (typeof rawAssign === "string" && rawAssign.trim()) {
+        try {
+          if (rawAssign === "me") {
+            createPayload.assigneeId = (await getViewer()).id;
+          } else {
+            const assignUser = await resolveAssignPayload(rawAssign);
+            if (assignUser) {
+              createPayload.assigneeId = assignUser.id;
+            }
+          }
+        } catch {
+          // Resolution unavailable offline; proceed unassigned.
+        }
+      }
       let remoteIssueIdentifier = item.remote_issue_identifier || getIssueIdMapping(localId);
       let remoteIssueUuid = getLinearIdForLocalId(resolveIssueLocalId(localId)) || undefined;
       let usedRemoteBackend = false;
@@ -596,8 +615,10 @@ async function processResolvedItem(
         if (updatePayload.assign === "me") {
           updatePayload.assigneeId = (await getViewer()).id;
         } else {
-          const user = await getUserByEmail(updatePayload.assign);
-          if (!user) throw new Error(`User not found: ${updatePayload.assign}`);
+          const user = await resolveAssignPayload(updatePayload.assign);
+          if (!user) {
+            throw new UnresolvableAssigneeError(`User not found: ${updatePayload.assign}`);
+          }
           updatePayload.assigneeId = user.id;
         }
       }
@@ -787,6 +808,50 @@ function isPermanentEntityError(errorMessage: string): boolean {
   return msg.includes("entity not found") || msg.includes("entity is trashed");
 }
 
+/**
+ * Thrown when an assignee payload references a user Linear cannot resolve
+ * (for example a bare agent handle like `sylvie` with no matching account).
+ * These rows can never succeed, so outbox processing drops them instead of
+ * retrying forever.
+ */
+export class UnresolvableAssigneeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnresolvableAssigneeError";
+  }
+}
+
+export function isUnresolvableAssigneeError(error: unknown): error is UnresolvableAssigneeError {
+  return error instanceof UnresolvableAssigneeError;
+}
+
+/**
+ * Resolve an assign payload value to a Linear user.
+ *
+ * Linear resolves users by UUID or email, not by bare agent handle. Bare
+ * handles are expanded using the viewer's email domain (fleet agents share
+ * one org domain), then looked up by email. Returns null when Linear has no
+ * such user; network failures throw so the row stays retryable.
+ */
+export async function resolveAssignPayload(
+  assign: string
+): Promise<{ id: string; email: string; name: string } | null> {
+  const trimmed = assign.trim();
+  if (!trimmed || trimmed === "me") {
+    return null;
+  }
+  if (trimmed.includes("@")) {
+    return getUserByEmail(trimmed);
+  }
+  const viewer = await getViewer();
+  const at = viewer.email.lastIndexOf("@");
+  const domain = at > 0 ? viewer.email.slice(at + 1) : "";
+  if (!domain) {
+    return null;
+  }
+  return getUserByEmail(`${trimmed}@${domain}`);
+}
+
 export function isIdempotentOutboxSuccessError(
   operation: OutboxItem["operation"],
   errorMessage: string
@@ -803,7 +868,13 @@ export function isIdempotentOutboxSuccessError(
 export async function processOutboxQueue(
   teamId: string,
   options: { propagateParent?: boolean } = {}
-): Promise<{ success: number; failed: number; deferred: number; remoteProcessed: number }> {
+): Promise<{
+  success: number;
+  failed: number;
+  deferred: number;
+  remoteProcessed: number;
+  dropped: number;
+}> {
   repairSelfReferentialDependencies();
   const items = getPendingOutboxItems();
   const pendingCreateLocalIds = new Set(
@@ -816,6 +887,7 @@ export async function processOutboxQueue(
   let failed = 0;
   let deferred = 0;
   let remoteProcessed = 0;
+  let dropped = 0;
   const blockedIssueIds = new Set<string>();
   const propagateParent = options.propagateParent === true;
 
@@ -913,6 +985,13 @@ export async function processOutboxQueue(
       success++;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
+      if (isUnresolvableAssigneeError(error)) {
+        // The queued assign value names a user Linear cannot resolve; retrying
+        // can never succeed. Drop the row and report it via sync output.
+        removeOutboxItem(item.id);
+        dropped++;
+        continue;
+      }
       if (
         (isPermanentEntityError(errorMsg) && item.operation !== "create") ||
         isIdempotentOutboxSuccessError(item.operation, errorMsg)
@@ -933,5 +1012,5 @@ export async function processOutboxQueue(
     }
   }
 
-  return { success, failed, deferred, remoteProcessed };
+  return { success, failed, deferred, remoteProcessed, dropped };
 }

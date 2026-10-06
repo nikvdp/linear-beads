@@ -2872,6 +2872,82 @@ export function getOutboxStats(): { total: number; processing: number } {
   };
 }
 
+export type OutboxStateFilter = {
+  /** Only match rows that have a recorded error (default for purge/reset). */
+  failedOnly?: boolean;
+  /** Match rows for one issue: local id, Linear id, or payload issueId. */
+  issueId?: string;
+};
+
+function buildOutboxStateFilterWhere(filter: OutboxStateFilter): {
+  where: string;
+  params: unknown[];
+} {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filter.failedOnly) {
+    clauses.push("last_error IS NOT NULL");
+  }
+  const issueId = filter.issueId?.trim();
+  if (issueId) {
+    clauses.push(
+      "(local_id = ? OR remote_issue_identifier = ? OR json_extract(payload, '$.issueId') = ?)"
+    );
+    params.push(issueId, issueId, issueId);
+  }
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+  return { where, params };
+}
+
+/** Count outbox rows matching the given state filter. */
+export function getOutboxRowCount(filter: OutboxStateFilter = {}): number {
+  const db = getDatabase();
+  const { where, params } = buildOutboxStateFilterWhere(filter);
+  const row = db.query(`SELECT COUNT(*) as count FROM outbox ${where}`).get(...(params as [])) as {
+    count: number;
+  };
+  return row.count;
+}
+
+/**
+ * Delete outbox rows matching the given state filter.
+ * Returns the number of rows removed.
+ */
+export function purgeOutboxItems(filter: OutboxStateFilter = {}): number {
+  const db = getDatabase();
+  const { where, params } = buildOutboxStateFilterWhere(filter);
+  return runWithBusyRetry(() => {
+    db.run(`DELETE FROM outbox ${where}`, ...(params as []));
+    const row = db.query("SELECT changes() as count").get() as { count: number };
+    return row.count;
+  });
+}
+
+/**
+ * Clear retry counters and recorded errors on matching outbox rows so they
+ * are eligible for immediate reprocessing. Also releases stuck processing
+ * claims. Returns the number of rows updated.
+ */
+export function resetOutboxRetryCounts(filter: OutboxStateFilter = {}): number {
+  const db = getDatabase();
+  const { where, params } = buildOutboxStateFilterWhere(filter);
+  return runWithBusyRetry(() => {
+    db.run(
+      `UPDATE outbox
+       SET retry_count = 0,
+           last_error = NULL,
+           last_error_at = NULL,
+           next_attempt_at = NULL,
+           processing = 0,
+           processing_started_at = NULL
+       ${where}`,
+      ...(params as [])
+    );
+    const row = db.query("SELECT changes() as count").get() as { count: number };
+    return row.count;
+  });
+}
+
 /**
  * Remove item from outbox (after successful sync)
  */
@@ -4103,9 +4179,7 @@ export function createAgentRun(input: {
 
 export function updateAgentRun(
   id: string,
-  updates: Partial<
-    Pick<AgentRun, "pid" | "status" | "ended_at" | "log_path" | "workdir">
-  >
+  updates: Partial<Pick<AgentRun, "pid" | "status" | "ended_at" | "log_path" | "workdir">>
 ): void {
   const entries = Object.entries(updates);
   if (entries.length === 0) return;
@@ -4122,18 +4196,18 @@ export function updateAgentRun(
   const db = getDatabase();
 
   runWithBusyRetry(() => {
-    db.run(
-      `UPDATE agent_runs SET ${assignments.join(", ")}, updated_at = ? WHERE id = ?`,
-      [...values, nowIso(), id]
-    );
+    db.run(`UPDATE agent_runs SET ${assignments.join(", ")}, updated_at = ? WHERE id = ?`, [
+      ...values,
+      nowIso(),
+      id,
+    ]);
   });
 }
 
 export function getAgentRun(id: string): AgentRun | null {
   const db = getDatabase();
   const row = runWithBusyRetry(
-    () =>
-      db.query("SELECT * FROM agent_runs WHERE id = ? LIMIT 1").get(id) as AgentRunRow | null
+    () => db.query("SELECT * FROM agent_runs WHERE id = ? LIMIT 1").get(id) as AgentRunRow | null
   );
   return row ? mapAgentRun(row) : null;
 }
