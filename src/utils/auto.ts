@@ -9,6 +9,7 @@ import {
   getRepoScope,
   isLocalOnly,
 } from "./config.js";
+import { fetchMergedBeadRefs } from "./merged-bead-refs.js";
 import {
   getCachedIssue,
   getChildIds,
@@ -17,18 +18,9 @@ import {
   getParentId,
 } from "./database.js";
 import { getGraphQLClient, ISSUE_FRAGMENT } from "./graphql.js";
-import {
-  addComment,
-  fetchIssue,
-  getTeamId,
-  getViewer,
-  updateIssue,
-} from "./issue-backend.js";
+import { addComment, fetchIssue, getTeamId, getViewer, updateIssue } from "./issue-backend.js";
 import { ensureRepoLabel, linearToBdIssue } from "./linear.js";
-import {
-  formatRemoteSyncPauseNotice,
-  getCommandRemoteSyncPause,
-} from "./remote-sync-state.js";
+import { formatRemoteSyncPauseNotice, getCommandRemoteSyncPause } from "./remote-sync-state.js";
 import { workerLabelName } from "./worker-identity.js";
 
 export class ClaimLostError extends Error {
@@ -160,6 +152,33 @@ export async function fetchClaimableAutoIssues(
     if (hasOpenChildWork(issueId)) continue;
     if (await hasBacklogAncestor(issueId)) continue;
     claimable.push(fresh);
+  }
+
+  // MG-1207: same delivery-evidence filter as `lb ready` — the auto pool
+  // serves status=open beads too, so a delivered-but-open bead could be
+  // auto-CLAIMED (stale-queue class, rule 24: one filter, two call sites).
+  // Loud and non-blocking on gh failure — never stop the claim loop cold.
+  if (claimable.length > 0) {
+    const { refs, error } = fetchMergedBeadRefs();
+    if (error) {
+      console.warn(
+        `! delivery-filter unavailable (${error}) — auto pool unfiltered; delivered beads may appear (MG-1207)`
+      );
+    } else if (refs.size > 0) {
+      const beforeCount = claimable.length;
+      const filtered = claimable.filter((i) => {
+        const gid = i.linear_identifier || i.id;
+        return !(gid && refs.has(gid.toUpperCase()));
+      });
+      const hiddenCount = beforeCount - filtered.length;
+      if (hiddenCount > 0) {
+        console.warn(
+          `note: ${hiddenCount} delivered bead(s) hidden from auto pool (merged PR found — MG-1207)`
+        );
+      }
+      claimable.length = 0;
+      claimable.push(...filtered);
+    }
   }
 
   return claimable.sort(
