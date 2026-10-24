@@ -16,6 +16,10 @@ import {
   getCachedIssue,
   getCachedIssues,
   getDisplayId,
+  getOutboxDiagnosticItems,
+  getOutboxRowCount,
+  purgeOutboxItems,
+  resetOutboxRetryCounts,
   resolveIssueId,
 } from "../utils/database.js";
 import { output, outputError, outputProgress } from "../utils/output.js";
@@ -542,4 +546,92 @@ export const linearCommand = new Command("linear")
           process.exit(1);
         }
       })
+  )
+  .addCommand(
+    new Command("outbox")
+      .description("Inspect and repair the local outbox queue (local state; works offline)")
+      .addCommand(
+        new Command("purge")
+          .description("Delete outbox rows (default: only rows with recorded errors)")
+          .option("--all", "Purge pending rows too, not only failed ones")
+          .option(
+            "--issue <id>",
+            "Only purge rows for one issue (local id, Linear id, or identifier)"
+          )
+          .option("-y, --yes", "Delete without showing a preview first")
+          .option("-j, --json", "Output as JSON")
+          .action(async (options) => {
+            try {
+              const filter = {
+                failedOnly: !options.all,
+                issueId: options.issue as string | undefined,
+              };
+              const matched = getOutboxRowCount(filter);
+              if (matched === 0) {
+                if (options.json) {
+                  output(JSON.stringify({ purged: 0, matched: 0, filter }, null, 2));
+                } else {
+                  output("No matching outbox rows.");
+                }
+                return;
+              }
+              if (!options.yes && !options.json) {
+                output(`Would purge ${matched} outbox row(s). Re-run with --yes to delete.`);
+                return;
+              }
+              const purged = purgeOutboxItems(filter);
+              if (options.json) {
+                output(JSON.stringify({ purged, matched, filter }, null, 2));
+              } else {
+                output(`Purged ${purged} outbox row(s).`);
+              }
+            } catch (error) {
+              outputError(error instanceof Error ? error.message : String(error));
+              process.exit(1);
+            }
+          })
+      )
+      .addCommand(
+        new Command("reset-retry")
+          .description(
+            "Clear retry counters and recorded errors so matching rows retry on the next sync"
+          )
+          .option("--all", "Reset every matching row, not only failed ones")
+          .option(
+            "--issue <id>",
+            "Only reset rows for one issue (local id, Linear id, or identifier)"
+          )
+          .option("-y, --yes", "Reset without showing a preview first")
+          .option("-j, --json", "Output as JSON")
+          .action(async (options) => {
+            try {
+              const filter = {
+                failedOnly: !options.all,
+                issueId: options.issue as string | undefined,
+              };
+              const matched = getOutboxRowCount(filter);
+              if (matched === 0) {
+                if (options.json) {
+                  output(JSON.stringify({ reset: 0, matched: 0, filter }, null, 2));
+                } else {
+                  output("No matching outbox rows.");
+                }
+                return;
+              }
+              if (!options.yes && !options.json) {
+                output(`Would reset retry state on ${matched} outbox row(s). Re-run with --yes.`);
+                return;
+              }
+              const reset = resetOutboxRetryCounts(filter);
+              if (options.json) {
+                output(JSON.stringify({ reset, matched, filter }, null, 2));
+              } else {
+                output(`Reset retry state on ${reset} outbox row(s). Run \`lb sync\` to retry.`);
+              }
+            } catch (error) {
+              outputError(error instanceof Error ? error.message : String(error));
+              process.exit(1);
+            }
+          })
+      )
   );

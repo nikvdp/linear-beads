@@ -34,6 +34,8 @@ const SQLITE_RETRY_BASE_DELAY_MS = 50;
 const OUTBOX_CLAIM_TIMEOUT_MS = 600000;
 const OUTBOX_RETRY_BASE_DELAY_MS = 1000;
 const OUTBOX_RETRY_MAX_DELAY_MS = 300000;
+// MG-1665: attempts cap for non-rate-limited failures → dead-letter row.
+const OUTBOX_MAX_RETRIES = 10;
 const LOCAL_ID_WITH_DASH_RE = /^local-(\d+)$/i;
 const LINEAR_ID_WITH_DASH_RE = /^([A-Za-z]+)-(\d+)$/;
 const LINEAR_ID_NO_DASH_RE = /^([A-Za-z]+)(\d+)$/;
@@ -2522,11 +2524,36 @@ export function getBacklogDescendantIssueIds(): Set<string> {
 /**
  * Add item to outbox queue
  */
+/**
+ * MG-1665: assignee values that reach the outbox must be in a form Linear
+ * can resolve at push time — 'me', an email, or a user UUID. Bare agent
+ * handles ('sylvie') were previously accepted at enqueue and retried
+ * forever downstream ("User not found: sylvie", 91 retries, no cap —
+ * Mags's specimen). Reject at enqueue instead: the command fails loud,
+ * no row is queued, nothing can retry.
+ */
+function assertAssignableForm(value: unknown, field: string): void {
+  if (value === undefined || value === null) return;
+  if (typeof value !== "string") return; // non-string shapes: push-time validation owns them
+  const v = value.trim();
+  if (v === "" || v === "me") return;
+  if (v.includes("@")) return; // email form — existence checked at push (drop path)
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) {
+    return; // user UUID
+  }
+  throw new Error(
+    `MG-1665: queue rejected — ${field} '${v}' is a bare handle, which Linear cannot resolve. ` +
+      `Use an email address (e.g. ${v}@metrograph.ai) or 'me'. Nothing was queued.`
+  );
+}
+
 export function queueOutboxItem(
   operation: OutboxItem["operation"],
   payload: Record<string, unknown>,
   localId?: string
 ): number {
+  assertAssignableForm(payload.assign, "assign");
+  assertAssignableForm(payload.assignee, "assignee");
   const db = getDatabase();
   runWithBusyRetry(() => {
     db.run(
@@ -2872,6 +2899,82 @@ export function getOutboxStats(): { total: number; processing: number } {
   };
 }
 
+export type OutboxStateFilter = {
+  /** Only match rows that have a recorded error (default for purge/reset). */
+  failedOnly?: boolean;
+  /** Match rows for one issue: local id, Linear id, or payload issueId. */
+  issueId?: string;
+};
+
+function buildOutboxStateFilterWhere(filter: OutboxStateFilter): {
+  where: string;
+  params: unknown[];
+} {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filter.failedOnly) {
+    clauses.push("last_error IS NOT NULL");
+  }
+  const issueId = filter.issueId?.trim();
+  if (issueId) {
+    clauses.push(
+      "(local_id = ? OR remote_issue_identifier = ? OR json_extract(payload, '$.issueId') = ?)"
+    );
+    params.push(issueId, issueId, issueId);
+  }
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+  return { where, params };
+}
+
+/** Count outbox rows matching the given state filter. */
+export function getOutboxRowCount(filter: OutboxStateFilter = {}): number {
+  const db = getDatabase();
+  const { where, params } = buildOutboxStateFilterWhere(filter);
+  const row = db.query(`SELECT COUNT(*) as count FROM outbox ${where}`).get(...(params as [])) as {
+    count: number;
+  };
+  return row.count;
+}
+
+/**
+ * Delete outbox rows matching the given state filter.
+ * Returns the number of rows removed.
+ */
+export function purgeOutboxItems(filter: OutboxStateFilter = {}): number {
+  const db = getDatabase();
+  const { where, params } = buildOutboxStateFilterWhere(filter);
+  return runWithBusyRetry(() => {
+    db.run(`DELETE FROM outbox ${where}`, ...(params as []));
+    const row = db.query("SELECT changes() as count").get() as { count: number };
+    return row.count;
+  });
+}
+
+/**
+ * Clear retry counters and recorded errors on matching outbox rows so they
+ * are eligible for immediate reprocessing. Also releases stuck processing
+ * claims. Returns the number of rows updated.
+ */
+export function resetOutboxRetryCounts(filter: OutboxStateFilter = {}): number {
+  const db = getDatabase();
+  const { where, params } = buildOutboxStateFilterWhere(filter);
+  return runWithBusyRetry(() => {
+    db.run(
+      `UPDATE outbox
+       SET retry_count = 0,
+           last_error = NULL,
+           last_error_at = NULL,
+           next_attempt_at = NULL,
+           processing = 0,
+           processing_started_at = NULL
+       ${where}`,
+      ...(params as [])
+    );
+    const row = db.query("SELECT changes() as count").get() as { count: number };
+    return row.count;
+  });
+}
+
 /**
  * Remove item from outbox (after successful sync)
  */
@@ -2976,8 +3079,19 @@ export function updateOutboxItemError(
       ? 1 + Math.random() * 0.25
       : 1 + Math.random() * 0.1;
   const backoffMs = Math.max(1000, Math.round(baseBackoffMs * jitterMultiplier));
-  const nextAttemptAt = new Date(Date.now() + backoffMs).toISOString();
+  let nextAttemptAt: string | null = new Date(Date.now() + backoffMs).toISOString();
   const lastErrorAt = new Date().toISOString();
+  let errorForRow = error;
+  // MG-1665: retry cap — non-rate-limited failures must not schedule
+  // forever (the 91-retry specimen). At OUTBOX_MAX_RETRIES+1 the row is
+  // DEAD-LETERED: no next attempt, last_error says so, and it stays
+  // visible to doctor/purge (`lb linear outbox purge`, default = error
+  // rows). Rate-limited rows are exempt: they self-clear on the server
+  // schedule and a cap would drop legitimate backoff.
+  if (!isRateLimited && nextRetryCount > OUTBOX_MAX_RETRIES) {
+    nextAttemptAt = null;
+    errorForRow = `dead-letter (MG-1665): retry cap ${OUTBOX_MAX_RETRIES} exceeded — ${error}`;
+  }
 
   runWithBusyRetry(() => {
     db.run(
@@ -2991,7 +3105,7 @@ export function updateOutboxItemError(
         processing_started_at = NULL
     WHERE id = ?
   `,
-      [nextRetryCount, error, lastErrorAt, nextAttemptAt, id]
+      [nextRetryCount, errorForRow, lastErrorAt, nextAttemptAt, id]
     );
   });
 }
@@ -4103,9 +4217,7 @@ export function createAgentRun(input: {
 
 export function updateAgentRun(
   id: string,
-  updates: Partial<
-    Pick<AgentRun, "pid" | "status" | "ended_at" | "log_path" | "workdir">
-  >
+  updates: Partial<Pick<AgentRun, "pid" | "status" | "ended_at" | "log_path" | "workdir">>
 ): void {
   const entries = Object.entries(updates);
   if (entries.length === 0) return;
@@ -4122,18 +4234,18 @@ export function updateAgentRun(
   const db = getDatabase();
 
   runWithBusyRetry(() => {
-    db.run(
-      `UPDATE agent_runs SET ${assignments.join(", ")}, updated_at = ? WHERE id = ?`,
-      [...values, nowIso(), id]
-    );
+    db.run(`UPDATE agent_runs SET ${assignments.join(", ")}, updated_at = ? WHERE id = ?`, [
+      ...values,
+      nowIso(),
+      id,
+    ]);
   });
 }
 
 export function getAgentRun(id: string): AgentRun | null {
   const db = getDatabase();
   const row = runWithBusyRetry(
-    () =>
-      db.query("SELECT * FROM agent_runs WHERE id = ? LIMIT 1").get(id) as AgentRunRow | null
+    () => db.query("SELECT * FROM agent_runs WHERE id = ? LIMIT 1").get(id) as AgentRunRow | null
   );
   return row ? mapAgentRun(row) : null;
 }

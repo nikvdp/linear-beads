@@ -105,7 +105,7 @@ export const syncCommand = new Command("sync")
           output(
             JSON.stringify(
               {
-                pushed: { success: 0, failed: 0 },
+                pushed: { success: 0, failed: 0, dropped: 0 },
                 pulled: 0,
                 type: "skipped",
                 degraded: true,
@@ -184,8 +184,16 @@ export const syncCommand = new Command("sync")
           )
         );
       } else {
-        if (result.pushed.success > 0 || result.pushed.failed > 0) {
-          output(`Pushed: ${result.pushed.success} succeeded, ${result.pushed.failed} failed`);
+        if (
+          result.pushed.success > 0 ||
+          result.pushed.failed > 0 ||
+          (result.pushed.dropped ?? 0) > 0
+        ) {
+          const dropped = result.pushed.dropped ?? 0;
+          const droppedSuffix = dropped > 0 ? `, ${dropped} dropped (unresolvable assignee)` : "";
+          output(
+            `Pushed: ${result.pushed.success} succeeded, ${result.pushed.failed} failed${droppedSuffix}`
+          );
           if (result.pushed.failed > 0) {
             const failedItems = getPendingOutboxItems()
               .filter((item) => item.last_error)

@@ -29,6 +29,7 @@ import {
   getUserByEmail,
   createRelation,
 } from "../utils/issue-backend.js";
+import { resolveAssignPayload } from "../utils/outbox-processor.js";
 import { resolveWorkflowState, toCanonicalLocalDescription } from "../utils/linear.js";
 import {
   formatIssueJson,
@@ -264,8 +265,8 @@ function applyLocalStatusMetadata(
 ): Issue {
   const { status: statusInput, assigneeId: _assigneeId, ...fields } = updates;
   const status = statusInput
-    ? parseIssueStatus(statusInput) ??
-      (workflowState ? linearStateToStatus(workflowState.type) : null)
+    ? (parseIssueStatus(statusInput) ??
+      (workflowState ? linearStateToStatus(workflowState.type) : null))
     : null;
   if (!status) {
     return { ...issue, ...fields };
@@ -319,7 +320,10 @@ export const updateCommand = new Command("update")
     "--no-auto-format-escaped-newlines",
     "Preserve literal \\\\n sequences instead of auto-correcting them"
   )
-  .option("-s, --status <status>", "Status: canonical (backlog, open, in_progress, closed, cancelled) or custom workflow state name")
+  .option(
+    "-s, --status <status>",
+    "Status: canonical (backlog, open, in_progress, closed, cancelled) or custom workflow state name"
+  )
   .option("-p, --priority <priority>", "Priority: urgent, high, medium, low, backlog (or 0-4)")
   .option("--assign <email>", "Assign to user (email or 'me')")
   .option("--unassign", "Remove assignee")
@@ -445,9 +449,8 @@ export const updateCommand = new Command("update")
       }
 
       const requestedAssignee = options.assign as string | undefined;
-      const localAssigneeEmail = requestedAssignee === "me"
-        ? getCachedViewer()?.email
-        : requestedAssignee;
+      const localAssigneeEmail =
+        requestedAssignee === "me" ? getCachedViewer()?.email : requestedAssignee;
 
       const allDeps: Array<{ type: string; targetId: string }> = [];
 
@@ -522,7 +525,10 @@ export const updateCommand = new Command("update")
         }
 
         const now = new Date().toISOString();
-        const updated = { ...applyLocalStatusMetadata(issue, updates, now, workflowState), updated_at: now };
+        const updated = {
+          ...applyLocalStatusMetadata(issue, updates, now, workflowState),
+          updated_at: now,
+        };
         if (options.unassign) delete updated.assignee;
         else if (localAssigneeEmail) updated.assignee = localAssigneeEmail;
         cacheIssue(updated);
@@ -729,6 +735,28 @@ export const updateCommand = new Command("update")
       // Remove assigneeId from payload - worker will resolve it
       delete payload.assigneeId;
 
+      // Best-effort: canonicalize bare agent handles to emails at queue time so
+      // push-time resolution has less work. Offline, rewrite with the cached
+      // viewer's domain; push-time resolve-or-drop still validates the user.
+      if (
+        typeof payload.assign === "string" &&
+        payload.assign !== "me" &&
+        !payload.assign.includes("@")
+      ) {
+        try {
+          const resolvedAssign = await resolveAssignPayload(payload.assign);
+          if (resolvedAssign?.email) {
+            payload.assign = resolvedAssign.email;
+          }
+        } catch {
+          const cachedViewer = getCachedViewer();
+          const at = cachedViewer ? cachedViewer.email.lastIndexOf("@") : -1;
+          if (cachedViewer && at > 0) {
+            payload.assign = `${payload.assign}@${cachedViewer.email.slice(at + 1)}`;
+          }
+        }
+      }
+
       queueOutboxItem("update", payload, resolvedId);
       cachePreparedDescriptionMedia(resolvedId, preparedMedia.mediaItems);
 
@@ -747,7 +775,10 @@ export const updateCommand = new Command("update")
 
       const now = new Date().toISOString();
       if (issue) {
-        const updated = { ...applyLocalStatusMetadata(issue, updates, now, workflowState), updated_at: now };
+        const updated = {
+          ...applyLocalStatusMetadata(issue, updates, now, workflowState),
+          updated_at: now,
+        };
         cacheIssue(updated);
 
         if (normalizedParentInput) {

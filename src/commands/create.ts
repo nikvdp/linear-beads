@@ -12,6 +12,7 @@ import {
   getDatabase,
   getCachedIssue,
   getCachedIssues,
+  getCachedViewer,
   getDisplayId,
   reassignMediaItemsToIssue,
   resolveIssueId,
@@ -29,6 +30,7 @@ import {
   getUserByEmail,
   createRelation,
 } from "../utils/issue-backend.js";
+import { resolveAssignPayload } from "../utils/outbox-processor.js";
 import { toCanonicalLocalDescription } from "../utils/linear.js";
 import {
   formatIssueJson,
@@ -701,6 +703,28 @@ export const createCommand = new Command("create")
       };
       if (issueType) {
         payload.issueType = issueType;
+      }
+
+      // Best-effort: canonicalize bare agent handles to emails at queue time so
+      // push-time resolution has less work. Offline, rewrite with the cached
+      // viewer's domain; push-time resolve-or-drop still validates the user.
+      if (
+        typeof payload.assign === "string" &&
+        payload.assign !== "me" &&
+        !payload.assign.includes("@")
+      ) {
+        try {
+          const resolvedAssign = await resolveAssignPayload(payload.assign);
+          if (resolvedAssign?.email) {
+            payload.assign = resolvedAssign.email;
+          }
+        } catch {
+          const cachedViewer = getCachedViewer();
+          const at = cachedViewer ? cachedViewer.email.lastIndexOf("@") : -1;
+          if (cachedViewer && at > 0) {
+            payload.assign = `${payload.assign}@${cachedViewer.email.slice(at + 1)}`;
+          }
+        }
       }
 
       const db = getDatabase();

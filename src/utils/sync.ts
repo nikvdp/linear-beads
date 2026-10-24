@@ -48,8 +48,10 @@ const OUTBOX_INFLIGHT_POLL_MS = 100;
 const SYNC_DEFAULT_STRICT_TIMEOUT_MS = 120000;
 const SYNC_DEFAULT_BEST_EFFORT_TIMEOUT_MS = 12000;
 
+type PushedOutboxCounts = { success: number; failed: number; dropped: number };
+
 type SmartSyncResult = {
-  pushed: { success: number; failed: number };
+  pushed: PushedOutboxCounts;
   pulled: number;
   pruned?: number;
   type: "incremental" | "full" | "skipped";
@@ -173,9 +175,10 @@ export function __setSmartSyncRunnerForTests(runner: SmartSyncRunner | null): vo
   smartSyncRunnerForTests = runner;
 }
 
-export async function pushOutbox(teamId: string): Promise<{ success: number; failed: number }> {
+export async function pushOutbox(teamId: string): Promise<PushedOutboxCounts> {
   let success = 0;
   let failed = 0;
+  let dropped = 0;
   let waitedMs = 0;
 
   // Self-heal missing/stuck create rows so LOCAL issues can converge even if outbox state was lost.
@@ -185,12 +188,13 @@ export async function pushOutbox(teamId: string): Promise<{ success: number; fai
     const result = await processOutboxQueue(teamId);
     success += result.success;
     failed += result.failed;
+    dropped += result.dropped;
 
     if (result.deferred === 0) {
       break;
     }
 
-    if (result.success > 0 || result.failed > 0) {
+    if (result.success > 0 || result.failed > 0 || result.dropped > 0) {
       continue;
     }
 
@@ -207,7 +211,7 @@ export async function pushOutbox(teamId: string): Promise<{ success: number; fai
     waitedMs += OUTBOX_INFLIGHT_POLL_MS;
   }
 
-  return { success, failed };
+  return { success, failed, dropped };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -292,7 +296,7 @@ async function pullIssueComments(issues: Issue[]): Promise<number> {
  * Returns count of updated issues, or null if no last sync (first run).
  */
 export async function incrementalSync(teamKey?: string): Promise<{
-  pushed: { success: number; failed: number };
+  pushed: PushedOutboxCounts;
   pulled: number;
   type: "incremental" | "skipped";
 } | null> {
@@ -368,7 +372,7 @@ export async function incrementalSync(teamKey?: string): Promise<{
  * Full sync with pagination - fetches all issues and prunes stale ones.
  */
 export async function fullSyncPaginated(teamKey?: string): Promise<{
-  pushed: { success: number; failed: number };
+  pushed: PushedOutboxCounts;
   pulled: number;
   pruned: number;
   type: "full" | "skipped";
@@ -439,7 +443,7 @@ export async function fullSyncPaginated(teamKey?: string): Promise<{
  * Full sync - push then pull (legacy, uses non-paginated fetch)
  */
 export async function fullSync(teamKey?: string): Promise<{
-  pushed: { success: number; failed: number };
+  pushed: PushedOutboxCounts;
   pulled: number;
   type?: "skipped";
 }> {
@@ -509,7 +513,7 @@ export async function smartSync(
   if (activePause) {
     syncDebug(`smartSync skipped until ${activePause.until}`);
     return {
-      pushed: { success: 0, failed: 0 },
+      pushed: { success: 0, failed: 0, dropped: 0 },
       pulled: 0,
       type: "skipped",
     };
@@ -579,7 +583,7 @@ export async function smartSync(
     if (pause) {
       syncDebug(`smartSync paused until ${pause.until}: ${pause.message || pause.kind}`);
       return {
-        pushed: { success: 0, failed: 0 },
+        pushed: { success: 0, failed: 0, dropped: 0 },
         pulled: 0,
         type: "skipped",
       };
