@@ -36,9 +36,28 @@ type CommentWriteOptions = {
 type CommentListOptions = {
   json?: boolean;
   sync?: boolean;
+  cache?: boolean;
   limit?: string;
   page?: string;
 };
+
+/**
+ * MG-2190: drop pending (locally queued) rows that duplicate a fetched
+ * server row by body+parent — the outbox may have created the comment
+ * server-side without the local row ever being acked, so a fresh fetch
+ * plus the stale pending row would otherwise double-count.
+ */
+export function dedupePendingAgainstFetched(comments: IssueComment[]): IssueComment[] {
+  const fetchedKeys = new Set(
+    comments
+      .filter((comment) => comment.sync_status === "synced")
+      .map((comment) => `${comment.body}\u0000${comment.parent_id || ""}`)
+  );
+  return comments.filter((comment) => {
+    if (comment.sync_status === "synced") return true;
+    return !fetchedKeys.has(`${comment.body}\u0000${comment.parent_id || ""}`);
+  });
+}
 
 function isHiddenMailComment(comment: IssueComment): boolean {
   return (
@@ -204,18 +223,39 @@ export const commentCommand = new Command("comment")
       .option("-j, --json", "Output as JSON")
       .option("-l, --limit <count>", "Comments per page", "100")
       .option("-p, --page <number>", "Page number, newest page first", "1")
-      .option("--sync", "Fetch comments from Linear before listing")
+      .option("--sync", "Deprecated alias: listing fetches from Linear by default (MG-2190)")
+      .option("--cache", "Skip the Linear fetch; list the local cache only")
       .action(async (id: string, options: CommentListOptions) => {
         try {
           const resolvedId = resolveIssueId(id);
           const limit = parsePositiveInteger(options.limit, "--limit", 100);
           const page = parsePositiveInteger(options.page, "--page", 1);
-          if (options.sync && !isLocalOnly() && !isLocalId(resolvedId)) {
-            await fetchIssueComments(resolvedId);
+          // MG-2190: listing is FETCH-FIRST by default. The background
+          // worker never ingests issue comments (its "comments" block is
+          // mail-only), so a cache-only list silently goes stale for
+          // every bead another agent comments on — three-way view
+          // divergence (bead: near-deadlocked a reader on a false zero).
+          // --cache (or local-only/local ids) keeps the old path; a
+          // failed fetch falls back to cache WITH a loud stderr banner
+          // so "0 comments" can never again mean "0 fetched".
+          let fetchError: string | undefined;
+          const canFetch = !options.cache && !isLocalOnly() && !isLocalId(resolvedId);
+          if (canFetch) {
+            try {
+              await fetchIssueComments(resolvedId);
+            } catch (error) {
+              fetchError = error instanceof Error ? error.message : String(error);
+            }
           }
-          const comments = getIssueComments(resolvedId, Number.MAX_SAFE_INTEGER).filter(
+          if (fetchError) {
+            console.error(
+              `WARNING: comment fetch failed (${fetchError}) — showing LOCAL CACHE, which may be missing recent comments (MG-2190).`
+            );
+          }
+          const cached = getIssueComments(resolvedId, Number.MAX_SAFE_INTEGER).filter(
             (comment) => !isHiddenMailComment(comment)
           );
+          const comments = canFetch && !fetchError ? dedupePendingAgainstFetched(cached) : cached;
           const pageComments = paginateComments(comments, page, limit);
           if (options.json) {
             output(JSON.stringify(pageComments, null, 2));
